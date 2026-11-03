@@ -1,0 +1,40 @@
+{
+  "name": "triangle-ai-dm",
+  "version": "1.0.0",
+  "description": "AI Instagram DM agent for Triangle Resells",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/triangleresells/triangle-resells-.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/triangleresells/triangle-resells-/issues"
+  },
+  "homepage": "https://github.com/triangleresells/triangle-resells-#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
+    "csv-parse": "^7.0.3",
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}

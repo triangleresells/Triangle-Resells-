@@ -1,0 +1,42 @@
+export interface HandoffAlert {
+  account: string;
+  route: "team" | "josh";
+  reason: string;
+  summary: string;
+  userId: string;
+  username?: string;
+}
+
+export type Notifier = (alert: HandoffAlert) => Promise<void>;
+
+export function formatAlert(a: HandoffAlert): string {
+  const who = a.username ? `@${a.username}` : `user ${a.userId}`;
+  const to = a.route === "josh" ? "🔺 JOSH" : "🔺 TEAM";
+  return [
+    `${to} — ${a.account} DM needs a human`,
+    `Customer: ${who}${a.username ? ` (https://instagram.com/${a.username})` : ""}`,
+    `Why: ${a.reason}`,
+    `Summary: ${a.summary}`,
+    `The bot is paused in this chat. Reply from the Instagram inbox.`,
+  ].join("\n");
+}
+
+/**
+ * Posts handoff alerts to a Discord or Slack incoming webhook.
+ * Sends both `content` (Discord) and `text` (Slack) so either works.
+ */
+export function webhookNotifier(url: string, fetchFn: typeof fetch = fetch): Notifier {
+  return async (alert) => {
+    const message = formatAlert(alert);
+    if (!url) {
+      console.log(`[handoff] (no HANDOFF_WEBHOOK_URL set)\n${message}`);
+      return;
+    }
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: message, text: message }),
+    });
+    if (!res.ok) console.error(`[handoff] webhook failed: HTTP ${res.status}`);
+  };
+}

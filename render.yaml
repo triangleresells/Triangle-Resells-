@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: triangle-ai-dm
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: IG_APP_SECRET
+        sync: false
+      - key: IG_ACCESS_TOKEN
+        sync: false
+      - key: IG_VERIFY_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: INVENTORY_SHEET_CSV_URL
+        sync: false
+      - key: HANDOFF_WEBHOOK_URL
+        sync: false
+      - key: ACCOUNT_NAME
+        value: Triangle Resells
+      - key: VENDOR_SITE_URL
+        value: triangleresells.netlify.app
+      - key: CLAUDE_MODEL
+        value: claude-haiku-5-5
+      - key: IG_API_VERSION
+        value: v23.0
+      - key: HUMAN_PAUSE_HOURS
+        value: "12"
