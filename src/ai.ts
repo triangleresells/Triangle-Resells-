@@ -134,19 +134,41 @@ export function buildSystemPrompt(instructions: string, knowledgeBase: string, i
   return parts.join("\n\n");
 }
 
-/** Claude's API needs turns to alternate, starting with the customer. */
+/** Only the most recent customer screenshots are sent to the AI, to keep replies fast and cheap. */
+const MAX_IMAGE_TURNS = 2;
+
+type Block = Anthropic.TextBlockParam | Anthropic.ImageBlockParam;
+
+/** Claude's API needs turns to alternate, starting with the customer. Recent screenshots go in as images. */
 export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
-  const out: Anthropic.MessageParam[] = [];
-  for (const t of history) {
-    const last = out[out.length - 1];
-    if (last && last.role === t.role) {
-      last.content = `${last.content as string}\n${t.text}`;
-    } else {
-      out.push({ role: t.role, content: t.text });
+  const imageTurns = new Set(
+    history
+      .map((t, i) => (t.images?.length ? i : -1))
+      .filter((i) => i >= 0)
+      .slice(-MAX_IMAGE_TURNS),
+  );
+  const out: { role: "user" | "assistant"; blocks: Block[] }[] = [];
+  history.forEach((t, i) => {
+    const blocks: Block[] = [];
+    if (t.images?.length && imageTurns.has(i)) {
+      for (const img of t.images) {
+        blocks.push({
+          type: "image",
+          source: { type: "base64", media_type: img.mediaType as "image/jpeg", data: img.data },
+        });
+      }
     }
-  }
+    blocks.push({ type: "text", text: t.images?.length && !imageTurns.has(i) ? `${t.text} (older picture, no longer shown)` : t.text });
+    const last = out[out.length - 1];
+    if (last && last.role === t.role) last.blocks.push(...blocks);
+    else out.push({ role: t.role, blocks });
+  });
   while (out.length && out[0].role !== "user") out.shift();
-  return out;
+  return out.map(({ role, blocks }) =>
+    blocks.every((b) => b.type === "text")
+      ? { role, content: blocks.map((b) => (b as Anthropic.TextBlockParam).text).join("\n") }
+      : { role, content: blocks },
+  );
 }
 
 const MAX_ROUNDS = 5;

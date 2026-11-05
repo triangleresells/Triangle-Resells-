@@ -205,3 +205,32 @@ describe("alerts", () => {
     expect(store.isPaused("u1")).toBe(false);
   });
 });
+
+describe("screenshots", () => {
+  it("downloads DM pictures and sends the latest ones to the AI as images", async () => {
+    const ig: InstagramApi = {
+      sendText: vi.fn(async () => "mid"),
+      sendPrivateReply: vi.fn(async () => "mid"),
+      replyToComment: vi.fn(async () => {}),
+      getUsername: vi.fn(async () => "buyer"),
+    };
+    const agent: ReplyEngine = { reply: vi.fn(async () => ({ text: "that's the ABC Camo, what size?" })) };
+    const bot = new Bot({
+      ig, agent, store: new Store(), notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells",
+      keywords: [], publicCommentReplies: [], humanPauseHours: 12,
+      fetchImage: async () => ({ mediaType: "image/jpeg", data: "AAAA" }),
+    });
+    await bot.handle({ object: "instagram", entry: [{ id: "own", messaging: [{ sender: { id: "u1" }, recipient: { id: "own" }, message: { mid: "m1", text: "how much for this", attachments: [{ type: "image", payload: { url: "https://cdn/x.jpg" } }] } }] }] });
+    const history = (agent.reply as any).mock.calls[0][0];
+    expect(history.at(-1).images).toHaveLength(1);
+    const { toApiMessages } = await import("../src/ai.js");
+    const msgs = toApiMessages(history) as any;
+    expect(msgs[0].content[0]).toMatchObject({ type: "image", source: { type: "base64", data: "AAAA" } });
+  });
+
+  it("rejects files that aren't images", async () => {
+    const { downloadImage } = await import("../src/bot.js");
+    const fake = (async () => new Response("x", { headers: { "content-type": "text/html" } })) as unknown as typeof fetch;
+    expect(await downloadImage("https://x", fake)).toBeUndefined();
+  });
+});

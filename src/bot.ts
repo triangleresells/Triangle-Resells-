@@ -4,7 +4,7 @@ import type { Notifier } from "./handoff.js";
 import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
 import { describeQuote, quoteOrder, type PricingConfig } from "./pricing.js";
-import type { Store } from "./store.js";
+import type { ChatImage, Store } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
 
 export interface BotDeps {
@@ -23,6 +23,26 @@ export interface BotDeps {
   pricing?: PricingConfig;
   /** Stripe. Without it the bot quotes but hands off to the team to take payment. */
   checkout?: CheckoutApi;
+  /** Downloads a DM picture so the AI can see it. Defaults to a plain fetch. */
+  fetchImage?: (url: string) => Promise<ChatImage | undefined>;
+}
+
+const MAX_IMAGE_BYTES = 4_500_000;
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+export async function downloadImage(url: string, fetchFn: typeof fetch = fetch): Promise<ChatImage | undefined> {
+  try {
+    const res = await fetchFn(url);
+    if (!res.ok) return undefined;
+    const mediaType = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!IMAGE_TYPES.includes(mediaType)) return undefined;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_IMAGE_BYTES) return undefined;
+    return { mediaType, data: buf.toString("base64") };
+  } catch (err) {
+    console.error("[bot] could not download DM image:", err);
+    return undefined;
+  }
 }
 
 interface MessagingEvent {
@@ -34,7 +54,7 @@ interface MessagingEvent {
     is_echo?: boolean;
     is_deleted?: boolean;
     is_unsupported?: boolean;
-    attachments?: { type?: string }[];
+    attachments?: { type?: string; payload?: { url?: string } }[];
   };
 }
 
@@ -105,7 +125,9 @@ export class Bot {
     if (userId === ownId) return;
 
     const text = msg.text?.trim() || describeAttachments(msg);
-    this.d.store.addTurn(userId, { role: "user", text });
+    const images = await this.picturesFrom(msg);
+    const caption = images.length && msg.text?.trim() ? `${text}\n[Customer sent ${images.length} picture(s)]` : text;
+    this.d.store.addTurn(userId, { role: "user", text: caption, ...(images.length ? { images } : {}) });
     if (this.d.store.isPaused(userId)) return;
 
     const mySeq = (this.seq.get(userId) ?? 0) + 1;
@@ -145,6 +167,16 @@ export class Bot {
       const username = await this.d.ig.getUsername(userId);
       await this.d.notify({ account: this.d.accountName, userId, username, ...result.handoff });
     }
+  }
+
+  private async picturesFrom(msg: NonNullable<MessagingEvent["message"]>): Promise<ChatImage[]> {
+    const urls = (msg.attachments ?? [])
+      .filter((a) => a.type === "image" && a.payload?.url)
+      .map((a) => a.payload!.url!)
+      .slice(0, 4);
+    const fetchImage = this.d.fetchImage ?? ((u: string) => downloadImage(u));
+    const got = await Promise.all(urls.map((u) => fetchImage(u)));
+    return got.filter((g): g is ChatImage => !!g);
   }
 
   /** Quote and checkout actions for one customer. Prices always come from the price list, never the AI. */

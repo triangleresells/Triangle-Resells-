@@ -1,6 +1,14 @@
+export interface ChatImage {
+  /** e.g. image/jpeg */
+  mediaType: string;
+  /** base64. Downloaded when the DM arrives, because Instagram's image links expire. */
+  data: string;
+}
+
 export interface ChatTurn {
   role: "user" | "assistant";
   text: string;
+  images?: ChatImage[];
 }
 
 interface Conversation {
