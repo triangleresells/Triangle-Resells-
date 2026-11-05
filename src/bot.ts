@@ -5,7 +5,8 @@ import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
 import { describeQuote, quoteOrder, type PricingConfig } from "./pricing.js";
 import type { ChatImage, Store } from "./store.js";
-import { addDays, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
+import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
+import { HOLD_MINUTES } from "./stripe.js";
 import type { CheckoutApi } from "./stripe.js";
 
 export interface BotDeps {
@@ -33,6 +34,12 @@ export interface BotDeps {
 }
 
 const MAX_IMAGE_BYTES = 4_500_000;
+
+/** Sent once when a payment link expires unpaid. If they answer, the AI sends a fresh link. */
+export function followUpText(summary: string): string {
+  const order = summary.length > 120 ? `${summary.slice(0, 117)}...` : summary;
+  return `Hey, just following up on your order (${order}). The link timed out, but I can send you a fresh one whenever you're ready.`;
+}
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 export async function downloadImage(url: string, fetchFn: typeof fetch = fetch): Promise<ChatImage | undefined> {
@@ -158,6 +165,7 @@ export class Bot {
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
+    if (result.cancelFollowUp || result.handoff) this.d.store.clearPendingLink(userId);
 
     if (result.alerts?.length) {
       const username = await this.d.ig.getUsername(userId);
@@ -190,15 +198,19 @@ export class Bot {
     const pricing = this.d.pricing;
     if (!pricing) return undefined;
     return {
-      quote: (items, fulfillment) => {
-        const q = quoteOrder(pricing, items, fulfillment);
+      quote: (items, fulfillment, deliveryArea) => {
+        const q = quoteOrder(pricing, items, fulfillment, deliveryArea);
         const issues = q.problems.length ? ` PROBLEMS (hand these to the team): ${q.problems.join("; ")}` : "";
         return q.lines.length ? describeQuote(q) + issues : `Nothing could be priced.${issues}`;
       },
-      checkout: async (items, fulfillment, fulfillDate, fulfillTime) => {
+      checkout: async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea) => {
         if (!this.d.checkout) return { ok: false, error: "card checkout isn't set up yet" };
-        const q = quoteOrder(pricing, items, fulfillment);
-        if (q.problems.length) return { ok: false, error: q.problems.join("; ") };
+        const q = quoteOrder(pricing, items, fulfillment, deliveryArea);
+        if (q.problems.length) {
+          // Too far or unknown town: the AI can fix it (ship, meet halfway, or ask the town).
+          const fixable = q.problems.every((p) => p.startsWith("Too far") || p.startsWith("Delivery area"));
+          return { ok: false, error: q.problems.join("; "), fixable };
+        }
         if (!q.lines.length) return { ok: false, error: "no items" };
         if (!/^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "")) return { ok: false, error: "fulfill_date must be YYYY-MM-DD", fixable: true };
         const now = this.now();
@@ -206,6 +218,9 @@ export class Bot {
         let note: string | undefined;
         if (fulfillment === "pickup") {
           const problem = pickupProblem(fulfillDate, fulfillTime, await this.busy(), now);
+          if (problem) return { ok: false, error: problem, fixable: true };
+        } else if (fulfillment === "delivery") {
+          const problem = deliveryProblem(fulfillDate, fulfillTime, q.delivery!.minutes, await this.busy(), now);
           if (problem) return { ok: false, error: problem, fixable: true };
         } else {
           // Ships the day it's paid before 7pm ET, otherwise the next day.
@@ -217,14 +232,16 @@ export class Bot {
           fulfillTime = undefined;
         }
         const summary = describeQuote(q);
+        const itemList = q.lines.map((l) => `${l.qty}x ${[l.name, l.variant, l.size].filter(Boolean).join(" ")}`).join(", ");
         try {
           const link = await this.d.checkout.create(q, {
             igUserId: userId,
             account: this.d.accountName,
             fulfillDate,
             fulfillTime: fulfillTime?.trim() || undefined,
-            summary: q.lines.map((l) => `${l.qty}x ${[l.name, l.variant, l.size].filter(Boolean).join(" ")}`).join(", "),
+            summary: itemList,
           });
+          this.d.store.setPendingLink(userId, { url: link.url, summary: itemList, createdAt: now.getTime() });
           return { ok: true, url: link.url, total: q.total, summary, note };
         } catch (err) {
           console.error("[bot] checkout failed:", err);
@@ -240,6 +257,29 @@ export class Bot {
 
   private async busy(): Promise<BusyBlock[]> {
     return this.d.getBusy ? this.d.getBusy().catch(() => []) : [];
+  }
+
+  /**
+   * One follow-up per unpaid link, once it has expired (call this every minute).
+   * Skipped if the chat is paused for a human or the customer said they don't want it.
+   */
+  async followUpUnpaid(): Promise<number> {
+    const due = this.d.store.duePendingLinks(this.now().getTime() - HOLD_MINUTES * 60 * 1000);
+    let sent = 0;
+    for (const { userId, link } of due) {
+      this.d.store.markFollowedUp(userId);
+      if (this.d.store.isPaused(userId)) continue;
+      await this.inOrder(userId, () => this.send(userId, followUpText(link.summary))).catch((err) =>
+        console.error("[bot] follow-up failed:", err),
+      );
+      sent++;
+    }
+    return sent;
+  }
+
+  /** Stripe says they paid: no follow-up for that link. */
+  markPaid(userId: string): void {
+    this.d.store.clearPendingLink(userId);
   }
 
   /** DMs a customer from outside a conversation (e.g. a payment confirmation). */

@@ -64,10 +64,22 @@ export function checkoutParams(quote: Quote, order: OrderDetails, successUrl: st
       price_data: { currency: "usd", unit_amount: Math.round(quote.shipping * 100), product_data: { name: "UPS Shipping" } },
     });
   }
+  if (quote.delivery && quote.delivery.fee > 0) {
+    line_items.push({
+      quantity: 1,
+      price_data: {
+        currency: "usd",
+        unit_amount: Math.round(quote.delivery.fee * 100),
+        product_data: { name: `Local Delivery (${quote.delivery.area})` },
+      },
+    });
+  }
   const pickup = quote.fulfillment === "pickup";
   const message = pickup
     ? "All sales final. Pickup address sent after payment."
-    : quote.buyerProvidesLabel
+    : quote.fulfillment === "delivery"
+      ? "All sales final. Enter the delivery address. We'll confirm your drop-off in DMs."
+      : quote.buyerProvidesLabel
       ? "All sales final. Send us your shipping label after payment and we'll ship it."
       : "All sales final. Ships via UPS, tracking sent once it ships.";
   return {
@@ -87,6 +99,7 @@ export function checkoutParams(quote: Quote, order: OrderDetails, successUrl: st
       fulfill_date: order.fulfillDate,
       fulfill_time: order.fulfillTime ?? "",
       buyer_label: String(quote.buyerProvidesLabel),
+      ...(quote.delivery ? { delivery_area: quote.delivery.area, delivery_minutes: String(quote.delivery.minutes) } : {}),
       order_summary: order.summary.slice(0, 500),
       ...(order.testOrder ? { test_order: "true" } : {}),
     },
@@ -130,8 +143,10 @@ export interface PaidOrder {
   sessionId: string;
   igUserId: string;
   account: string;
-  fulfillment: "pickup" | "ship";
+  fulfillment: "pickup" | "ship" | "delivery";
   fulfillDate: string;
+  deliveryArea?: string;
+  deliveryMinutes?: number;
   fulfillTime: string;
   buyerLabel: boolean;
   summary: string;
@@ -162,7 +177,8 @@ export function paidOrderFromEvent(event: any): PaidOrder | undefined {
     sessionId: s.id,
     igUserId: m.ig_user_id,
     account: m.account ?? "",
-    fulfillment: ship ? "ship" : "pickup",
+    fulfillment: ship ? "ship" : m.fulfillment === "delivery" ? "delivery" : "pickup",
+    ...(m.fulfillment === "delivery" ? { deliveryArea: m.delivery_area ?? "", deliveryMinutes: Number(m.delivery_minutes) || undefined } : {}),
     // Paid after 7pm ET ships the next day, so the calendar shows the real ship day.
     fulfillDate: ship ? shipDateFor(m.fulfill_date ?? "", paidAt) : (m.fulfill_date ?? ""),
     test: m.test_order === "true",

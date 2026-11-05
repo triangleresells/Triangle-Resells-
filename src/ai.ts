@@ -9,16 +9,19 @@ export interface AgentReply {
   checkoutUrl?: string;
   /** Heads-up alerts for the team. Unlike a handoff, the bot keeps selling in the chat. */
   alerts?: { reason: string; summary: string }[];
+  /** The customer said they don't want the order, so don't follow up on the unpaid link. */
+  cancelFollowUp?: boolean;
 }
 
 /** Order actions the AI can take for the customer it's talking to. Prices always come from config/pricing.json. */
 export interface OrderTools {
-  quote(items: OrderItem[], fulfillment: Fulfillment): string;
+  quote(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): string;
   checkout(
     items: OrderItem[],
     fulfillment: Fulfillment,
     fulfillDate: string,
     fulfillTime?: string,
+    deliveryArea?: string,
   ): Promise<{ ok: true; url: string; total: number; summary: string; note?: string } | { ok: false; error: string; fixable?: boolean }>;
 }
 
@@ -43,8 +46,14 @@ const ITEMS_SCHEMA = {
 
 const FULFILLMENT_SCHEMA = {
   type: "string",
-  enum: ["pickup", "ship"],
-  description: "pickup = buyer comes to the warehouse. ship = UPS anywhere in the US.",
+  enum: ["pickup", "ship", "delivery"],
+  description:
+    "pickup = buyer comes to the warehouse. ship = UPS anywhere in the US. delivery = Josh drops it off locally (fee by drive time, max 1 hour; also use it for meeting halfway, with the meeting town as delivery_area).",
+} as const;
+
+const DELIVERY_AREA_SCHEMA = {
+  type: "string",
+  description: "Delivery only: the town or area, e.g. Durham, Knightdale, Clayton. For meeting halfway, the meeting town.",
 } as const;
 
 export const TOOLS = [
@@ -88,7 +97,7 @@ export const TOOLS = [
       "Get the exact price for an order. Always use this before telling the customer any total. Never do price math yourself.",
     input_schema: {
       type: "object" as const,
-      properties: { items: ITEMS_SCHEMA, fulfillment: FULFILLMENT_SCHEMA },
+      properties: { items: ITEMS_SCHEMA, fulfillment: FULFILLMENT_SCHEMA, delivery_area: DELIVERY_AREA_SCHEMA },
       required: ["items", "fulfillment"],
     },
   },
@@ -103,12 +112,19 @@ export const TOOLS = [
         fulfillment: FULFILLMENT_SCHEMA,
         fulfill_date: {
           type: "string",
-          description: "YYYY-MM-DD the buyer picks up, or the day it ships. Can be a later day: they pay now and we hold it.",
+          description: "YYYY-MM-DD the buyer picks up, it's delivered, or the day it ships. Can be a later day: they pay now and we hold it.",
         },
-        fulfill_time: { type: "string", description: "Pickup time like '3:00 PM'. Leave blank for shipping." },
+        fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Leave blank for shipping." },
+        delivery_area: DELIVERY_AREA_SCHEMA,
       },
       required: ["items", "fulfillment", "fulfill_date"],
     },
+  },
+  {
+    name: "cancel_follow_up",
+    description:
+      "Call when the customer clearly says they don't want the order anymore (\"nah I'm good\", \"changed my mind\"), so the bot doesn't follow up on their unpaid link.",
+    input_schema: { type: "object" as const, properties: {} },
   },
 ];
 
@@ -193,6 +209,7 @@ export class ClaudeAgent implements ReplyEngine {
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
+    let cancelFollowUp = false;
     const alerts: NonNullable<AgentReply["alerts"]> = [];
     let finalTexts: string[] = [];
     const allTexts: string[] = [];
@@ -219,17 +236,20 @@ export class ClaudeAgent implements ReplyEngine {
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
           content = "Josh alerted. Keep helping: offer the closest item we do have and keep closing.";
+        } else if (block.name === "cancel_follow_up") {
+          cancelFollowUp = true;
+          content = "No follow-up will be sent. Close politely and leave the door open.";
         } else if (!tools) {
           content = "Ordering isn't available right now. Hand off to the team.";
         } else if (block.name === "quote_order") {
-          content = tools.quote(input.items ?? [], input.fulfillment);
+          content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
         } else if (block.name === "create_checkout_link") {
-          const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time);
+          const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area);
           if (r.ok) {
             checkoutUrl = r.url;
             content = `Link made. Total $${r.total} (${r.summary}).${r.note ? ` ${r.note}` : ""} Send the customer this exact link: ${r.url}`;
           } else if (r.fixable) {
-            content = `Could not make the link: ${r.error}. Tell the customer and offer an open time from the PICKUP SCHEDULE (or another fix), then try again once they pick.`;
+            content = `Could not make the link: ${r.error}. Tell the customer and offer an open time from the PICKUP SCHEDULE (or another fix, like shipping or meeting halfway), then try again once they pick.`;
           } else {
             content = `Could not make the link: ${r.error}. Hand off to the team.`;
           }
@@ -253,6 +273,6 @@ export class ClaudeAgent implements ReplyEngine {
         : "Good question, let me get someone from the team to confirm for you.";
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
-    return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined };
+    return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}) };
   }
 }

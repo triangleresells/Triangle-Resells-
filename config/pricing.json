@@ -21,11 +21,35 @@
     { "key": "cologne", "name": "Cologne", "table": "colognes" },
     { "key": "lv_cologne", "name": "LV Cologne", "table": "lv_colognes" },
     { "key": "golf_iron_set", "name": "TaylorMade P790 Iron Set (7 sticks)", "flat": 400 },
-    { "key": "jordan_12_flu_game", "name": "Jordan 12 Flu Game", "flat": 50 }
+    { "key": "jordan_12_flu_game", "name": "Jordan 12 Flu Game", "flat": 50 },
+    { "key": "jeans", "name": "Jeans", "flat": 70, "_note": "Bulk tiers coming from Josh." },
+    { "key": "valley_hoodie", "name": "Valley Hoodie", "flat": 60, "_note": "Bulk tiers coming from Josh." },
+    { "key": "hat", "name": "Hat", "flat": 30, "_note": "Bulk tiers coming from Josh." }
   ],
   "shipping": {
     "_note": "UPS flat rate for 1 to 9 pieces. At 10+ pieces the buyer buys and sends their own label, so no shipping is charged.",
     "flat": 10,
     "buyerLabelAtPieces": 10
+  },
+  "delivery": {
+    "_note": "Local delivery fee by one-way drive time from the warehouse. Nothing over 60 min: offer UPS shipping or meeting halfway. Area minutes are ESTIMATES from central Raleigh; Josh to correct them. Unknown towns are never guessed.",
+    "bands": [
+      { "maxMinutes": 20, "fee": 5 },
+      { "maxMinutes": 30, "fee": 10 },
+      { "maxMinutes": 45, "fee": 15 },
+      { "maxMinutes": 60, "fee": 20 }
+    ],
+    "maxMinutes": 60,
+    "areas": {
+      "Raleigh": 15, "Garner": 15, "Knightdale": 15, "Cary": 20, "Morrisville": 20, "RTP": 20, "Rolesville": 20, "Wendell": 20,
+      "Apex": 25, "Wake Forest": 25, "Holly Springs": 25, "Clayton": 25, "Zebulon": 25,
+      "Durham": 30, "Fuquay-Varina": 30, "Youngsville": 30,
+      "Chapel Hill": 35, "Carrboro": 40, "Smithfield": 35, "Selma": 35, "Angier": 35, "Creedmoor": 35, "Franklinton": 35,
+      "Louisburg": 40, "Benson": 40, "Butner": 40, "Four Oaks": 40,
+      "Hillsborough": 45, "Lillington": 45, "Pittsboro": 45, "Oxford": 45, "Dunn": 45,
+      "Sanford": 50, "Henderson": 50, "Wilson": 50, "Mebane": 50,
+      "Goldsboro": 55, "Rocky Mount": 55, "Burlington": 55, "Roxboro": 60,
+      "Fayetteville": 65, "Greensboro": 75, "High Point": 85, "Winston-Salem": 95, "Greenville": 85, "Wilmington": 120, "Charlotte": 150
+    }
   }
 }

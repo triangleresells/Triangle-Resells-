@@ -19,7 +19,8 @@ function doGet(e) {
       start: ev.getStartTime().toISOString(),
       end: ev.getEndTime().toISOString(),
       allDay: ev.isAllDayEvent(),
-      title: ev.isAllDayEvent() ? ev.getTitle() : '', // timed event titles stay private
+      // Timed titles stay private, except bot deliveries ("🚗 DELIVERY 35min"), so routes go farthest first.
+      title: ev.isAllDayEvent() || /DELIVERY\s+\d+\s*min/i.test(ev.getTitle()) ? ev.getTitle() : '',
     };
   });
   return ContentService.createTextOutput(JSON.stringify({ busy: busy })).setMimeType(ContentService.MimeType.JSON);

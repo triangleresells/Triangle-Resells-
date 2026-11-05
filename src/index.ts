@@ -35,19 +35,23 @@ const bot = new Bot({
 const calendar = webhookCalendar(config.calendarWebhookUrl);
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
+// One follow-up DM when a payment link expires unpaid.
+setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();
 
 createServer(bot, {
   appSecret: config.igAppSecret,
   verifyToken: config.igVerifyToken,
   stripeWebhookSecret: config.stripeWebhookSecret,
-  onPaidOrder: (order) =>
-    handlePaidOrder(order, {
+  onPaidOrder: (order) => {
+    bot.markPaid(order.igUserId);
+    return handlePaidOrder(order, {
       sendDm: (id, text) => bot.sendDm(id, text),
       calendar,
       notify,
       warehouseAddress: config.warehouseAddress,
       accountName: config.accountName,
-    }),
+    });
+  },
 }).listen(config.port, () => {
   console.log(
     `[server] ${config.accountName} DM agent listening on :${config.port} ` +

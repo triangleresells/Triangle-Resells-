@@ -1,9 +1,43 @@
-export type Fulfillment = "pickup" | "ship";
+export type Fulfillment = "pickup" | "ship" | "delivery";
 
 export interface PricingConfig {
   tables: Record<string, Record<string, number>>;
   products: { key: string; name: string; table?: string; flat?: number }[];
   shipping: { flat: number; buyerLabelAtPieces: number };
+  delivery?: DeliveryConfig;
+}
+
+export interface DeliveryConfig {
+  /** Fee by one-way drive time from the warehouse, e.g. up to 20 min = $5. */
+  bands: { maxMinutes: number; fee: number }[];
+  /** No delivery past this; offer shipping or meeting halfway instead. */
+  maxMinutes: number;
+  /** Town or area -> one-way drive minutes from the warehouse. */
+  areas: Record<string, number>;
+}
+
+export type DeliveryInfo =
+  | { ok: true; area: string; minutes: number; fee: number }
+  | { ok: false; reason: "unknown_area" | "too_far" | "not_set_up"; area?: string; minutes?: number };
+
+const clean = (s: string) =>
+  s.toLowerCase().replace(/,?\s*(nc|north carolina)\b/g, "").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+
+/** Drive time and fee for a town or area. Unknown towns are never guessed. */
+export function deliveryFor(cfg: PricingConfig, area: string | undefined): DeliveryInfo {
+  const d = cfg.delivery;
+  if (!d) return { ok: false, reason: "not_set_up" };
+  const wanted = clean(area ?? "");
+  if (!wanted) return { ok: false, reason: "unknown_area" };
+  // Exact name first, then the longest known area named inside what they typed ("north raleigh" -> raleigh).
+  const keys = Object.keys(d.areas).sort((a, b) => b.length - a.length);
+  const key = keys.find((k) => clean(k) === wanted) ?? keys.find((k) => ` ${wanted} `.includes(` ${clean(k)} `));
+  if (!key) return { ok: false, reason: "unknown_area", area: area?.trim() };
+  const minutes = d.areas[key];
+  if (minutes > d.maxMinutes) return { ok: false, reason: "too_far", area: key, minutes };
+  const band = [...d.bands].sort((a, b) => a.maxMinutes - b.maxMinutes).find((b) => minutes <= b.maxMinutes);
+  if (!band) return { ok: false, reason: "too_far", area: key, minutes };
+  return { ok: true, area: key, minutes, fee: band.fee };
 }
 
 export interface OrderItem {
@@ -35,6 +69,8 @@ export interface Quote {
   shipping: number;
   /** True when a shipped order is big enough that the buyer sends their own label. */
   buyerProvidesLabel: boolean;
+  /** Local delivery: area, one-way drive minutes, and fee. */
+  delivery?: { area: string; minutes: number; fee: number };
   total: number;
   /** Items the bot can't price (unknown product or bad quantity). Hand these to the team. */
   problems: string[];
@@ -51,8 +87,18 @@ export function tierPrice(table: Record<string, number>, qty: number): number {
   return price;
 }
 
-export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: Fulfillment): Quote {
+export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): Quote {
   const problems: string[] = [];
+  let delivery: Quote["delivery"];
+  if (fulfillment === "delivery") {
+    const d = deliveryFor(cfg, deliveryArea);
+    if (d.ok) delivery = { area: d.area, minutes: d.minutes, fee: d.fee };
+    else if (d.reason === "too_far") {
+      problems.push(`Too far to deliver: ${d.area} is about ${d.minutes} min away (max ${cfg.delivery?.maxMinutes} min). Offer UPS shipping or meeting halfway`);
+    } else if (d.reason === "unknown_area") {
+      problems.push(`Delivery area not on the list: "${deliveryArea ?? ""}". Ask which town, or alert Josh to confirm the fee`);
+    } else problems.push("Delivery isn't set up");
+  }
   const byKey = new Map(cfg.products.map((p) => [p.key, p]));
   const valid = items.filter((it) => {
     if (!byKey.has(it.product)) {
@@ -106,6 +152,7 @@ export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: 
   const subtotal = lines.reduce((s, l) => s + l.lineTotal, 0);
   const buyerProvidesLabel = fulfillment === "ship" && totalPieces >= cfg.shipping.buyerLabelAtPieces;
   const shipping = fulfillment === "ship" && !buyerProvidesLabel && totalPieces > 0 ? cfg.shipping.flat : 0;
+  const deliveryFee = delivery && totalPieces > 0 ? delivery.fee : 0;
 
   return {
     lines,
@@ -115,7 +162,8 @@ export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: 
     fulfillment,
     shipping,
     buyerProvidesLabel,
-    total: subtotal + shipping,
+    delivery,
+    total: subtotal + shipping + deliveryFee,
     problems,
   };
 }
@@ -129,7 +177,11 @@ export function describeQuote(q: Quote): string {
   const parts = q.groups.map((g) => `${g.pieces}x ${g.name} @ $${g.unitPrice} = $${g.total}`);
   const ship = q.fulfillment === "pickup"
     ? "warehouse pickup (free)"
-    : q.buyerProvidesLabel
+    : q.fulfillment === "delivery"
+      ? q.delivery
+        ? `delivery to ${q.delivery.area} (~${q.delivery.minutes} min drive) $${q.delivery.fee}`
+        : "delivery (area not priced)"
+      : q.buyerProvidesLabel
       ? "shipping: buyer sends their own label (10+ pieces)"
       : `UPS shipping $${q.shipping}`;
   return `${parts.join("; ")}; ${ship}; TOTAL $${q.total}`;

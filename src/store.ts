@@ -11,7 +11,15 @@ export interface ChatTurn {
   images?: ChatImage[];
 }
 
+export interface PendingLink {
+  url: string;
+  summary: string;
+  createdAt: number;
+  followedUp?: boolean;
+}
+
 interface Conversation {
+  pendingLink?: PendingLink;
   turns: ChatTurn[];
   pausedUntil: number;
   lastActivity: number;
@@ -79,6 +87,30 @@ export class Store {
 
   isPaused(userId: string): boolean {
     return (this.convos.get(userId)?.pausedUntil ?? 0) > this.now();
+  }
+
+  /** The latest unpaid payment link in a chat. A new link replaces the old one. */
+  setPendingLink(userId: string, link: PendingLink): void {
+    this.get(userId).pendingLink = { ...link, followedUp: false };
+  }
+
+  clearPendingLink(userId: string): void {
+    const c = this.convos.get(userId);
+    if (c) c.pendingLink = undefined;
+  }
+
+  markFollowedUp(userId: string): void {
+    const l = this.convos.get(userId)?.pendingLink;
+    if (l) l.followedUp = true;
+  }
+
+  /** Unpaid links made before `createdBefore` that haven't been followed up yet. */
+  duePendingLinks(createdBefore: number): { userId: string; link: PendingLink }[] {
+    const out: { userId: string; link: PendingLink }[] = [];
+    for (const [userId, c] of this.convos) {
+      if (c.pendingLink && !c.pendingLink.followedUp && c.pendingLink.createdAt <= createdBefore) out.push({ userId, link: c.pendingLink });
+    }
+    return out;
   }
 
   /** Drop old conversations and dedupe ids so memory doesn't grow forever. */

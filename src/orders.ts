@@ -18,18 +18,29 @@ export type CalendarPoster = (event: CalendarEvent) => Promise<void>;
 export function calendarEventFor(o: PaidOrder, warehouseAddress: string): CalendarEvent {
   const who = o.buyerName || "IG buyer";
   const pickup = o.fulfillment === "pickup";
-  const title = (o.test ? "[TEST] " : "") + (pickup ? `🔺 PICKUP: ${who} – $${o.total}` : `📦 SHIP: ${who} – $${o.total}`);
+  const delivery = o.fulfillment === "delivery";
+  // "DELIVERY 35min" lets the bot read routes back and keep the farthest drop first.
+  const kind = pickup
+    ? "🔺 PICKUP"
+    : delivery
+      ? `🚗 DELIVERY ${o.deliveryMinutes ?? "?"}min ${o.deliveryArea ?? ""}`.trim()
+      : "📦 SHIP";
+  const title = `${o.test ? "[TEST] " : ""}${kind}: ${who} – $${o.total}`;
   const description = [
     `Items: ${o.summary}`,
     `Paid: $${o.total} via Stripe (session ${o.sessionId})`,
     `Buyer: ${who}${o.buyerEmail ? `, ${o.buyerEmail}` : ""}${o.buyerPhone ? `, ${o.buyerPhone}` : ""}`,
     `Instagram user id: ${o.igUserId} (${o.account})`,
-    pickup ? "Hold these items until pickup. Already paid." : o.buyerLabel ? "10+ pieces: wait for the buyer's label, then ship." : "Ship via UPS before 7pm ET and send tracking.",
+    pickup
+      ? "Hold these items until pickup. Already paid."
+      : delivery
+        ? `Deliver to the address in the location field (~${o.deliveryMinutes ?? "?"} min drive). Already paid. Farthest drops go first.`
+        : o.buyerLabel ? "10+ pieces: wait for the buyer's label, then ship." : "Ship via UPS before 7pm ET and send tracking.",
   ].join("\n");
   return {
     title,
     date: o.fulfillDate,
-    time: pickup ? o.fulfillTime : "",
+    time: pickup || delivery ? o.fulfillTime : "",
     durationMinutes: 30,
     timeZone: "America/New_York",
     location: pickup ? warehouseAddress || "Warehouse" : o.shipTo || "Ship (address in Stripe)",
@@ -64,6 +75,9 @@ export interface OrderHandlerDeps {
 
 export function confirmationText(o: PaidOrder, warehouseAddress: string): string {
   const when = [o.fulfillDate && formatDate(o.fulfillDate), o.fulfillTime].filter(Boolean).join(" at ");
+  if (o.fulfillment === "delivery") {
+    return `paid ✅ appreciate you! your delivery is set${when ? ` for ${when}` : ""}. I'll message you here when I'm on the way.`;
+  }
   if (o.fulfillment === "ship") {
     return o.buyerLabel
       ? `paid ✅ appreciate you! send your UPS label here and we'll get it shipped${when ? ` ${when}` : ""}.`

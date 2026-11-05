@@ -43,7 +43,7 @@ describe("pricing", () => {
   });
 
   it("flags unpriced items instead of guessing", () => {
-    const q = quoteOrder(pricing, [{ product: "jeans", qty: 1 }, { product: "bape_tee", qty: 0 }], "pickup");
+    const q = quoteOrder(pricing, [{ product: "supreme_set", qty: 1 }, { product: "bape_tee", qty: 0 }], "pickup");
     expect(q.lines).toHaveLength(0);
     expect(q.problems).toHaveLength(2);
   });

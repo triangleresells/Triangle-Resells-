@@ -79,12 +79,20 @@ function formatDay(date: string): string {
   return new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-/** Taken pickup windows on one day, as minute ranges. A "closed" all-day event closes the whole day. */
-function takenOn(date: string, busy: BusyBlock[]): { closed: boolean; ranges: [number, number][] } {
+/** One-way drive minutes of a delivery already on the calendar ("🚗 DELIVERY 35min ..."). */
+export function deliveryMinutesOf(title: string | undefined): number | undefined {
+  const m = (title ?? "").match(/DELIVERY\s+(\d+)\s*min/i);
+  return m ? Number(m[1]) : undefined;
+}
+
+type Range = [number, number, number | undefined]; // start, end, delivery minutes
+
+/** Taken windows on one day, as minute ranges. A "closed" all-day event closes the whole day. */
+function takenOn(date: string, busy: BusyBlock[]): { closed: boolean; ranges: Range[] } {
   const dayStart = etToDate(date, 0).getTime();
   const dayEnd = etToDate(addDays(date, 1), 0).getTime();
   let closed = false;
-  const ranges: [number, number][] = [];
+  const ranges: Range[] = [];
   for (const b of busy) {
     const s = new Date(b.start).getTime();
     const e = new Date(b.end).getTime();
@@ -93,24 +101,50 @@ function takenOn(date: string, busy: BusyBlock[]): { closed: boolean; ranges: [n
       if (/closed/i.test(b.title ?? "")) closed = true;
       continue; // ship-day events and reminders don't block pickups
     }
-    ranges.push([Math.max(0, (s - dayStart) / 60000), Math.min(24 * 60, (e - dayStart) / 60000)]);
+    ranges.push([Math.max(0, (s - dayStart) / 60000), Math.min(24 * 60, (e - dayStart) / 60000), deliveryMinutesOf(b.title)]);
   }
   return { closed, ranges: ranges.sort((a, b) => a[0] - b[0]) };
 }
 
 /** Why a pickup can't happen at this date and time, or undefined if it's open. */
-export function pickupProblem(date: string, time: string | undefined, busy: BusyBlock[], now = new Date()): string | undefined {
+export function pickupProblem(date: string, time: string | undefined, busy: BusyBlock[], now = new Date(), what = "pickups"): string | undefined {
   const minutes = parseTime(time);
-  if (minutes === undefined) return "pickups need a time like 3:00 PM";
+  if (minutes === undefined) return `${what} need a time like 3:00 PM`;
   if (minutes < PICKUP_OPEN_MIN || minutes > PICKUP_CLOSE_MIN - PICKUP_SLOT_MIN) {
-    return `pickups are 10 AM to 10 PM (last pickup ${formatTime(PICKUP_CLOSE_MIN - PICKUP_SLOT_MIN)})`;
+    return `${what} are 10 AM to 10 PM (last one at ${formatTime(PICKUP_CLOSE_MIN - PICKUP_SLOT_MIN)})`;
   }
   const today = etParts(now);
   if (date < today.date || (date === today.date && minutes < today.minutes)) return "that time already passed";
   const day = takenOn(date, busy);
-  if (day.closed) return `pickups are closed on ${formatDay(date)}`;
+  if (day.closed) return `${what} are closed on ${formatDay(date)}`;
   const end = minutes + PICKUP_SLOT_MIN;
   if (day.ranges.some(([s, e]) => minutes < e && end > s)) return `${formatTime(minutes)} on ${formatDay(date)} is already taken`;
+  return undefined;
+}
+
+/**
+ * Deliveries: same hours and taken times as pickups, and the farthest drop goes first.
+ * A 45-min drop has to be scheduled before a 15-min drop on the same day.
+ */
+export function deliveryProblem(
+  date: string,
+  time: string | undefined,
+  driveMinutes: number,
+  busy: BusyBlock[],
+  now = new Date(),
+): string | undefined {
+  const basic = pickupProblem(date, time, busy, now, "deliveries");
+  if (basic) return basic;
+  const t = parseTime(time)!;
+  for (const [start, , other] of takenOn(date, busy).ranges) {
+    if (other === undefined) continue;
+    if (other > driveMinutes && t < start) {
+      return `farthest delivery goes first: a ${other}-min delivery is at ${formatTime(start)} on ${formatDay(date)}, so this ${driveMinutes}-min one has to be after it`;
+    }
+    if (other < driveMinutes && t > start) {
+      return `farthest delivery goes first: this ${driveMinutes}-min one has to be before the ${other}-min delivery at ${formatTime(start)} on ${formatDay(date)}`;
+    }
+  }
   return undefined;
 }
 
@@ -118,7 +152,8 @@ export function pickupProblem(date: string, time: string | undefined, busy: Busy
 export function scheduleText(busy: BusyBlock[], now = new Date(), days = 7): string {
   const today = etParts(now).date;
   const lines = [
-    "Pickups: every day 10:00 AM to 10:00 PM ET, 30 minutes each (last pickup 9:30 PM). Only offer open times. Never offer or accept a time listed as taken.",
+    "Pickups and deliveries: every day 10:00 AM to 10:00 PM ET, 30 minutes each (last one 9:30 PM). Only offer open times. Never offer or accept a time listed as taken.",
+    "Deliveries go farthest first: on a day with other deliveries, a farther drop gets an earlier time than a closer one.",
   ];
   const taken: string[] = [];
   for (let i = 0; i < days; i++) {
@@ -126,7 +161,8 @@ export function scheduleText(busy: BusyBlock[], now = new Date(), days = 7): str
     const day = takenOn(date, busy);
     if (day.closed) taken.push(`${formatDay(date)} (${date}): CLOSED, no pickups`);
     else if (day.ranges.length) {
-      taken.push(`${formatDay(date)} (${date}): ${day.ranges.map(([s, e]) => `${formatTime(s)}-${formatTime(e)}`).join(", ")}`);
+      const label = ([s, e, d]: Range) => `${formatTime(s)}-${formatTime(e)}${d !== undefined ? ` (delivery ~${d} min away)` : ""}`;
+      taken.push(`${formatDay(date)} (${date}): ${day.ranges.map(label).join(", ")}`);
     }
   }
   lines.push(taken.length ? `Taken times:\n${taken.join("\n")}` : "Taken times: none yet.");
