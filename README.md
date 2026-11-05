@@ -18,7 +18,8 @@ Uses Meta's official Instagram API, so there's no password sharing and no ban ri
 
 Everything the bot says comes from three files in `config/`. Edit on GitHub (open the file, tap the pencil), commit, and the host redeploys.
 
-- **`knowledge-base.md`**: prices, shipping, payment, restock dates. **Update restock dates every week.**
+- **`knowledge-base.md`**: products, shipping, payment, restock dates. **Update restock dates every week.**
+- **`pricing.json`**: per-piece price tiers. The bot quotes only from here.
 - **`agent-instructions.md`**: voice, rules, when to hand off.
 - **`keywords.json`**: comment keywords and their first replies.
 
@@ -53,6 +54,19 @@ Create one at [console.anthropic.com](https://console.anthropic.com) → `ANTHRO
 
 ### 6. Optional: handoff alerts
 Create a Discord channel webhook (Channel settings → Integrations → Webhooks) or a Slack incoming webhook → `HANDOFF_WEBHOOK_URL`. Without it, alerts only show in the server logs.
+
+### 6b. Payments (Stripe checkout links)
+The bot quotes from `config/pricing.json` (never its own math) and sends a branded Stripe link for the exact order. It stays open about 30 minutes.
+1. Stripe Dashboard → Developers → API keys → **Create restricted key** with **Checkout Sessions: Write** → `STRIPE_SECRET_KEY`.
+2. Developers → Webhooks → **Add endpoint** `https://YOUR-URL/stripe/webhook`, event **checkout.session.completed** → copy the signing secret → `STRIPE_WEBHOOK_SECRET`.
+3. Set `WAREHOUSE_ADDRESS`. It's DMed to buyers only after they pay for a pickup.
+
+When an order is paid, the bot DMs the buyer "paid ✅", adds a Google Calendar event, and alerts the team to log the sale and update the stock sheet.
+
+### 6c. Google Calendar (paid orders)
+Buyers can pay today and pick up a later day. Each paid order becomes an event on its pickup or ship day with the time, location, items and buyer.
+1. Go to [script.google.com](https://script.google.com) signed in to the calendar's Google account → New project → paste `scripts/google-calendar.gs`.
+2. Deploy → New deployment → **Web app**, Execute as **Me**, access **Anyone** → copy the URL → `CALENDAR_WEBHOOK_URL`.
 
 ### 7. Connect the webhook
 In the Meta app: **Instagram → API setup with Instagram login → Configure webhooks**

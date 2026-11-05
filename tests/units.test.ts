@@ -66,8 +66,8 @@ describe("ai helpers", () => {
   });
 
   it("puts the live sheet in the prompt only when there is one", () => {
-    expect(buildSystemPrompt("I", "KB", "")).not.toContain("LIVE INVENTORY");
-    expect(buildSystemPrompt("I", "KB", "Item | Price")).toContain("LIVE INVENTORY");
+    expect(buildSystemPrompt("I", "KB", "")).not.toContain("LIVE STOCK");
+    expect(buildSystemPrompt("I", "KB", "Item | Price")).toContain("LIVE STOCK");
   });
 });
 

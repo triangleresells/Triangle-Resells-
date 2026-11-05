@@ -1,0 +1,31 @@
+{
+  "_note": "Per-piece prices by quantity. An order is priced per product (brand + type): mixed sizes and colorways of the same product count together. Quantities between tiers use the last tier reached (12 pieces = the 10-piece rate). Edit prices here; the bot never does its own math.",
+  "tables": {
+    "heavy_hoodies": { "1": 55, "2": 52, "3": 50, "4": 49, "5": 48, "6": 47, "7": 46, "8": 45, "9": 44, "10": 43, "15": 42, "20": 41, "50": 40, "100": 38, "200": 36 },
+    "essentials": { "1": 50, "2": 45, "3": 44, "4": 42, "5": 41, "6": 40, "7": 38, "8": 35, "9": 34, "10": 33, "15": 31, "20": 30, "50": 28, "100": 26, "200": 25 },
+    "tees": { "1": 35, "2": 32, "3": 31, "4": 30, "5": 29, "6": 28, "7": 27, "8": 26, "9": 25, "10": 24, "15": 23, "20": 23, "50": 22, "100": 22, "200": 20 },
+    "colognes": { "1": 55, "2": 52, "3": 50, "4": 48, "5": 45, "6": 39, "7": 38, "8": 37, "9": 36, "10": 35, "20": 33, "50": 31, "100": 28, "200": 24 },
+    "lv_colognes": { "1": 65, "2": 62, "3": 60, "4": 58, "5": 55, "6": 49, "7": 48, "8": 47, "9": 46, "10": 45, "20": 43, "50": 41, "100": 39, "200": 36 }
+  },
+  "products": [
+    { "key": "alo_hoodie", "name": "Alo Hoodie", "table": "heavy_hoodies" },
+    { "key": "alo_pants", "name": "Alo Pants", "table": "heavy_hoodies" },
+    { "key": "spider_hoodie", "name": "Spider Hoodie", "table": "heavy_hoodies" },
+    { "key": "hellstar_hoodie", "name": "Hellstar Hoodie", "table": "heavy_hoodies" },
+    { "key": "essentials_hoodie", "name": "Essentials Hoodie", "table": "essentials" },
+    { "key": "essentials_sweatpants", "name": "Essentials Sweatpants", "table": "essentials" },
+    { "key": "bape_tee", "name": "BAPE Tee", "table": "tees" },
+    { "key": "chrome_tee", "name": "Chrome Hearts Tee", "table": "tees" },
+    { "key": "amiri_tee", "name": "Amiri Tee", "table": "tees" },
+    { "key": "hellstar_tee", "name": "Hellstar Tee", "table": "tees" },
+    { "key": "cologne", "name": "Cologne", "table": "colognes" },
+    { "key": "lv_cologne", "name": "LV Cologne", "table": "lv_colognes" },
+    { "key": "golf_iron_set", "name": "TaylorMade P790 Iron Set (7 sticks)", "flat": 400 },
+    { "key": "jordan_12_flu_game", "name": "Jordan 12 Flu Game", "flat": 50 }
+  ],
+  "shipping": {
+    "_note": "UPS flat rate for 1 to 9 pieces. At 10+ pieces the buyer buys and sends their own label, so no shipping is charged.",
+    "flat": 10,
+    "buyerLabelAtPieces": 10
+  }
+}

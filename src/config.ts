@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import type { PricingConfig } from "./pricing.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -22,6 +23,12 @@ export interface Config {
   inventorySheetCsvUrl: string;
   handoffWebhookUrl: string;
   humanPauseHours: number;
+  stripeSecretKey: string;
+  stripeWebhookSecret: string;
+  checkoutSuccessUrl: string;
+  calendarWebhookUrl: string;
+  warehouseAddress: string;
+  pricing: PricingConfig;
   port: number;
   agentInstructions: string;
   knowledgeBase: string;
@@ -41,7 +48,7 @@ export function readConfigFile(name: string): string {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const accountName = env.ACCOUNT_NAME?.trim() || "Triangle Resells";
-  const vendorSiteUrl = env.VENDOR_SITE_URL?.trim() || "triangleresells.netlify.app";
+  const vendorSiteUrl = env.VENDOR_SITE_URL?.trim() || "triangleresells.com";
 
   const fill = (s: string) =>
     s.replaceAll("{{ACCOUNT_NAME}}", accountName).replaceAll("{{VENDOR_SITE_URL}}", vendorSiteUrl);
@@ -63,6 +70,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     inventorySheetCsvUrl: env.INVENTORY_SHEET_CSV_URL?.trim() || "",
     handoffWebhookUrl: env.HANDOFF_WEBHOOK_URL?.trim() || "",
     humanPauseHours: Number(env.HUMAN_PAUSE_HOURS) || 12,
+    stripeSecretKey: env.STRIPE_SECRET_KEY?.trim() || "",
+    stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET?.trim() || "",
+    checkoutSuccessUrl: env.CHECKOUT_SUCCESS_URL?.trim() || `https://${vendorSiteUrl.replace(/^https?:\/\//, "")}`,
+    calendarWebhookUrl: env.CALENDAR_WEBHOOK_URL?.trim() || "",
+    warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
+    pricing: JSON.parse(readConfigFile("pricing.json")) as PricingConfig,
     port: Number(env.PORT) || 3000,
     agentInstructions: fill(readConfigFile("agent-instructions.md")),
     knowledgeBase: fill(readConfigFile("knowledge-base.md")),

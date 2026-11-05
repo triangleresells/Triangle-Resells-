@@ -1,9 +1,11 @@
-import type { ReplyEngine } from "./ai.js";
+import type { OrderTools, ReplyEngine } from "./ai.js";
 import type { KeywordRule } from "./config.js";
 import type { Notifier } from "./handoff.js";
 import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
+import { describeQuote, quoteOrder, type PricingConfig } from "./pricing.js";
 import type { Store } from "./store.js";
+import type { CheckoutApi } from "./stripe.js";
 
 export interface BotDeps {
   ig: InstagramApi;
@@ -17,6 +19,10 @@ export interface BotDeps {
   humanPauseHours: number;
   /** Wait this long for more messages before replying, so 3 quick texts get 1 answer. */
   debounceMs?: number;
+  /** Price list for exact quotes. Without it the bot can't quote or sell. */
+  pricing?: PricingConfig;
+  /** Stripe. Without it the bot quotes but hands off to the team to take payment. */
+  checkout?: CheckoutApi;
 }
 
 interface MessagingEvent {
@@ -120,14 +126,55 @@ export class Bot {
     }
 
     const inventory = await this.d.getInventory();
-    const result = await this.d.agent.reply(this.d.store.history(userId), inventory);
-    await this.send(userId, result.text);
+    const result = await this.d.agent.reply(this.d.store.history(userId), inventory, this.orderTools(userId));
+    let text = result.text;
+    if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
+    await this.send(userId, text);
 
     if (result.handoff) {
       this.d.store.pause(userId, this.d.humanPauseHours);
       const username = await this.d.ig.getUsername(userId);
       await this.d.notify({ account: this.d.accountName, userId, username, ...result.handoff });
     }
+  }
+
+  /** Quote and checkout actions for one customer. Prices always come from the price list, never the AI. */
+  private orderTools(userId: string): OrderTools | undefined {
+    const pricing = this.d.pricing;
+    if (!pricing) return undefined;
+    return {
+      quote: (items, fulfillment) => {
+        const q = quoteOrder(pricing, items, fulfillment);
+        const issues = q.problems.length ? ` PROBLEMS (hand these to the team): ${q.problems.join("; ")}` : "";
+        return q.lines.length ? describeQuote(q) + issues : `Nothing could be priced.${issues}`;
+      },
+      checkout: async (items, fulfillment, fulfillDate, fulfillTime) => {
+        if (!this.d.checkout) return { ok: false, error: "card checkout isn't set up yet" };
+        const q = quoteOrder(pricing, items, fulfillment);
+        if (q.problems.length) return { ok: false, error: q.problems.join("; ") };
+        if (!q.lines.length) return { ok: false, error: "no items" };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "")) return { ok: false, error: "fulfill_date must be YYYY-MM-DD" };
+        const summary = describeQuote(q);
+        try {
+          const link = await this.d.checkout.create(q, {
+            igUserId: userId,
+            account: this.d.accountName,
+            fulfillDate,
+            fulfillTime: fulfillTime?.trim() || undefined,
+            summary: q.lines.map((l) => `${l.qty}x ${[l.name, l.variant, l.size].filter(Boolean).join(" ")}`).join(", "),
+          });
+          return { ok: true, url: link.url, total: q.total, summary };
+        } catch (err) {
+          console.error("[bot] checkout failed:", err);
+          return { ok: false, error: "payment link failed" };
+        }
+      },
+    };
+  }
+
+  /** DMs a customer from outside a conversation (e.g. a payment confirmation). */
+  async sendDm(userId: string, text: string): Promise<void> {
+    await this.inOrder(userId, () => this.send(userId, text));
   }
 
   private async send(userId: string, text: string): Promise<void> {

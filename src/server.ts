@@ -1,10 +1,18 @@
 import express, { type Request } from "express";
 import type { Bot, WebhookPayload } from "./bot.js";
 import { isValidSignature } from "./signature.js";
+import { isValidStripeSignature, paidOrderFromEvent, type PaidOrder } from "./stripe.js";
 
 type RawRequest = Request & { rawBody?: Buffer };
 
-export function createServer(bot: Pick<Bot, "handle">, opts: { appSecret: string; verifyToken: string }) {
+export interface ServerOpts {
+  appSecret: string;
+  verifyToken: string;
+  stripeWebhookSecret?: string;
+  onPaidOrder?: (order: PaidOrder) => Promise<void>;
+}
+
+export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
   const app = express();
 
   app.use(
@@ -41,6 +49,20 @@ export function createServer(bot: Pick<Bot, "handle">, opts: { appSecret: string
     // Answer Meta right away; it retries deliveries that take too long.
     res.sendStatus(200);
     void bot.handle(req.body as WebhookPayload);
+  });
+
+  // Stripe calls this when a checkout link is paid.
+  app.post("/stripe/webhook", (req, res) => {
+    const raw = (req as RawRequest).rawBody;
+    if (!opts.stripeWebhookSecret || !raw || !isValidStripeSignature(raw, req.get("stripe-signature"), opts.stripeWebhookSecret)) {
+      res.sendStatus(400);
+      return;
+    }
+    res.sendStatus(200);
+    const order = paidOrderFromEvent(req.body);
+    if (order && opts.onPaidOrder) {
+      void opts.onPaidOrder(order).catch((err) => console.error("[stripe] paid order handling failed:", err));
+    }
   });
 
   return app;
