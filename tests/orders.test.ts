@@ -182,3 +182,26 @@ describe("bot checkout", () => {
     expect((checkout.create as any).mock.calls[0][1]).toMatchObject({ igUserId: "u1", fulfillDate: "2026-11-12", fulfillTime: "3:00 PM" });
   });
 });
+
+describe("alerts", () => {
+  it("alerts Josh about a missing item without pausing the chat", async () => {
+    const alerts: HandoffAlert[] = [];
+    const ig: InstagramApi = {
+      sendText: vi.fn(async () => "mid"),
+      sendPrivateReply: vi.fn(async () => "mid"),
+      replyToComment: vi.fn(async () => {}),
+      getUsername: vi.fn(async () => "buyer"),
+    };
+    const store = new Store();
+    const agent: ReplyEngine = {
+      reply: vi.fn(async () => ({
+        text: "don't got supreme rn, but I got spider hoodies in S and M. want me to set you up?",
+        alerts: [{ reason: "asked for item not in stock", summary: "Supreme set, size L" }],
+      })),
+    };
+    const bot = new Bot({ ig, agent, store, notify: async (a) => void alerts.push(a), getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing });
+    await bot.handle({ object: "instagram", entry: [{ id: "own", messaging: [{ sender: { id: "u1" }, recipient: { id: "own" }, message: { mid: "m1", text: "got a supreme set?" } }] }] });
+    expect(alerts[0]).toMatchObject({ route: "josh", paused: false, summary: "Supreme set, size L" });
+    expect(store.isPaused("u1")).toBe(false);
+  });
+});

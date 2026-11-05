@@ -18,7 +18,7 @@ PRODUCT KEYS (use these in quote_order and create_checkout_link)
 - lv_cologne: $65 for 1
 - golf_iron_set (TaylorMade P790, 7 sticks): $400 a set
 - jordan_12_flu_game: $50 a pair
-- Anything else (jeans, Valley, Valentino, Prada, Baccarat, hats, shoes not listed) has no set price yet: hand off to the team.
+- Anything else (jeans, Valley, Valentino, Prada, Baccarat, hats, shoes not listed) has no set price yet: say Josh will confirm it, call alert_team, and keep closing the rest.
 
 BULK PRICING
 - No minimum. The per-piece price drops the more of the SAME product they buy. Mixed sizes and colorways of the same product count together, but different products are priced separately (5 Alo hoodies get the 5-piece Alo rate; a BAPE tee is priced on its own).

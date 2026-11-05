@@ -131,6 +131,15 @@ export class Bot {
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
 
+    if (result.alerts?.length) {
+      const username = await this.d.ig.getUsername(userId);
+      for (const a of result.alerts) {
+        await this.d
+          .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, ...a })
+          .catch((err) => console.error("[bot] alert failed:", err));
+      }
+    }
+
     if (result.handoff) {
       this.d.store.pause(userId, this.d.humanPauseHours);
       const username = await this.d.ig.getUsername(userId);

@@ -7,6 +7,8 @@ export interface AgentReply {
   handoff?: { route: "team" | "josh"; reason: string; summary: string };
   /** Set when the bot made a Stripe link in this reply. The bot makes sure it reaches the customer. */
   checkoutUrl?: string;
+  /** Heads-up alerts for the team. Unlike a handoff, the bot keeps selling in the chat. */
+  alerts?: { reason: string; summary: string }[];
 }
 
 /** Order actions the AI can take for the customer it's talking to. Prices always come from config/pricing.json. */
@@ -65,6 +67,19 @@ export const TOOLS = [
         },
       },
       required: ["route", "reason", "summary"],
+    },
+  },
+  {
+    name: "alert_team",
+    description:
+      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        reason: { type: "string", description: "e.g. 'asked for item not in stock', 'asked for unpriced item'." },
+        summary: { type: "string", description: "Exactly what they asked for: brand, item, size, color, how many." },
+      },
+      required: ["reason", "summary"],
     },
   },
   {
@@ -153,6 +168,7 @@ export class ClaudeAgent implements ReplyEngine {
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
+    const alerts: NonNullable<AgentReply["alerts"]> = [];
     let finalTexts: string[] = [];
     const allTexts: string[] = [];
 
@@ -175,6 +191,9 @@ export class ClaudeAgent implements ReplyEngine {
         if (block.name === "handoff_to_team") {
           handoff = input as AgentReply["handoff"];
           content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
+        } else if (block.name === "alert_team") {
+          alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
+          content = "Josh alerted. Keep helping: offer the closest item we do have and keep closing.";
         } else if (!tools) {
           content = "Ordering isn't available right now. Hand off to the team.";
         } else if (block.name === "quote_order") {
@@ -207,6 +226,6 @@ export class ClaudeAgent implements ReplyEngine {
         : "Good question, let me get someone from the team to confirm for you.";
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
-    return { text, handoff, checkoutUrl };
+    return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined };
   }
 }
