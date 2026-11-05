@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { lineLabel, type Quote } from "./pricing.js";
+import { shipDateFor } from "./schedule.js";
 
 export interface OrderDetails {
   igUserId: string;
@@ -9,6 +10,13 @@ export interface OrderDetails {
   /** e.g. "3:00 PM". Pickups only. */
   fulfillTime?: string;
   summary: string;
+  /** Marks a test checkout (metadata test_order=true). Set automatically for Stripe test-mode keys. */
+  testOrder?: boolean;
+}
+
+/** Stripe test-mode keys start with sk_test_ or rk_test_. */
+export function isTestKey(key: string): boolean {
+  return /^(sk|rk)_test_/.test(key);
 }
 
 export interface CheckoutLink {
@@ -80,6 +88,7 @@ export function checkoutParams(quote: Quote, order: OrderDetails, successUrl: st
       fulfill_time: order.fulfillTime ?? "",
       buyer_label: String(quote.buyerProvidesLabel),
       order_summary: order.summary.slice(0, 500),
+      ...(order.testOrder ? { test_order: "true" } : {}),
     },
   };
 }
@@ -98,7 +107,7 @@ export class StripeCheckout implements CheckoutApi {
         Authorization: `Bearer ${this.secretKey}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: toForm(checkoutParams(quote, order, this.successUrl)).toString(),
+      body: toForm(checkoutParams(quote, { ...order, testOrder: order.testOrder || isTestKey(this.secretKey) }, this.successUrl)).toString(),
     });
     const body = (await res.json().catch(() => ({}))) as { id?: string; url?: string; expires_at?: number; error?: unknown };
     if (!res.ok || !body.url || !body.id) throw new Error(`Stripe ${res.status}: ${JSON.stringify(body.error ?? body)}`);
@@ -127,6 +136,8 @@ export interface PaidOrder {
   buyerLabel: boolean;
   summary: string;
   total: number;
+  /** A test checkout (metadata test_order=true). */
+  test?: boolean;
   buyerName?: string;
   buyerEmail?: string;
   buyerPhone?: string;
@@ -145,12 +156,16 @@ export function paidOrderFromEvent(event: any): PaidOrder | undefined {
         .filter(Boolean)
         .join(", ")
     : undefined;
+  const ship = m.fulfillment === "ship";
+  const paidAt = new Date(Number(event.created) > 0 ? Number(event.created) * 1000 : Date.now());
   return {
     sessionId: s.id,
     igUserId: m.ig_user_id,
     account: m.account ?? "",
-    fulfillment: m.fulfillment === "ship" ? "ship" : "pickup",
-    fulfillDate: m.fulfill_date ?? "",
+    fulfillment: ship ? "ship" : "pickup",
+    // Paid after 7pm ET ships the next day, so the calendar shows the real ship day.
+    fulfillDate: ship ? shipDateFor(m.fulfill_date ?? "", paidAt) : (m.fulfill_date ?? ""),
+    test: m.test_order === "true",
     fulfillTime: m.fulfill_time ?? "",
     buyerLabel: m.buyer_label === "true",
     summary: m.order_summary ?? "",

@@ -175,6 +175,7 @@ describe("bot checkout", () => {
       humanPauseHours: 12,
       pricing,
       checkout,
+      now: () => new Date("2026-11-05T17:00:00Z"),
     });
     await bot.handle({ object: "instagram", entry: [{ id: "own", messaging: [{ sender: { id: "u1" }, recipient: { id: "own" }, message: { mid: "m1", text: "ok send it" } }] }] });
     expect(seenTotal).toBe(105);

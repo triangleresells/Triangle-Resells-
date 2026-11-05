@@ -68,6 +68,8 @@ Buyers can pay today and pick up a later day. Each paid order becomes an event o
 1. Go to [script.google.com](https://script.google.com) signed in to the calendar's Google account → New project → paste `scripts/google-calendar.gs`.
 2. Deploy → New deployment → **Web app**, Execute as **Me**, access **Anyone** → copy the URL → `CALENDAR_WEBHOOK_URL`.
 
+**Blocking pickup times:** pickups are 10 AM to 10 PM, 30 minutes each. The bot reads this same calendar and never offers a time that overlaps an event. To block a time, add an event to the calendar. To close a whole day, add an all-day event with "closed" in the title. Paid pickups block their own slot automatically.
+
 ### 7. Connect the webhook
 In the Meta app: **Instagram → API setup with Instagram login → Configure webhooks**
 - Callback URL: `https://YOUR-URL/webhook`

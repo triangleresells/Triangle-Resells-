@@ -5,6 +5,7 @@ import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
 import { describeQuote, quoteOrder, type PricingConfig } from "./pricing.js";
 import type { ChatImage, Store } from "./store.js";
+import { addDays, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
 import type { CheckoutApi } from "./stripe.js";
 
 export interface BotDeps {
@@ -25,6 +26,10 @@ export interface BotDeps {
   checkout?: CheckoutApi;
   /** Downloads a DM picture so the AI can see it. Defaults to a plain fetch. */
   fetchImage?: (url: string) => Promise<ChatImage | undefined>;
+  /** Taken times from Josh's calendar. Without it every time from 10 AM to 10 PM is open. */
+  getBusy?: () => Promise<BusyBlock[]>;
+  /** Clock, for tests. */
+  now?: () => Date;
 }
 
 const MAX_IMAGE_BYTES = 4_500_000;
@@ -147,8 +152,9 @@ export class Bot {
       return;
     }
 
-    const inventory = await this.d.getInventory();
-    const result = await this.d.agent.reply(this.d.store.history(userId), inventory, this.orderTools(userId));
+    const [inventory, busy] = await Promise.all([this.d.getInventory(), this.busy()]);
+    const schedule = scheduleText(busy, this.now());
+    const result = await this.d.agent.reply(this.d.store.history(userId), inventory, this.orderTools(userId), schedule);
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
@@ -194,7 +200,22 @@ export class Bot {
         const q = quoteOrder(pricing, items, fulfillment);
         if (q.problems.length) return { ok: false, error: q.problems.join("; ") };
         if (!q.lines.length) return { ok: false, error: "no items" };
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "")) return { ok: false, error: "fulfill_date must be YYYY-MM-DD" };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "")) return { ok: false, error: "fulfill_date must be YYYY-MM-DD", fixable: true };
+        const now = this.now();
+        const today = etParts(now);
+        let note: string | undefined;
+        if (fulfillment === "pickup") {
+          const problem = pickupProblem(fulfillDate, fulfillTime, await this.busy(), now);
+          if (problem) return { ok: false, error: problem, fixable: true };
+        } else {
+          // Ships the day it's paid before 7pm ET, otherwise the next day.
+          const earliest = today.minutes < SHIP_CUTOFF_MIN ? today.date : addDays(today.date, 1);
+          if (fulfillDate < earliest) {
+            fulfillDate = earliest;
+            note = `It's past 7pm ET, so this ships ${earliest} (tell the customer it ships tomorrow).`;
+          }
+          fulfillTime = undefined;
+        }
         const summary = describeQuote(q);
         try {
           const link = await this.d.checkout.create(q, {
@@ -204,13 +225,21 @@ export class Bot {
             fulfillTime: fulfillTime?.trim() || undefined,
             summary: q.lines.map((l) => `${l.qty}x ${[l.name, l.variant, l.size].filter(Boolean).join(" ")}`).join(", "),
           });
-          return { ok: true, url: link.url, total: q.total, summary };
+          return { ok: true, url: link.url, total: q.total, summary, note };
         } catch (err) {
           console.error("[bot] checkout failed:", err);
           return { ok: false, error: "payment link failed" };
         }
       },
     };
+  }
+
+  private now(): Date {
+    return this.d.now?.() ?? new Date();
+  }
+
+  private async busy(): Promise<BusyBlock[]> {
+    return this.d.getBusy ? this.d.getBusy().catch(() => []) : [];
   }
 
   /** DMs a customer from outside a conversation (e.g. a payment confirmation). */

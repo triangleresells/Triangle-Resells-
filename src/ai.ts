@@ -19,11 +19,11 @@ export interface OrderTools {
     fulfillment: Fulfillment,
     fulfillDate: string,
     fulfillTime?: string,
-  ): Promise<{ ok: true; url: string; total: number; summary: string } | { ok: false; error: string }>;
+  ): Promise<{ ok: true; url: string; total: number; summary: string; note?: string } | { ok: false; error: string; fixable?: boolean }>;
 }
 
 export interface ReplyEngine {
-  reply(history: ChatTurn[], inventory: string, tools?: OrderTools): Promise<AgentReply>;
+  reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply>;
 }
 
 const ITEMS_SCHEMA = {
@@ -112,12 +112,14 @@ export const TOOLS = [
   },
 ];
 
-export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string, now = new Date()): string {
-  const today = now.toLocaleDateString("en-US", {
+export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): string {
+  const today = now.toLocaleString("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZone: "America/New_York",
   });
   const parts = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
@@ -127,6 +129,7 @@ export function buildSystemPrompt(instructions: string, knowledgeBase: string, i
         inventory,
     );
   }
+  if (schedule) parts.push("PICKUP SCHEDULE (live from Josh's calendar)\n" + schedule);
   parts.push(`TODAY\n${today} (North Carolina time). Use this to turn "today", "tomorrow" or "next Thursday" into a date.`);
   parts.push(
     "FORMAT\nYou are writing an Instagram DM. Plain text only: no markdown, no bullet lists, no asterisks. Keep it short.",
@@ -185,8 +188,8 @@ export class ClaudeAgent implements ReplyEngine {
     this.client = new Anthropic({ apiKey });
   }
 
-  async reply(history: ChatTurn[], inventory: string, tools?: OrderTools): Promise<AgentReply> {
-    const system = buildSystemPrompt(this.instructions, this.knowledgeBase, inventory);
+  async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
+    const system = buildSystemPrompt(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
@@ -224,7 +227,9 @@ export class ClaudeAgent implements ReplyEngine {
           const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time);
           if (r.ok) {
             checkoutUrl = r.url;
-            content = `Link made. Total $${r.total} (${r.summary}). Send the customer this exact link: ${r.url}`;
+            content = `Link made. Total $${r.total} (${r.summary}).${r.note ? ` ${r.note}` : ""} Send the customer this exact link: ${r.url}`;
+          } else if (r.fixable) {
+            content = `Could not make the link: ${r.error}. Tell the customer and offer an open time from the PICKUP SCHEDULE (or another fix), then try again once they pick.`;
           } else {
             content = `Could not make the link: ${r.error}. Hand off to the team.`;
           }

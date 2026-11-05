@@ -6,12 +6,15 @@ import { InstagramClient } from "./instagram.js";
 import { InventorySheet } from "./inventory.js";
 import { createServer } from "./server.js";
 import { handlePaidOrder, webhookCalendar } from "./orders.js";
+import { BusyCalendar } from "./schedule.js";
 import { Store } from "./store.js";
 import { StripeCheckout } from "./stripe.js";
 
 const config = loadConfig();
 const store = new Store();
 const inventory = new InventorySheet(config.inventorySheetCsvUrl);
+// Josh's calendar: paid pickups plus any time he blocks off. The bot never offers those times.
+const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 
 const notify = webhookNotifier(config.handoffWebhookUrl);
 const bot = new Bot({
@@ -27,6 +30,7 @@ const bot = new Bot({
   debounceMs: 4000,
   pricing: config.pricing,
   checkout: config.stripeSecretKey ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
+  getBusy: () => busyCalendar.get(),
 });
 const calendar = webhookCalendar(config.calendarWebhookUrl);
 

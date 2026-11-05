@@ -1,10 +1,14 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentReply, ReplyEngine } from "../src/ai.js";
+import type { AgentReply, OrderTools, ReplyEngine } from "../src/ai.js";
 import { Bot, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
 import type { InstagramApi } from "../src/instagram.js";
+import { quoteOrder, type PricingConfig } from "../src/pricing.js";
+import { pickupProblem, scheduleText, shipDateFor, type BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
+import { paidOrderFromEvent, StripeCheckout } from "../src/stripe.js";
 
 const OWN_ID = "17840000000000000";
 const USER = "user-1";
@@ -164,5 +168,120 @@ describe("comment to DM", () => {
     const history = (t.agent.reply as any).mock.calls[0][0];
     expect(history[0].text).toContain("Commented");
     expect(history[1]).toEqual({ role: "assistant", text: keywords[0].reply });
+  });
+});
+
+describe("pickup schedule and ship cutoff", () => {
+  // Thu Nov 5, 2026, 2:00 PM in North Carolina (EST = UTC-5).
+  const NOW = new Date("2026-11-05T19:00:00Z");
+  const busy: BusyBlock[] = [
+    { start: "2026-11-06T20:00:00Z", end: "2026-11-06T20:30:00Z" }, // Fri 3:00-3:30 PM taken
+    { start: "2026-11-07T05:00:00Z", end: "2026-11-08T05:00:00Z", allDay: true, title: "CLOSED" }, // Sat closed
+    { start: "2026-11-09T05:00:00Z", end: "2026-11-10T05:00:00Z", allDay: true, title: "📦 SHIP: buyer" }, // doesn't block
+  ];
+
+  it("allows only open times from 10 AM to 10 PM", () => {
+    expect(pickupProblem("2026-11-06", "2:30 PM", busy, NOW)).toBeUndefined();
+    expect(pickupProblem("2026-11-06", "3pm", busy, NOW)).toContain("already taken");
+    expect(pickupProblem("2026-11-06", "3:15 PM", busy, NOW)).toContain("already taken");
+    expect(pickupProblem("2026-11-06", "9:00 AM", busy, NOW)).toContain("10 AM to 10 PM");
+    expect(pickupProblem("2026-11-06", "10:00 PM", busy, NOW)).toContain("10 AM to 10 PM");
+    expect(pickupProblem("2026-11-06", "9", busy, NOW)).toBeUndefined(); // bare 9 = 9 PM
+    expect(pickupProblem("2026-11-07", "2:00 PM", busy, NOW)).toContain("closed");
+    expect(pickupProblem("2026-11-09", "2:00 PM", busy, NOW)).toBeUndefined();
+    expect(pickupProblem("2026-11-05", "1:00 PM", busy, NOW)).toContain("passed");
+  });
+
+  it("tells the AI the hours and taken times", () => {
+    const text = scheduleText(busy, NOW);
+    expect(text).toContain("10:00 AM to 10:00 PM");
+    expect(text).toContain("Fri, Nov 6 (2026-11-06): 3:00 PM-3:30 PM");
+    expect(text).toContain("Sat, Nov 7 (2026-11-07): CLOSED");
+  });
+
+  it("ships next day when paid after 7pm ET, never before the chosen day", () => {
+    expect(shipDateFor("2026-11-05", new Date("2026-11-05T23:59:00Z"))).toBe("2026-11-05"); // 6:59 PM
+    expect(shipDateFor("2026-11-05", new Date("2026-11-06T00:20:00Z"))).toBe("2026-11-06"); // 7:20 PM
+    expect(shipDateFor("2026-11-10", new Date("2026-11-06T00:20:00Z"))).toBe("2026-11-10");
+    const paid = paidOrderFromEvent({
+      type: "checkout.session.completed",
+      created: Date.parse("2026-11-06T00:20:00Z") / 1000,
+      data: { object: { id: "cs", payment_status: "paid", amount_total: 6500, metadata: { source: "ai_dm_bot", ig_user_id: "u", fulfillment: "ship", fulfill_date: "2026-11-05", test_order: "true" } } },
+    });
+    expect(paid).toMatchObject({ fulfillDate: "2026-11-06", test: true });
+  });
+
+  it("refuses a taken pickup time so the AI offers another, and marks test-key checkouts", async () => {
+    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+    const results: unknown[] = [];
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools, schedule?: string) => {
+        expect(schedule).toContain("3:00 PM-3:30 PM");
+        results.push(await tools!.checkout([{ product: "alo_hoodie", qty: 1 }], "pickup", "2026-11-06", "3:00 PM"));
+        results.push(await tools!.checkout([{ product: "alo_hoodie", qty: 1 }], "pickup", "2026-11-06", "4:00 PM"));
+        return { text: "bet" };
+      }),
+    };
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({ id: "cs_1", url: "https://checkout.stripe.com/x", expires_at: 1 })));
+    const { ig } = setup();
+    const bot = new Bot({
+      ig,
+      agent,
+      store: new Store(),
+      notify: async () => {},
+      getInventory: async () => "",
+      accountName: "Triangle Resells",
+      keywords: [],
+      publicCommentReplies: [],
+      humanPauseHours: 12,
+      pricing,
+      checkout: new StripeCheckout("rk_test_123", "https://triangleresells.com", fetchFn as unknown as typeof fetch),
+      getBusy: async () => busy,
+      now: () => NOW,
+    });
+    await bot.handle(dm("3pm friday", "m-sched"));
+    expect(results[0]).toMatchObject({ ok: false, fixable: true });
+    expect(results[1]).toMatchObject({ ok: true, total: 55 });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const body = String((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body);
+    expect(decodeURIComponent(body)).toContain("metadata[test_order]=true");
+  });
+
+  it("pushes a same-day ship link to tomorrow after 7pm ET", async () => {
+    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+    const create = vi.fn(async () => ({ id: "cs", url: "https://checkout.stripe.com/y", expiresAt: 0 }));
+    let note = "";
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
+        const r = await tools!.checkout([{ product: "spider_hoodie", qty: 1 }], "ship", "2026-11-06");
+        if (r.ok) note = r.note ?? "";
+        return { text: "bet" };
+      }),
+    };
+    const { ig } = setup();
+    const bot = new Bot({
+      ig, agent, store: new Store(), notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells",
+      keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, checkout: { create },
+      now: () => new Date("2026-11-07T00:30:00Z"), // Fri Nov 6, 7:30 PM ET
+    });
+    await bot.handle(dm("ship it", "m-ship"));
+    expect((create.mock.calls[0] as unknown as [unknown, { fulfillDate: string }])[1].fulfillDate).toBe("2026-11-07");
+    expect(note).toContain("ships tomorrow");
+  });
+});
+
+describe("prices and rules from Josh (Nov 5)", () => {
+  it("prices every fragrance at $60 for 1, LV stays $65", () => {
+    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+    expect(quoteOrder(pricing, [{ product: "cologne", variant: "Bleu de Chanel", qty: 1 }], "ship").total).toBe(70);
+    expect(quoteOrder(pricing, [{ product: "lv_cologne", qty: 1 }], "pickup").total).toBe(65);
+  });
+
+  it("keeps the rule fixes in the bot's instructions", () => {
+    const instructions = readFileSync(new URL("../config/agent-instructions.md", import.meta.url), "utf8");
+    expect(instructions).toContain("treat it as NOT IN STOCK below (alert_team and keep selling, no handoff)");
+    expect(instructions).toContain("the label is provided by them");
+    expect(instructions).toContain("at 10+ the label's on you");
+    expect(instructions).toContain("PICKUP SCHEDULE");
   });
 });

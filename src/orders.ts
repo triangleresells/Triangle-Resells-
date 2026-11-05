@@ -18,7 +18,7 @@ export type CalendarPoster = (event: CalendarEvent) => Promise<void>;
 export function calendarEventFor(o: PaidOrder, warehouseAddress: string): CalendarEvent {
   const who = o.buyerName || "IG buyer";
   const pickup = o.fulfillment === "pickup";
-  const title = pickup ? `🔺 PICKUP: ${who} – $${o.total}` : `📦 SHIP: ${who} – $${o.total}`;
+  const title = (o.test ? "[TEST] " : "") + (pickup ? `🔺 PICKUP: ${who} – $${o.total}` : `📦 SHIP: ${who} – $${o.total}`);
   const description = [
     `Items: ${o.summary}`,
     `Paid: $${o.total} via Stripe (session ${o.sessionId})`,
