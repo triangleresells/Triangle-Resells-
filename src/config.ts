@@ -28,6 +28,10 @@ export interface Config {
   checkoutSuccessUrl: string;
   calendarWebhookUrl: string;
   warehouseAddress: string;
+  /** File for the bot's small database (chats, follow-ups, customer list). Blank = memory only. */
+  stateFile: string;
+  /** Password for the /admin customer list page. Blank = page off. */
+  adminKey: string;
   pricing: PricingConfig;
   port: number;
   agentInstructions: string;
@@ -75,6 +79,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     checkoutSuccessUrl: env.CHECKOUT_SUCCESS_URL?.trim() || `https://${vendorSiteUrl.replace(/^https?:\/\//, "")}`,
     calendarWebhookUrl: env.CALENDAR_WEBHOOK_URL?.trim() || "",
     warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
+    stateFile: env.STATE_FILE?.trim() || "",
+    adminKey: env.ADMIN_KEY?.trim() || "",
     pricing: JSON.parse(readConfigFile("pricing.json")) as PricingConfig,
     port: Number(env.PORT) || 3000,
     agentInstructions: fill(readConfigFile("agent-instructions.md")),

@@ -26,6 +26,6 @@ Instagram → Meta webhook → `POST /webhook` (signature checked) → `src/bot.
 - Use only Meta's official Instagram API (graph.instagram.com, Instagram Login). No scraping, no logging in with passwords.
 - The bot must never invent prices, stock, restock dates, shipping times, or discounts, and never promise income. Keep those rules in `agent-instructions.md` when editing it.
 - DMs are plain text, max 1,000 chars per message (`splitMessage` handles longer).
-- Conversation state is in memory (`src/store.ts`) and resets on restart. If that becomes a problem, swap in a database behind the same `Store` methods.
+- Conversation state, pending follow-ups and the customer list live in `src/store.ts` and are saved to one JSON file (`STATE_FILE`, on Render's disk at `/var/data`) by `src/persist.ts`. Never commit that file (it's customer data; `data/` is gitignored). Restock blasts only DM people who messaged in the last 24 hours (Instagram's rule).
 - Run `npm test` and `npm run typecheck` before committing. Add a test in `tests/bot.test.ts` for new behavior.
 - Expanding to Triangle Scales / Triangle Sales: deploy another copy with a different `ACCOUNT_NAME` and that account's token.

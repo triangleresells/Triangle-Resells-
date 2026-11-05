@@ -26,20 +26,47 @@ interface Conversation {
   recentBotTexts: { text: string; at: number }[];
 }
 
+/** Everything the bot remembers about one buyer, kept forever so Josh can reach them on a restock. */
+export interface Customer {
+  userId: string;
+  username?: string;
+  firstSeen: number;
+  /** Last time THEY messaged. Instagram only lets the bot DM someone within 24 hours of this. */
+  lastMessageAt: number;
+  /** What they asked for or want on restock, newest last. */
+  interests: { item: string; at: number }[];
+  orders: { summary: string; total: number; at: number }[];
+}
+
+/** What gets saved to disk. Pictures are left out (they're big and only matter for a few minutes). */
+export interface StoreSnapshot {
+  version: 1;
+  convos: { userId: string; turns: ChatTurn[]; pausedUntil: number; lastActivity: number; pendingLink?: PendingLink }[];
+  customers: Customer[];
+}
+
 const MAX_TURNS = 20;
+const MAX_INTERESTS = 30;
 const CONVO_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const SEEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * In-memory conversation state. Resets when the server restarts, which is fine:
- * the bot just loses older context and any active pauses.
+ * Conversation state and the customer list. Lives in memory; src/persist.ts saves it to a file
+ * (on Render's disk) so two-day buyers, follow-ups and the customer list survive a redeploy.
  */
 export class Store {
   private convos = new Map<string, Conversation>();
   private seen = new Map<string, number>();
   private botMessageIds = new Set<string>();
+  private customers = new Map<string, Customer>();
+  /** Called after anything worth saving changes (the file saver listens here). */
+  onChange?: () => void;
 
   constructor(private now: () => number = Date.now) {}
+
+  private changed(): void {
+    this.onChange?.();
+  }
 
   private get(userId: string): Conversation {
     let c = this.convos.get(userId);
@@ -66,6 +93,82 @@ export class Store {
     const c = this.get(userId);
     c.turns.push(turn);
     if (c.turns.length > MAX_TURNS) c.turns.splice(0, c.turns.length - MAX_TURNS);
+    if (turn.role === "user") this.customer(userId).lastMessageAt = this.now();
+    this.changed();
+  }
+
+  // ---- customer list (for restock blasts) ----
+
+  customer(userId: string): Customer {
+    let c = this.customers.get(userId);
+    if (!c) {
+      c = { userId, firstSeen: this.now(), lastMessageAt: 0, interests: [], orders: [] };
+      this.customers.set(userId, c);
+    }
+    return c;
+  }
+
+  setUsername(userId: string, username: string | undefined): void {
+    if (!username) return;
+    this.customer(userId).username = username;
+    this.changed();
+  }
+
+  addInterest(userId: string, item: string): void {
+    const text = item.trim().slice(0, 200);
+    if (!text) return;
+    const c = this.customer(userId);
+    c.interests = c.interests.filter((i) => i.item.toLowerCase() !== text.toLowerCase());
+    c.interests.push({ item: text, at: this.now() });
+    if (c.interests.length > MAX_INTERESTS) c.interests.splice(0, c.interests.length - MAX_INTERESTS);
+    this.changed();
+  }
+
+  addOrder(userId: string, summary: string, total: number): void {
+    this.customer(userId).orders.push({ summary: summary.slice(0, 300), total, at: this.now() });
+    this.changed();
+  }
+
+  allCustomers(): Customer[] {
+    return [...this.customers.values()];
+  }
+
+  /** True if Instagram still allows the bot to DM them (they messaged in the last 24 hours). */
+  canMessage(userId: string): boolean {
+    const c = this.customers.get(userId);
+    return !!c && this.now() - c.lastMessageAt < 24 * 60 * 60 * 1000;
+  }
+
+  // ---- saving to disk ----
+
+  snapshot(): StoreSnapshot {
+    return {
+      version: 1,
+      convos: [...this.convos].map(([userId, c]) => ({
+        userId,
+        turns: c.turns.map(({ role, text, images }) => ({ role, text: images?.length ? `${text} (picture not saved)` : text })),
+        pausedUntil: c.pausedUntil,
+        lastActivity: c.lastActivity,
+        ...(c.pendingLink ? { pendingLink: c.pendingLink } : {}),
+      })),
+      customers: this.allCustomers(),
+    };
+  }
+
+  restore(snap: StoreSnapshot | undefined): void {
+    if (!snap || snap.version !== 1) return;
+    for (const c of snap.convos ?? []) {
+      this.convos.set(c.userId, { turns: c.turns ?? [], pausedUntil: c.pausedUntil ?? 0, lastActivity: c.lastActivity ?? this.now(), recentBotTexts: [], pendingLink: c.pendingLink });
+    }
+    for (const c of snap.customers ?? []) {
+      this.customers.set(c.userId, {
+        ...c,
+        interests: c.interests ?? [],
+        orders: c.orders ?? [],
+        lastMessageAt: c.lastMessageAt ?? 0,
+        firstSeen: c.firstSeen ?? this.now(),
+      });
+    }
   }
 
   /** Remember what the bot just sent so its own echo isn't mistaken for a team member typing. */
@@ -83,6 +186,7 @@ export class Store {
 
   pause(userId: string, hours: number): void {
     this.get(userId).pausedUntil = this.now() + hours * 60 * 60 * 1000;
+    this.changed();
   }
 
   isPaused(userId: string): boolean {
@@ -92,16 +196,23 @@ export class Store {
   /** The latest unpaid payment link in a chat. A new link replaces the old one. */
   setPendingLink(userId: string, link: PendingLink): void {
     this.get(userId).pendingLink = { ...link, followedUp: false };
+    this.changed();
   }
 
   clearPendingLink(userId: string): void {
     const c = this.convos.get(userId);
-    if (c) c.pendingLink = undefined;
+    if (c?.pendingLink) {
+      c.pendingLink = undefined;
+      this.changed();
+    }
   }
 
   markFollowedUp(userId: string): void {
     const l = this.convos.get(userId)?.pendingLink;
-    if (l) l.followedUp = true;
+    if (l) {
+      l.followedUp = true;
+      this.changed();
+    }
   }
 
   /** Unpaid links made before `createdBefore` that haven't been followed up yet. */

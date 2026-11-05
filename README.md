@@ -70,6 +70,13 @@ Buyers can pay today and pick up a later day. Each paid order becomes an event o
 
 **Blocking pickup times:** pickups are 10 AM to 10 PM, 30 minutes each. The bot reads this same calendar and never offers a time that overlaps an event. To block a time, add an event to the calendar. To close a whole day, add an all-day event with "closed" in the title. Paid pickups block their own slot automatically.
 
+### 6d. Customer list and restock blasts
+The bot saves every chat, pending follow-up and customer (username, what they wanted, what they bought) to a small database file on Render's disk (`render.yaml` sets it up), so a redeploy doesn't wipe anything.
+1. Make up a long random password → `ADMIN_KEY` on Render.
+2. Open `https://YOUR-URL/admin?key=YOUR_ADMIN_KEY` on your phone (bookmark it).
+3. **Download everyone** gives you a spreadsheet. **Restock blast**: type words like "essentials hoodie" and your message, then hit Send.
+   - Instagram only lets the bot DM people who messaged in the last 24 hours. The bot sends to those people. Everyone else is listed with a tap-to-DM link so you can message them yourself from the app.
+
 ### 7. Connect the webhook
 In the Meta app: **Instagram → API setup with Instagram login → Configure webhooks**
 - Callback URL: `https://YOUR-URL/webhook`

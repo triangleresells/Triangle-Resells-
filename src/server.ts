@@ -1,4 +1,7 @@
+import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
+import { adminPage, customersCsv } from "./customers.js";
+import type { Customer } from "./store.js";
 import type { Bot, WebhookPayload } from "./bot.js";
 import { isValidSignature } from "./signature.js";
 import { isValidStripeSignature, paidOrderFromEvent, type PaidOrder } from "./stripe.js";
@@ -10,6 +13,19 @@ export interface ServerOpts {
   verifyToken: string;
   stripeWebhookSecret?: string;
   onPaidOrder?: (order: PaidOrder) => Promise<void>;
+  /** Josh's customer list page. Off unless ADMIN_KEY is set. */
+  admin?: {
+    key: string;
+    customers: () => Customer[];
+    blast: (message: string, search: string) => Promise<{ sent: Customer[]; manual: Customer[] }>;
+  };
+}
+
+function keyOk(given: unknown, key: string): boolean {
+  if (!key || typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(key);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
@@ -64,6 +80,29 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
       void opts.onPaidOrder(order).catch((err) => console.error("[stripe] paid order handling failed:", err));
     }
   });
+
+  // Josh's customer list: /admin?key=ADMIN_KEY
+  const admin = opts.admin;
+  if (admin?.key) {
+    app.use("/admin", express.urlencoded({ extended: false, limit: "20kb" }));
+    app.use("/admin", (req, res, next) => (keyOk(req.query.key, admin.key) ? next() : res.sendStatus(404)));
+    app.get("/admin", (req, res) => {
+      res.type("html").send(adminPage(String(req.query.key)));
+    });
+    app.get("/admin/customers.csv", (_req, res) => {
+      res.type("text/csv").attachment("triangle-customers.csv").send(customersCsv(admin.customers()));
+    });
+    app.post("/admin/blast", async (req, res) => {
+      const message = String(req.body?.message ?? "").trim().slice(0, 1000);
+      const search = String(req.body?.search ?? "").trim();
+      if (!message) {
+        res.status(400).send("Write a message first.");
+        return;
+      }
+      const result = await admin.blast(message, search);
+      res.type("html").send(adminPage(String(req.query.key), { ...result, message }));
+    });
+  }
 
   return app;
 }

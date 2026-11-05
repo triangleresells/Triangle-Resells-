@@ -6,7 +6,16 @@ services:
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /
+    # Small database (chats, follow-ups, customer list) lives on this disk so redeploys don't wipe it.
+    disk:
+      name: bot-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: STATE_FILE
+        value: /var/data/bot-state.json
+      - key: ADMIN_KEY
+        sync: false
       - key: IG_APP_SECRET
         sync: false
       - key: IG_ACCESS_TOKEN

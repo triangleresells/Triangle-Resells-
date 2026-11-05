@@ -11,6 +11,8 @@ export interface AgentReply {
   alerts?: { reason: string; summary: string }[];
   /** The customer said they don't want the order, so don't follow up on the unpaid link. */
   cancelFollowUp?: boolean;
+  /** Items this customer wants (saved to the customer list for restock blasts). */
+  interests?: string[];
 }
 
 /** Order actions the AI can take for the customer it's talking to. Prices always come from config/pricing.json. */
@@ -121,6 +123,16 @@ export const TOOLS = [
     },
   },
   {
+    name: "save_interest",
+    description:
+      "Save what this customer wants to Josh's customer list, so he can reach them on a restock or with leftover stock. Call it whenever they ask about an item that's out, coming soon, or say 'let me know when X drops'. Doesn't alert anyone or pause the chat.",
+    input_schema: {
+      type: "object" as const,
+      properties: { item: { type: "string", description: "Brand, item, color and size, e.g. 'Spider Hoodie Pink L', '50 Essentials hoodies'." } },
+      required: ["item"],
+    },
+  },
+  {
     name: "cancel_follow_up",
     description:
       "Call when the customer clearly says they don't want the order anymore (\"nah I'm good\", \"changed my mind\"), so the bot doesn't follow up on their unpaid link.",
@@ -210,6 +222,7 @@ export class ClaudeAgent implements ReplyEngine {
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
     let cancelFollowUp = false;
+    const interests: string[] = [];
     const alerts: NonNullable<AgentReply["alerts"]> = [];
     let finalTexts: string[] = [];
     const allTexts: string[] = [];
@@ -236,6 +249,9 @@ export class ClaudeAgent implements ReplyEngine {
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
           content = "Josh alerted. Keep helping: offer the closest item we do have and keep closing.";
+        } else if (block.name === "save_interest") {
+          if (input.item) interests.push(String(input.item));
+          content = "Saved to the customer list. Keep helping.";
         } else if (block.name === "cancel_follow_up") {
           cancelFollowUp = true;
           content = "No follow-up will be sent. Close politely and leave the door open.";
@@ -273,6 +289,6 @@ export class ClaudeAgent implements ReplyEngine {
         : "Good question, let me get someone from the team to confirm for you.";
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
-    return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}) };
+    return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}), ...(interests.length ? { interests } : {}) };
   }
 }

@@ -4,7 +4,8 @@ import type { Notifier } from "./handoff.js";
 import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
 import { describeQuote, quoteOrder, type PricingConfig } from "./pricing.js";
-import type { ChatImage, Store } from "./store.js";
+import { matchCustomers } from "./customers.js";
+import type { ChatImage, Customer, Store } from "./store.js";
 import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
 import { HOLD_MINUTES } from "./stripe.js";
 import type { CheckoutApi } from "./stripe.js";
@@ -140,6 +141,9 @@ export class Bot {
     const images = await this.picturesFrom(msg);
     const caption = images.length && msg.text?.trim() ? `${text}\n[Customer sent ${images.length} picture(s)]` : text;
     this.d.store.addTurn(userId, { role: "user", text: caption, ...(images.length ? { images } : {}) });
+    if (!this.d.store.customer(userId).username) {
+      void this.d.ig.getUsername(userId).then((u) => this.d.store.setUsername(userId, u)).catch(() => {});
+    }
     if (this.d.store.isPaused(userId)) return;
 
     const mySeq = (this.seq.get(userId) ?? 0) + 1;
@@ -166,6 +170,8 @@ export class Bot {
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
     if (result.cancelFollowUp || result.handoff) this.d.store.clearPendingLink(userId);
+    // Customer list: whatever they asked about or wanted, for restock blasts later.
+    for (const item of [...(result.interests ?? []), ...(result.alerts ?? []).map((a) => a.summary)]) this.d.store.addInterest(userId, item);
 
     if (result.alerts?.length) {
       const username = await this.d.ig.getUsername(userId);
@@ -242,6 +248,7 @@ export class Bot {
             summary: itemList,
           });
           this.d.store.setPendingLink(userId, { url: link.url, summary: itemList, createdAt: now.getTime() });
+          this.d.store.addInterest(userId, itemList);
           return { ok: true, url: link.url, total: q.total, summary, note };
         } catch (err) {
           console.error("[bot] checkout failed:", err);
@@ -277,9 +284,33 @@ export class Bot {
     return sent;
   }
 
-  /** Stripe says they paid: no follow-up for that link. */
-  markPaid(userId: string): void {
+  /** Stripe says they paid: no follow-up for that link, and it goes on their customer record. */
+  markPaid(userId: string, summary = "", total = 0): void {
     this.d.store.clearPendingLink(userId);
+    if (summary || total) this.d.store.addOrder(userId, summary, total);
+  }
+
+  /**
+   * Restock blast: DMs everyone on the list who wants `search` and messaged in the last 24 hours
+   * (Instagram's rule). Returns the rest so Josh can DM them himself from the app.
+   */
+  async blast(message: string, search: string): Promise<{ sent: Customer[]; manual: Customer[] }> {
+    const sent: Customer[] = [];
+    const manual: Customer[] = [];
+    for (const c of matchCustomers(this.d.store.allCustomers(), search)) {
+      if (!this.d.store.canMessage(c.userId)) {
+        manual.push(c);
+        continue;
+      }
+      try {
+        await this.inOrder(c.userId, () => this.send(c.userId, message));
+        sent.push(c);
+      } catch (err) {
+        console.error(`[bot] blast to ${c.userId} failed:`, err);
+        manual.push(c);
+      }
+    }
+    return { sent, manual };
   }
 
   /** DMs a customer from outside a conversation (e.g. a payment confirmation). */

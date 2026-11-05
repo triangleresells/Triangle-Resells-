@@ -32,7 +32,7 @@
     "buyerLabelAtPieces": 10
   },
   "delivery": {
-    "_note": "Local delivery fee by one-way drive time from the warehouse. Nothing over 60 min: offer UPS shipping or meeting halfway. Area minutes are ESTIMATES from central Raleigh; Josh to correct them. Unknown towns are never guessed.",
+    "_note": "Local delivery fee by one-way drive time from the warehouse. Nothing over 60 min: offer UPS shipping or meeting halfway. Area minutes are ESTIMATES of the one-way drive from the warehouse (Ample Storage, SE Raleigh 27610); Josh to correct any that are off. Unknown towns are never guessed.",
     "bands": [
       { "maxMinutes": 20, "fee": 5 },
       { "maxMinutes": 30, "fee": 10 },
@@ -41,15 +41,7 @@
     ],
     "maxMinutes": 60,
     "areas": {
-      "Raleigh": 15, "Garner": 15, "Knightdale": 15, "Cary": 20, "Morrisville": 20, "RTP": 20, "Rolesville": 20, "Wendell": 20,
-      "Apex": 25, "Wake Forest": 25, "Holly Springs": 25, "Clayton": 25, "Zebulon": 25,
-      "Durham": 30, "Fuquay-Varina": 30, "Youngsville": 30,
-      "Chapel Hill": 35, "Carrboro": 40, "Smithfield": 35, "Selma": 35, "Angier": 35, "Creedmoor": 35, "Franklinton": 35,
-      "Louisburg": 40, "Benson": 40, "Butner": 40, "Four Oaks": 40,
-      "Hillsborough": 45, "Lillington": 45, "Pittsboro": 45, "Oxford": 45, "Dunn": 45,
-      "Sanford": 50, "Henderson": 50, "Wilson": 50, "Mebane": 50,
-      "Goldsboro": 55, "Rocky Mount": 55, "Burlington": 55, "Roxboro": 60,
-      "Fayetteville": 65, "Greensboro": 75, "High Point": 85, "Winston-Salem": 95, "Greenville": 85, "Wilmington": 120, "Charlotte": 150
+      "Raleigh": 15, "Garner": 10, "Knightdale": 15, "Cary": 20, "Clayton": 20, "Wendell": 20, "Morrisville": 25, "RTP": 25, "Rolesville": 25, "Apex": 25, "Holly Springs": 25, "Fuquay-Varina": 25, "Zebulon": 25, "Durham": 30, "Wake Forest": 30, "Smithfield": 30, "Selma": 30, "Angier": 30, "Youngsville": 35, "Benson": 35, "Four Oaks": 35, "Chapel Hill": 40, "Carrboro": 40, "Creedmoor": 40, "Franklinton": 40, "Butner": 40, "Lillington": 40, "Dunn": 40, "Louisburg": 45, "Hillsborough": 45, "Pittsboro": 45, "Sanford": 45, "Wilson": 45, "Goldsboro": 45, "Oxford": 50, "Mebane": 50, "Henderson": 55, "Rocky Mount": 55, "Burlington": 60, "Roxboro": 60, "Fayetteville": 65, "Greensboro": 80, "Greenville": 80, "High Point": 90, "Winston-Salem": 100, "Wilmington": 120, "Charlotte": 150
     }
   }
 }
