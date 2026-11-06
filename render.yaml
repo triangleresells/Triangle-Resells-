@@ -32,8 +32,9 @@ services:
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
         sync: false
+      # Pickup spot, sent only after payment. Street only, no unit number: every pickup is in the parking lot.
       - key: WAREHOUSE_ADDRESS
-        sync: false
+        value: Ample Storage, 1260 Partin Rd, Raleigh, NC 27610
       - key: CALENDAR_WEBHOOK_URL
         sync: false
       - key: ACCOUNT_NAME
