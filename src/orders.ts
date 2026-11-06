@@ -83,7 +83,10 @@ export function confirmationText(o: PaidOrder, warehouseAddress: string): string
       ? `paid ✅ appreciate you! send your UPS label here and we'll get it shipped${when ? ` ${when}` : ""}.`
       : `paid ✅ appreciate you! it ships${when ? ` ${when}` : " today or tomorrow"} via UPS, tracking coming once it's out.`;
   }
-  const where = warehouseAddress ? ` pull up to ${warehouseAddress}` : " I'll send the address shortly";
+  // Every pickup is in the parking lot, never at the unit. Josh brings the order out.
+  const where = warehouseAddress
+    ? ` pull up to the parking lot at ${warehouseAddress} and DM me when you're outside, I'll bring it out to you`
+    : " I'll send the parking lot address shortly";
   return `paid ✅ appreciate you! your order's held for you${when ? ` for ${when}` : ""}.${where}.`;
 }
 

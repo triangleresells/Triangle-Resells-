@@ -59,7 +59,7 @@ Create a Discord channel webhook (Channel settings → Integrations → Webhooks
 The bot quotes from `config/pricing.json` (never its own math) and sends a branded Stripe link for the exact order. It stays open about 30 minutes.
 1. Stripe Dashboard → Developers → API keys → **Create restricted key** with **Checkout Sessions: Write** → `STRIPE_SECRET_KEY`.
 2. Developers → Webhooks → **Add endpoint** `https://YOUR-URL/stripe/webhook`, event **checkout.session.completed** → copy the signing secret → `STRIPE_WEBHOOK_SECRET`.
-3. Set `WAREHOUSE_ADDRESS`. It's DMed to buyers only after they pay for a pickup.
+3. Set `WAREHOUSE_ADDRESS` to the storage lot, no unit number (e.g. `Ample Storage, 1260 Partin Rd, Raleigh, NC 27610`). Buyers get it only after they pay, told to meet in the parking lot.
 
 When an order is paid, the bot DMs the buyer "paid ✅", adds a Google Calendar event, and alerts the team to log the sale and update the stock sheet.
 

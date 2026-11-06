@@ -23,8 +23,8 @@
     { "key": "golf_iron_set", "name": "TaylorMade P790 Iron Set (7 sticks)", "flat": 400 },
     { "key": "jordan_12_flu_game", "name": "Jordan 12 Flu Game", "flat": 50 },
     { "key": "jeans", "name": "Jeans", "flat": 70, "_note": "Bulk tiers coming from Josh." },
-    { "key": "valley_hoodie", "name": "Valley Hoodie", "flat": 60, "_note": "Bulk tiers coming from Josh." },
-    { "key": "hat", "name": "Hat", "flat": 30, "_note": "Bulk tiers coming from Josh." }
+    { "key": "valley_hoodie", "name": "Valley Hoodie", "flat": 60, "_note": "No bulk pricing." },
+    { "key": "hat", "name": "Hat", "flat": 30, "_note": "No bulk pricing." }
   ],
   "shipping": {
     "_note": "UPS flat rate for 1 to 9 pieces. At 10+ pieces the buyer buys and sends their own label, so no shipping is charged.",

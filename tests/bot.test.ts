@@ -285,3 +285,26 @@ describe("prices and rules from Josh (Nov 5)", () => {
     expect(instructions).toContain("PICKUP SCHEDULE");
   });
 });
+
+describe("pickup spot and no-bulk items (Nov 6)", () => {
+  it("tells paid pickups to meet in the parking lot, never the unit", async () => {
+    const { confirmationText } = await import("../src/orders.js");
+    const text = confirmationText(
+      { sessionId: "cs", igUserId: "u", account: "a", fulfillment: "pickup", fulfillDate: "2026-11-07", fulfillTime: "3:00 PM", buyerLabel: false, summary: "x", total: 55 },
+      "Ample Storage, 1260 Partin Rd, Raleigh, NC 27610",
+    );
+    expect(text).toContain("parking lot at Ample Storage, 1260 Partin Rd");
+    expect(text).toContain("bring it out");
+    const instructions = readFileSync(new URL("../config/agent-instructions.md", import.meta.url), "utf8");
+    expect(instructions).toContain("never offer to let anyone inside");
+  });
+
+  it("Valley hoodies and hats are the same price at any quantity; BAPE tees keep their bulk tiers", () => {
+    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+    expect(quoteOrder(pricing, [{ product: "valley_hoodie", qty: 10 }], "pickup").groups[0].unitPrice).toBe(60);
+    expect(quoteOrder(pricing, [{ product: "hat", qty: 20 }], "pickup").groups[0].unitPrice).toBe(30);
+    expect(quoteOrder(pricing, [{ product: "bape_tee", qty: 1 }], "pickup").total).toBe(35);
+    expect(quoteOrder(pricing, [{ product: "bape_tee", qty: 3 }], "pickup").groups[0].unitPrice).toBe(31);
+    expect(quoteOrder(pricing, [{ product: "cologne", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
+  });
+});
