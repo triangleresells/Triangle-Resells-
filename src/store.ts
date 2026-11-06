@@ -198,6 +198,20 @@ export class Store {
     return [...this.convos].filter(([, c]) => c.pausedUntil > this.now()).map(([id]) => id);
   }
 
+  /** After the pause length is shortened, cut any longer pause that's still running down to the new length. */
+  capPauses(hours: number): number {
+    const max = this.now() + hours * 60 * 60 * 1000;
+    let n = 0;
+    for (const c of this.convos.values()) {
+      if (c.pausedUntil > max) {
+        c.pausedUntil = max;
+        n++;
+      }
+    }
+    if (n) this.changed();
+    return n;
+  }
+
   unpauseAll(): number {
     const ids = this.pausedChats();
     for (const id of ids) this.convos.get(id)!.pausedUntil = 0;

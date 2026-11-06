@@ -94,7 +94,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vendorSiteUrl,
     inventorySheetCsvUrl: optional(env.INVENTORY_SHEET_CSV_URL),
     handoffWebhookUrl: optional(env.HANDOFF_WEBHOOK_URL),
-    humanPauseHours: Number(env.HUMAN_PAUSE_HOURS) || 12,
+    // HUMAN_PAUSE_MINUTES wins if set (e.g. 5); otherwise HUMAN_PAUSE_HOURS; default 12 hours.
+    humanPauseHours: Number(env.HUMAN_PAUSE_MINUTES) > 0 ? Number(env.HUMAN_PAUSE_MINUTES) / 60 : Number(env.HUMAN_PAUSE_HOURS) || 12,
     stripeSecretKey: optional(env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: optional(env.STRIPE_WEBHOOK_SECRET),
     checkoutSuccessUrl: env.CHECKOUT_SUCCESS_URL?.trim() || `https://${vendorSiteUrl.replace(/^https?:\/\//, "")}`,

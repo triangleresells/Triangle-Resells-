@@ -131,7 +131,7 @@ export class Bot {
       // A team member typed in the Instagram inbox: step back and let them handle it.
       this.d.store.addTurn(userId, { role: "assistant", text: `[Team member replied] ${text}` });
       this.d.store.pause(userId, this.d.humanPauseHours);
-      console.log(`[bot] team replied to ${userId} from the inbox; bot paused ${this.d.humanPauseHours}h in that chat`);
+      console.log(`[bot] team replied to ${userId} from the inbox; bot paused ${Math.round(this.d.humanPauseHours * 60)} min in that chat`);
       return;
     }
 

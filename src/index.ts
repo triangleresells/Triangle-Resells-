@@ -24,6 +24,8 @@ const store = new Store();
 // Small database: chats, pending follow-ups and the customer list survive redeploys.
 const saver = new FileSaver(config.stateFile, store);
 saver.load();
+const shortened = store.capPauses(config.humanPauseHours);
+if (shortened) console.log(`[bot] shortened ${shortened} paused chat(s) to the new ${Math.round(config.humanPauseHours * 60)}-minute pause`);
 if (store.pausedChats().length) console.log(`[bot] ${store.pausedChats().length} chat(s) paused for a human right now: ${store.pausedChats().join(", ")}`);
 saver.watch();
 for (const sig of ["SIGTERM", "SIGINT"] as const) {

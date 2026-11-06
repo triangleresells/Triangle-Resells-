@@ -405,3 +405,20 @@ describe("Facebook-style (EAA) tokens", () => {
     expect(urls.at(-1)).toBe("https://graph.instagram.com/v23.0/me/messages");
   });
 });
+
+describe("pause length", () => {
+  it("uses HUMAN_PAUSE_MINUTES and shortens pauses that are already running", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    const base = { IG_APP_SECRET: "s", IG_ACCESS_TOKEN: "t", IG_VERIFY_TOKEN: "v", ANTHROPIC_API_KEY: "k" };
+    expect(loadConfig({ ...base, HUMAN_PAUSE_MINUTES: "5", HUMAN_PAUSE_HOURS: "12" }).humanPauseHours).toBeCloseTo(5 / 60);
+    expect(loadConfig({ ...base, HUMAN_PAUSE_HOURS: "12" }).humanPauseHours).toBe(12);
+    let t = 0;
+    const store = new Store(() => t);
+    store.pause("me", 12);
+    expect(store.capPauses(5 / 60)).toBe(1);
+    t = 4 * 60_000;
+    expect(store.isPaused("me")).toBe(true);
+    t = 6 * 60_000;
+    expect(store.isPaused("me")).toBe(false);
+  });
+});
