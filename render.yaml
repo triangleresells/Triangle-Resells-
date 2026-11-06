@@ -53,6 +53,6 @@ services:
         value: v23.0
       # How long the bot stays quiet in a chat after a handoff or after the team types in it.
       - key: HUMAN_PAUSE_MINUTES
-        value: "5"
+        value: "720"
       - key: HUMAN_PAUSE_HOURS
         value: "12"

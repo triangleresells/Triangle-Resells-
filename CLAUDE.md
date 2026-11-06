@@ -6,7 +6,7 @@ AI that answers Instagram DMs for Triangle Resells (@triangleresells), DMs peopl
 Instagram → Meta webhook → `POST /webhook` (signature checked) → `src/bot.ts`:
 - **DM**: bare keyword ("price") → canned keyword reply. Anything else → Claude (`src/ai.ts`) with the agent instructions + knowledge base + optional live Google Sheet.
 - **Comment with a keyword** → one private-reply DM (Instagram allows one per comment, within 7 days) + a public "Sent you a DM!" reply.
-- **Handoff**: Claude calls the `handoff_to_team` tool → bot pauses in that chat for `HUMAN_PAUSE_MINUTES` (5 by default in render.yaml; `HUMAN_PAUSE_HOURS` if minutes isn't set) and posts to `HANDOFF_WEBHOOK_URL` (Discord/Slack).
+- **Handoff**: Claude calls the `handoff_to_team` tool → bot pauses in that chat for `HUMAN_PAUSE_MINUTES` (720 = 12 hours in render.yaml; `HUMAN_PAUSE_HOURS` if minutes isn't set) and posts to `HANDOFF_WEBHOOK_URL` (Discord/Slack).
 - **Team typed in the inbox** (an echo the bot didn't send) → bot pauses in that chat.
 - Quick back-to-back texts are debounced (4s) into one reply.
 
