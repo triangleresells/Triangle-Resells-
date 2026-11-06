@@ -371,3 +371,37 @@ describe("Instagram token check", () => {
     expect(cfg.igAccessToken).toBe("IGabcdef");
   });
 });
+
+describe("Facebook-style (EAA) tokens", () => {
+  const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+  const err = () => new Response(JSON.stringify({ error: { message: "nope" } }), { status: 400 });
+
+  it("swaps a user token for the linked Page token and sends through graph.facebook.com", async () => {
+    const { InstagramClient } = await import("../src/instagram.js");
+    const calls: { url: string; auth: string }[] = [];
+    const fetchFn = (async (url: string, init: RequestInit) => {
+      calls.push({ url, auth: String((init.headers as Record<string, string>).Authorization) });
+      if (url.includes("/me/accounts")) {
+        return ok({ data: [{ id: "page1", name: "Other", access_token: "EAApageOther" }, { id: "page2", name: "Triangle Resells", access_token: "EAApageTriangle", instagram_business_account: { id: "ig123" } }] });
+      }
+      return ok({ message_id: "m1" });
+    }) as unknown as typeof fetch;
+    const ig = new InstagramClient("EAAuserToken", "v23.0", fetchFn);
+    ig.setAccountId("ig123");
+    expect(await ig.sendText("buyer", "hey")).toBe("m1");
+    expect(calls[1]).toEqual({ url: "https://graph.facebook.com/v23.0/page2/messages", auth: "Bearer EAApageTriangle" });
+  });
+
+  it("uses a Page token as is, and Instagram tokens keep using graph.instagram.com", async () => {
+    const { InstagramClient } = await import("../src/instagram.js");
+    const urls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      urls.push(url);
+      return url.includes("/me/accounts") ? err() : ok({ message_id: "m" });
+    }) as unknown as typeof fetch;
+    await new InstagramClient("EAApageToken", "v23.0", fetchFn).sendText("buyer", "hi");
+    expect(urls.at(-1)).toBe("https://graph.facebook.com/v23.0/me/messages");
+    await new InstagramClient("IGtoken", "v23.0", fetchFn).sendText("buyer", "hi");
+    expect(urls.at(-1)).toBe("https://graph.instagram.com/v23.0/me/messages");
+  });
+});

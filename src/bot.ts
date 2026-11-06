@@ -101,6 +101,7 @@ export class Bot {
     if (payload.object !== "instagram") return;
     const jobs: Promise<void>[] = [];
     for (const entry of payload.entry ?? []) {
+      this.d.ig.setAccountId?.(entry.id);
       for (const ev of entry.messaging ?? []) jobs.push(this.safe(() => this.onMessage(entry.id, ev)));
       for (const ch of entry.changes ?? []) {
         if (ch.field === "comments") jobs.push(this.safe(() => this.onComment(entry.id, ch.value)));

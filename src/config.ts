@@ -62,7 +62,7 @@ export function describeToken(t: string): string {
   if (!t || NOT_SET.has(t.toLowerCase())) return "NOT SET (still a placeholder)";
   if (t.length < 50) return `looks too short (${t.length} characters), probably cut off when copying`;
   if (t.startsWith("IG")) return `Instagram token (starts with IG, ${t.length} characters)`;
-  if (t.startsWith("EAA")) return `Facebook-style token (starts with EAA, ${t.length} characters): this bot needs the Instagram token from 'Generate access tokens'`;
+  if (t.startsWith("EAA")) return `Facebook-style token (starts with EAA, ${t.length} characters): sending through graph.facebook.com`;
   return `unrecognized token (${t.length} characters)`;
 }
 
