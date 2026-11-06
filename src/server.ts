@@ -59,12 +59,22 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
   app.post("/webhook", (req, res) => {
     const raw = (req as RawRequest).rawBody;
     if (!raw || !isValidSignature(raw, req.get("x-hub-signature-256"), opts.appSecret)) {
+      // Most common cause: IG_APP_SECRET on Render isn't the app secret from the Meta Instagram setup page.
+      console.warn(
+        `[webhook] REJECTED a delivery: signature check failed (${req.get("x-hub-signature-256") ? "wrong IG_APP_SECRET?" : "no signature header"})`,
+      );
       res.sendStatus(403);
       return;
     }
     // Answer Meta right away; it retries deliveries that take too long.
     res.sendStatus(200);
-    void bot.handle(req.body as WebhookPayload);
+    const body = req.body as WebhookPayload;
+    const kinds = (body.entry ?? []).flatMap((e) => [
+      ...(e.messaging ?? []).map((m) => (m.message?.is_echo ? "echo" : "message")),
+      ...(e.changes ?? []).map((c) => c.field),
+    ]);
+    console.log(`[webhook] received ${body.object ?? "?"}: ${kinds.join(", ") || "nothing to handle"}`);
+    void bot.handle(body);
   });
 
   // Stripe calls this when a checkout link is paid.
