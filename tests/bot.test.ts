@@ -358,3 +358,16 @@ describe("webhook signature with two possible app secrets", () => {
     }
   });
 });
+
+describe("Instagram token check", () => {
+  it("describes the token kind without printing it, and strips pasted spaces", async () => {
+    const { describeToken, loadConfig } = await import("../src/config.js");
+    expect(describeToken("pending")).toContain("NOT SET");
+    expect(describeToken("IGAAabc")).toContain("too short");
+    expect(describeToken("IG" + "a".repeat(150))).toContain("Instagram token");
+    expect(describeToken("EAA" + "b".repeat(150))).toContain("Facebook-style");
+    expect(describeToken("IG" + "a".repeat(150))).not.toContain("aaaa");
+    const cfg = loadConfig({ IG_APP_SECRET: "s", IG_ACCESS_TOKEN: " IGabc\n def ", IG_VERIFY_TOKEN: "v", ANTHROPIC_API_KEY: "k" });
+    expect(cfg.igAccessToken).toBe("IGabcdef");
+  });
+});

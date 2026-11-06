@@ -57,6 +57,15 @@ export function optional(v: string | undefined): string {
   return NOT_SET.has(t.toLowerCase()) ? "" : t;
 }
 
+/** What kind of Instagram token is set, without revealing it (for Render's logs). */
+export function describeToken(t: string): string {
+  if (!t || NOT_SET.has(t.toLowerCase())) return "NOT SET (still a placeholder)";
+  if (t.length < 50) return `looks too short (${t.length} characters), probably cut off when copying`;
+  if (t.startsWith("IG")) return `Instagram token (starts with IG, ${t.length} characters)`;
+  if (t.startsWith("EAA")) return `Facebook-style token (starts with EAA, ${t.length} characters): this bot needs the Instagram token from 'Generate access tokens'`;
+  return `unrecognized token (${t.length} characters)`;
+}
+
 export function readConfigFile(name: string): string {
   return readFileSync(path.join(root, "config", name), "utf8");
 }
@@ -76,7 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     igAppSecret: required(env, "IG_APP_SECRET").replace(/\s+/g, ""),
     metaAppSecret: optional(env.META_APP_SECRET).replace(/\s+/g, ""),
-    igAccessToken: required(env, "IG_ACCESS_TOKEN"),
+    igAccessToken: required(env, "IG_ACCESS_TOKEN").replace(/\s+/g, ""),
     igVerifyToken: required(env, "IG_VERIFY_TOKEN"),
     igApiVersion: env.IG_API_VERSION?.trim() || "v23.0",
     anthropicApiKey: required(env, "ANTHROPIC_API_KEY"),

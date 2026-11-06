@@ -1,6 +1,6 @@
 import { ClaudeAgent } from "./ai.js";
 import { Bot } from "./bot.js";
-import { loadConfig, readConfigFile } from "./config.js";
+import { describeToken, loadConfig, readConfigFile } from "./config.js";
 
 function readStockFile(): string {
   try {
@@ -75,6 +75,7 @@ createServer(bot, {
     });
   },
 }).listen(config.port, () => {
+  console.log(`[instagram] access token: ${describeToken(config.igAccessToken)}`);
   console.log(
     `[server] ${config.accountName} DM agent listening on :${config.port} ` +
       `(${config.keywords.length} keywords, model ${config.claudeModel}, ` +
