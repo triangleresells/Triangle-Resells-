@@ -3,7 +3,7 @@ services:
     name: triangle-ai-dm
     runtime: node
     plan: starter
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /
     # Small database (chats, follow-ups, customer list) lives on this disk so redeploys don't wipe it.
@@ -12,6 +12,9 @@ services:
       mountPath: /var/data
       sizeGB: 1
     envVars:
+      # Same Node version the bot is tested on.
+      - key: NODE_VERSION
+        value: "22"
       - key: STATE_FILE
         value: /var/data/bot-state.json
       - key: ADMIN_KEY
