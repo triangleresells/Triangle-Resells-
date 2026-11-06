@@ -46,6 +46,15 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return v;
 }
 
+/** Placeholder words Josh can type in Render for things not set up yet. They count as blank (feature off). */
+const NOT_SET = new Set(["pending", "none", "skip", "na", "n/a", "-", "x", "tbd", "later"]);
+
+/** An optional setting: blank or a placeholder like "pending" turns that feature off. */
+export function optional(v: string | undefined): string {
+  const t = v?.trim() ?? "";
+  return NOT_SET.has(t.toLowerCase()) ? "" : t;
+}
+
 export function readConfigFile(name: string): string {
   return readFileSync(path.join(root, "config", name), "utf8");
 }
