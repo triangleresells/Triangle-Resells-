@@ -1,6 +1,14 @@
 import { ClaudeAgent } from "./ai.js";
 import { Bot } from "./bot.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, readConfigFile } from "./config.js";
+
+function readStockFile(): string {
+  try {
+    return readConfigFile("stock.csv");
+  } catch {
+    return "";
+  }
+}
 import { webhookNotifier } from "./handoff.js";
 import { InstagramClient } from "./instagram.js";
 import { InventorySheet } from "./inventory.js";
@@ -23,7 +31,8 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.exit(0);
   });
 }
-const inventory = new InventorySheet(config.inventorySheetCsvUrl);
+// Live Google Sheet when INVENTORY_SHEET_CSV_URL is set; until then, config/stock.csv.
+const inventory = new InventorySheet(config.inventorySheetCsvUrl, fetch, readStockFile());
 // Josh's calendar: paid pickups plus any time he blocks off. The bot never offers those times.
 const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 

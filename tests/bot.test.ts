@@ -320,3 +320,15 @@ describe("Render placeholders", () => {
     expect(cfg).toMatchObject({ inventorySheetCsvUrl: "", handoffWebhookUrl: "", stripeSecretKey: "", stripeWebhookSecret: "", calendarWebhookUrl: "", adminKey: "a-long-admin-password" });
   });
 });
+
+describe("starter stock list", () => {
+  it("uses config/stock.csv until the Google Sheet is connected, and the sheet once it is", async () => {
+    const { InventorySheet } = await import("../src/inventory.js");
+    const csv = readFileSync(new URL("../config/stock.csv", import.meta.url), "utf8");
+    const starter = await new InventorySheet("", fetch, csv).get();
+    expect(starter).toContain("Alo Hoodie | Gray | M | 3");
+    expect(starter.split("\n")[0]).toContain("Item | Colorway | Size | Qty");
+    const sheet = new InventorySheet("https://sheet", (async () => new Response("Item,Qty\nHat,10")) as unknown as typeof fetch, csv);
+    expect(await sheet.get()).toBe("Item | Qty\nHat | 10");
+  });
+});

@@ -19,18 +19,25 @@ export function formatInventoryCsv(csv: string): string {
     .join("\n");
 }
 
-/** Fetches the published Google Sheet, cached for 5 minutes. Falls back to the last good copy on errors. */
+/**
+ * Fetches the published Google Sheet, cached for 5 minutes. Falls back to the last good copy on errors.
+ * With no sheet URL, uses config/stock.csv (a starter list Josh edits on GitHub) until the sheet is ready.
+ */
 export class InventorySheet {
   private cached = "";
   private fetchedAt = 0;
+  private fallback: string;
 
   constructor(
     private url: string,
     private fetchFn: typeof fetch = fetch,
-  ) {}
+    fallbackCsv = "",
+  ) {
+    this.fallback = fallbackCsv ? formatInventoryCsv(fallbackCsv) : "";
+  }
 
   async get(): Promise<string> {
-    if (!this.url) return "";
+    if (!this.url) return this.fallback;
     if (Date.now() - this.fetchedAt < CACHE_MS) return this.cached;
     try {
       const res = await this.fetchFn(this.url);
