@@ -308,3 +308,15 @@ describe("pickup spot and no-bulk items (Nov 6)", () => {
     expect(quoteOrder(pricing, [{ product: "cologne", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
   });
 });
+
+describe("Render placeholders", () => {
+  it("treats 'pending' in optional settings as not set up, so those features stay off", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    const cfg = loadConfig({
+      IG_APP_SECRET: "pending", IG_ACCESS_TOKEN: "pending", IG_VERIFY_TOKEN: "made-up", ANTHROPIC_API_KEY: "sk-ant-test",
+      INVENTORY_SHEET_CSV_URL: "pending", HANDOFF_WEBHOOK_URL: "Pending", STRIPE_SECRET_KEY: "pending",
+      STRIPE_WEBHOOK_SECRET: " pending ", CALENDAR_WEBHOOK_URL: "none", ADMIN_KEY: "a-long-admin-password",
+    });
+    expect(cfg).toMatchObject({ inventorySheetCsvUrl: "", handoffWebhookUrl: "", stripeSecretKey: "", stripeWebhookSecret: "", calendarWebhookUrl: "", adminKey: "a-long-admin-password" });
+  });
+});
