@@ -332,3 +332,29 @@ describe("starter stock list", () => {
     expect(await sheet.get()).toBe("Item | Qty\nHat | 10");
   });
 });
+
+describe("webhook signature with two possible app secrets", () => {
+  it("accepts deliveries signed with either the Instagram or the Facebook app secret", async () => {
+    const { createHmac } = await import("node:crypto");
+    const { createServer } = await import("../src/server.js");
+    const handled: unknown[] = [];
+    const app = createServer({ handle: async (p) => void handled.push(p) }, { appSecret: "ig-secret", verifyToken: "v", extraAppSecrets: ["fb-secret"] });
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    const body = JSON.stringify({ object: "instagram", entry: [] });
+    const post = (secret: string) =>
+      fetch(`http://127.0.0.1:${port}/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-hub-signature-256": `sha256=${createHmac("sha256", secret).update(body).digest("hex")}` },
+        body,
+      }).then((r) => r.status);
+    try {
+      expect(await post("ig-secret")).toBe(200);
+      expect(await post("fb-secret")).toBe(200);
+      expect(await post("wrong")).toBe(403);
+      expect(handled).toHaveLength(2);
+    } finally {
+      server.close();
+    }
+  });
+});

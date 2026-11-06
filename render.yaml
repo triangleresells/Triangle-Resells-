@@ -21,6 +21,9 @@ services:
         sync: false
       - key: IG_APP_SECRET
         sync: false
+      # Optional: the Facebook app secret (App settings -> Basic). Webhooks signed with either secret are accepted.
+      - key: META_APP_SECRET
+        sync: false
       - key: IG_ACCESS_TOKEN
         sync: false
       - key: IG_VERIFY_TOKEN

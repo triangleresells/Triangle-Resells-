@@ -13,6 +13,8 @@ export interface KeywordRule {
 
 export interface Config {
   igAppSecret: string;
+  /** Optional second secret (the Facebook app secret from App settings -> Basic). Webhooks signed with either are accepted. */
+  metaAppSecret: string;
   igAccessToken: string;
   igVerifyToken: string;
   igApiVersion: string;
@@ -72,7 +74,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 
   return {
-    igAppSecret: required(env, "IG_APP_SECRET"),
+    igAppSecret: required(env, "IG_APP_SECRET").replace(/\s+/g, ""),
+    metaAppSecret: optional(env.META_APP_SECRET).replace(/\s+/g, ""),
     igAccessToken: required(env, "IG_ACCESS_TOKEN"),
     igVerifyToken: required(env, "IG_VERIFY_TOKEN"),
     igApiVersion: env.IG_API_VERSION?.trim() || "v23.0",

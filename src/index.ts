@@ -60,6 +60,7 @@ setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] 
 
 createServer(bot, {
   appSecret: config.igAppSecret,
+  extraAppSecrets: [config.metaAppSecret],
   verifyToken: config.igVerifyToken,
   stripeWebhookSecret: config.stripeWebhookSecret,
   admin: { key: config.adminKey, customers: () => store.allCustomers(), blast: (m, s) => bot.blast(m, s) },

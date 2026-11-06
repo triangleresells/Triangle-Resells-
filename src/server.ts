@@ -10,6 +10,8 @@ type RawRequest = Request & { rawBody?: Buffer };
 
 export interface ServerOpts {
   appSecret: string;
+  /** Extra app secrets to accept (Meta may sign with the Facebook app secret instead of the Instagram one). */
+  extraAppSecrets?: string[];
   verifyToken: string;
   stripeWebhookSecret?: string;
   onPaidOrder?: (order: PaidOrder) => Promise<void>;
@@ -58,10 +60,12 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
 
   app.post("/webhook", (req, res) => {
     const raw = (req as RawRequest).rawBody;
-    if (!raw || !isValidSignature(raw, req.get("x-hub-signature-256"), opts.appSecret)) {
+    const sig = req.get("x-hub-signature-256");
+    const secrets = [opts.appSecret, ...(opts.extraAppSecrets ?? [])].filter(Boolean);
+    if (!raw || !secrets.some((s) => isValidSignature(raw, sig, s))) {
       // Most common cause: IG_APP_SECRET on Render isn't the app secret from the Meta Instagram setup page.
       console.warn(
-        `[webhook] REJECTED a delivery: signature check failed (${req.get("x-hub-signature-256") ? "wrong IG_APP_SECRET?" : "no signature header"})`,
+        `[webhook] REJECTED a delivery: signature check failed (${sig ? "IG_APP_SECRET / META_APP_SECRET don't match the app" : "no signature header"})`,
       );
       res.sendStatus(403);
       return;
