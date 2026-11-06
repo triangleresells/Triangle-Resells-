@@ -42,6 +42,7 @@ export function adminPage(key: string, result?: { sent: Customer[]; manual: Cust
 <style>body{font:16px system-ui;margin:16px;max-width:640px;background:#0B0B0B;color:#eee}a{color:#D4A017}input,textarea,button{font:inherit;width:100%;margin:6px 0;padding:10px;box-sizing:border-box}button{background:#D4A017;border:0;font-weight:600}</style>
 <h1>🔺 Customer list</h1>
 <p><a href="/admin/customers.csv?key=${encodeURIComponent(key)}">Download everyone (spreadsheet)</a></p>
+<form method="post" action="/admin/unpause?key=${encodeURIComponent(key)}"><button>Turn the bot back on in all paused chats</button></form>
 <h2>Restock blast</h2>
 <form method="post" action="/admin/blast?key=${encodeURIComponent(key)}">
 <label>Who: words from what they wanted (blank = everyone)<input name="search" placeholder="essentials hoodie"></label>

@@ -20,6 +20,8 @@ export interface ServerOpts {
     key: string;
     customers: () => Customer[];
     blast: (message: string, search: string) => Promise<{ sent: Customer[]; manual: Customer[] }>;
+    /** Turns the bot back on in every chat it paused itself in. Returns how many. */
+    unpauseAll?: () => number;
   };
 }
 
@@ -105,6 +107,11 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
     });
     app.get("/admin/customers.csv", (_req, res) => {
       res.type("text/csv").attachment("triangle-customers.csv").send(customersCsv(admin.customers()));
+    });
+    app.post("/admin/unpause", (req, res) => {
+      const n = admin.unpauseAll?.() ?? 0;
+      console.log(`[admin] unpaused ${n} chat(s)`);
+      res.type("html").send(`${adminPage(String(req.query.key))}<p><b>Bot turned back on in ${n} chat(s).</b></p>`);
     });
     app.post("/admin/blast", async (req, res) => {
       const message = String(req.body?.message ?? "").trim().slice(0, 1000);

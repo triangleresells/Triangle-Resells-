@@ -130,3 +130,18 @@ describe("drive times from the warehouse (SE Raleigh)", () => {
     expect(pricing.delivery.areas.Knightdale).toBeLessThan(pricing.delivery.areas.Durham);
   });
 });
+
+describe("paused chats", () => {
+  it("lists paused chats and turns the bot back on in all of them (saved to the database)", () => {
+    const store = new Store();
+    let saves = 0;
+    store.onChange = () => saves++;
+    store.pause("a", 12);
+    store.pause("b", 12);
+    expect(store.pausedChats().sort()).toEqual(["a", "b"]);
+    expect(store.unpauseAll()).toBe(2);
+    expect(store.isPaused("a")).toBe(false);
+    expect(store.snapshot().convos.every((c) => c.pausedUntil === 0)).toBe(true);
+    expect(saves).toBeGreaterThan(2);
+  });
+});

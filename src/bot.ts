@@ -131,7 +131,7 @@ export class Bot {
       // A team member typed in the Instagram inbox: step back and let them handle it.
       this.d.store.addTurn(userId, { role: "assistant", text: `[Team member replied] ${text}` });
       this.d.store.pause(userId, this.d.humanPauseHours);
-      console.log(`[bot] team replied to ${userId}; bot paused ${this.d.humanPauseHours}h`);
+      console.log(`[bot] team replied to ${userId} from the inbox; bot paused ${this.d.humanPauseHours}h in that chat`);
       return;
     }
 
@@ -142,6 +142,7 @@ export class Bot {
     const images = await this.picturesFrom(msg);
     const caption = images.length && msg.text?.trim() ? `${text}\n[Customer sent ${images.length} picture(s)]` : text;
     this.d.store.addTurn(userId, { role: "user", text: caption, ...(images.length ? { images } : {}) });
+    console.log(`[bot] DM from ${userId}${this.d.store.isPaused(userId) ? ` (bot is PAUSED in this chat until ${new Date(this.d.store.pausedUntil(userId)).toISOString()}, not replying)` : ""}`);
     if (!this.d.store.customer(userId).username) {
       void this.d.ig.getUsername(userId).then((u) => this.d.store.setUsername(userId, u)).catch(() => {});
     }
@@ -166,7 +167,9 @@ export class Bot {
 
     const [inventory, busy] = await Promise.all([this.d.getInventory(), this.busy()]);
     const schedule = scheduleText(busy, this.now());
+    const started = Date.now();
     const result = await this.d.agent.reply(this.d.store.history(userId), inventory, this.orderTools(userId), schedule);
+    console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
@@ -323,6 +326,7 @@ export class Bot {
     // Record before sending: Instagram's echo of this message can arrive before the send call returns.
     for (const part of splitMessage(text)) this.d.store.recordBotMessage(userId, part);
     const id = await this.d.ig.sendText(userId, text);
+    console.log(`[bot] sent reply to ${userId} (${text.length} chars)`);
     this.d.store.recordBotMessage(userId, text, id);
     this.d.store.addTurn(userId, { role: "assistant", text });
   }

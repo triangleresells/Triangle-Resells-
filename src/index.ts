@@ -24,6 +24,7 @@ const store = new Store();
 // Small database: chats, pending follow-ups and the customer list survive redeploys.
 const saver = new FileSaver(config.stateFile, store);
 saver.load();
+if (store.pausedChats().length) console.log(`[bot] ${store.pausedChats().length} chat(s) paused for a human right now: ${store.pausedChats().join(", ")}`);
 saver.watch();
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.once(sig, () => {
@@ -63,7 +64,7 @@ createServer(bot, {
   extraAppSecrets: [config.metaAppSecret],
   verifyToken: config.igVerifyToken,
   stripeWebhookSecret: config.stripeWebhookSecret,
-  admin: { key: config.adminKey, customers: () => store.allCustomers(), blast: (m, s) => bot.blast(m, s) },
+  admin: { key: config.adminKey, customers: () => store.allCustomers(), blast: (m, s) => bot.blast(m, s), unpauseAll: () => store.unpauseAll() },
   onPaidOrder: (order) => {
     bot.markPaid(order.igUserId, order.summary, order.total);
     return handlePaidOrder(order, {

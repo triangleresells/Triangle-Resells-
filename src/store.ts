@@ -189,6 +189,22 @@ export class Store {
     this.changed();
   }
 
+  pausedUntil(userId: string): number {
+    return this.convos.get(userId)?.pausedUntil ?? 0;
+  }
+
+  /** Paused chats right now (for startup logs and the admin page). */
+  pausedChats(): string[] {
+    return [...this.convos].filter(([, c]) => c.pausedUntil > this.now()).map(([id]) => id);
+  }
+
+  unpauseAll(): number {
+    const ids = this.pausedChats();
+    for (const id of ids) this.convos.get(id)!.pausedUntil = 0;
+    if (ids.length) this.changed();
+    return ids.length;
+  }
+
   isPaused(userId: string): boolean {
     return (this.convos.get(userId)?.pausedUntil ?? 0) > this.now();
   }
