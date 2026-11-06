@@ -54,6 +54,7 @@ const bot = new Bot({
   pricing: config.pricing,
   checkout: config.stripeSecretKey ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
   getBusy: () => busyCalendar.get(),
+  enabled: () => config.botEnabled,
 });
 const calendar = webhookCalendar(config.calendarWebhookUrl);
 
@@ -78,6 +79,7 @@ createServer(bot, {
     });
   },
 }).listen(config.port, () => {
+  console.log(config.botEnabled ? "[bot] ON: replying to DMs" : "[bot] OFF: not sending any DMs (set BOT_ENABLED=true on Render to turn it on)");
   console.log(`[instagram] access token: ${describeToken(config.igAccessToken)}`);
   console.log(
     `[server] ${config.accountName} DM agent listening on :${config.port} ` +

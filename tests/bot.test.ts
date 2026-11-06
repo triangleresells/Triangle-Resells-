@@ -422,3 +422,43 @@ describe("pause length", () => {
     expect(store.isPaused("me")).toBe(false);
   });
 });
+
+describe("master switch (BOT_ENABLED)", () => {
+  it("sends nothing while OFF: no replies, no comment DMs, no follow-ups, no blasts, and no AI calls", async () => {
+    const sendText = vi.fn(async () => "mid");
+    const sendPrivateReply = vi.fn(async () => "mid");
+    const replyToComment = vi.fn(async () => {});
+    const ig: InstagramApi = { sendText, sendPrivateReply, replyToComment, getUsername: vi.fn(async () => "buyer") };
+    const agent: ReplyEngine = { reply: vi.fn(async () => ({ text: "hi" })) };
+    const store = new Store();
+    let on = false;
+    const bot = new Bot({
+      ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells",
+      keywords, publicCommentReplies: ["Sent you a DM!"], humanPauseHours: 12, enabled: () => on,
+    });
+    await bot.handle(dm("how much the alo hoodie", "off-1"));
+    await bot.handle(dm("price", "off-2"));
+    await bot.handle(comment("PRICE", "c-off"));
+    store.setPendingLink(USER, { url: "https://x", summary: "1x Alo", createdAt: 0 });
+    expect(await bot.followUpUnpaid()).toBe(0);
+    expect((await bot.blast("restock!", "")).sent).toEqual([]);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendPrivateReply).not.toHaveBeenCalled();
+    expect(replyToComment).not.toHaveBeenCalled();
+    expect(agent.reply).not.toHaveBeenCalled();
+    expect(store.history(USER).some((t) => t.text.includes("alo hoodie"))).toBe(true); // still saved
+
+    on = true;
+    await bot.handle(dm("you there?", "on-1"));
+    expect(sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("is OFF unless BOT_ENABLED is true", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    const base = { IG_APP_SECRET: "s", IG_ACCESS_TOKEN: "t", IG_VERIFY_TOKEN: "v", ANTHROPIC_API_KEY: "k" };
+    expect(loadConfig(base).botEnabled).toBe(false);
+    expect(loadConfig({ ...base, BOT_ENABLED: "false" }).botEnabled).toBe(false);
+    expect(loadConfig({ ...base, BOT_ENABLED: "pending" }).botEnabled).toBe(false);
+    expect(loadConfig({ ...base, BOT_ENABLED: "true" }).botEnabled).toBe(true);
+  });
+});

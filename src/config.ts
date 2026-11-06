@@ -32,6 +32,8 @@ export interface Config {
   warehouseAddress: string;
   /** File for the bot's small database (chats, follow-ups, customer list). Blank = memory only. */
   stateFile: string;
+  /** Master switch: the bot only sends DMs when BOT_ENABLED is "true". Anything else = OFF. */
+  botEnabled: boolean;
   /** Password for the /admin customer list page. Blank = page off. */
   adminKey: string;
   pricing: PricingConfig;
@@ -103,6 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
     stateFile: env.STATE_FILE?.trim() || "",
     adminKey: optional(env.ADMIN_KEY),
+    botEnabled: /^(true|on|yes|1)$/i.test(env.BOT_ENABLED?.trim() ?? ""),
     pricing: JSON.parse(readConfigFile("pricing.json")) as PricingConfig,
     port: Number(env.PORT) || 3000,
     agentInstructions: fill(readConfigFile("agent-instructions.md")),

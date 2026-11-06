@@ -20,6 +20,8 @@ export interface BotDeps {
   keywords: KeywordRule[];
   publicCommentReplies: string[];
   humanPauseHours: number;
+  /** Master switch. When it returns false the bot sends nothing (no replies, comment DMs, follow-ups or blasts). Default on. */
+  enabled?: () => boolean;
   /** Wait this long for more messages before replying, so 3 quick texts get 1 answer. */
   debounceMs?: number;
   /** Price list for exact quotes. Without it the bot can't quote or sell. */
@@ -158,6 +160,10 @@ export class Bot {
 
   private async replyTo(userId: string, latestText: string): Promise<void> {
     if (this.d.store.isPaused(userId)) return;
+    if (!this.isOn()) {
+      console.log(`[bot] OFF (BOT_ENABLED isn't true): saved the DM from ${userId}, not replying`);
+      return;
+    }
 
     const rule = matchKeyword(latestText, this.d.keywords);
     if (rule && isBareKeyword(latestText, rule)) {
@@ -275,6 +281,7 @@ export class Bot {
    * Skipped if the chat is paused for a human or the customer said they don't want it.
    */
   async followUpUnpaid(): Promise<number> {
+    if (!this.isOn()) return 0;
     const due = this.d.store.duePendingLinks(this.now().getTime() - HOLD_MINUTES * 60 * 1000);
     let sent = 0;
     for (const { userId, link } of due) {
@@ -301,6 +308,7 @@ export class Bot {
   async blast(message: string, search: string): Promise<{ sent: Customer[]; manual: Customer[] }> {
     const sent: Customer[] = [];
     const manual: Customer[] = [];
+    if (!this.isOn()) return { sent, manual: matchCustomers(this.d.store.allCustomers(), search) };
     for (const c of matchCustomers(this.d.store.allCustomers(), search)) {
       if (!this.d.store.canMessage(c.userId)) {
         manual.push(c);
@@ -322,7 +330,15 @@ export class Bot {
     await this.inOrder(userId, () => this.send(userId, text));
   }
 
+  private isOn(): boolean {
+    return this.d.enabled ? this.d.enabled() : true;
+  }
+
   private async send(userId: string, text: string): Promise<void> {
+    if (!this.isOn()) {
+      console.log(`[bot] OFF: did not send a message to ${userId}`);
+      return;
+    }
     // Record before sending: Instagram's echo of this message can arrive before the send call returns.
     for (const part of splitMessage(text)) this.d.store.recordBotMessage(userId, part);
     const id = await this.d.ig.sendText(userId, text);
@@ -338,6 +354,10 @@ export class Bot {
 
     const rule = matchKeyword(c.text, this.d.keywords);
     if (!rule) return;
+    if (!this.isOn()) {
+      console.log(`[bot] OFF: comment keyword ${rule.keyword} from @${c.from.username ?? c.from.id}, no DM sent`);
+      return;
+    }
 
     const userId = c.from.id;
     this.d.store.addTurn(userId, { role: "user", text: `[Commented "${c.text}" on a post]` });
