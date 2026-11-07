@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentReply, OrderTools, ReplyEngine } from "../src/ai.js";
-import { Bot, type WebhookPayload } from "../src/bot.js";
+import { withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
+import { Bot, toBubbles, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
 import type { InstagramApi } from "../src/instagram.js";
@@ -79,6 +79,31 @@ describe("DMs", () => {
     await t.bot.handle(dm("yo", "m1"));
     expect(t.sent).toEqual([{ to: USER, text: "Yo, how can I help you?" }]);
     expect(t.agent.reply).toHaveBeenCalledOnce();
+  });
+
+  it("sends a reply with a blank line as two separate texts, and their echoes don't pause the bot", async () => {
+    const t = setup({ text: "Bet, size S. What piece you after?\n\nIn S I got Spider hoodies, Alo hoodies and colognes" });
+    await t.bot.handle(dm("size small", "m1"));
+    expect(t.sent.map((s) => s.text)).toEqual([
+      "Bet, size S. What piece you after?",
+      "In S I got Spider hoodies, Alo hoodies and colognes",
+    ]);
+    await t.bot.handle(echo("Bet, size S. What piece you after?", "mid-bot-1"));
+    await t.bot.handle(echo("In S I got Spider hoodies, Alo hoodies and colognes", "mid-bot-2"));
+    await t.bot.handle(dm("spider", "m2"));
+    expect(t.agent.reply).toHaveBeenCalledTimes(2);
+  });
+
+  it("caps a reply at 3 texts and keeps a link on its own line", () => {
+    expect(toBubbles("a\n\nb\n\nc\n\nd")).toEqual(["a", "b", "c\nd"]);
+    expect(toBubbles("here's your link\nhttps://x.co")).toEqual(["here's your link\nhttps://x.co"]);
+  });
+
+  it("adds the write-your-reply note onto the last customer turn so turns still alternate", () => {
+    const m = withNote([{ role: "user", content: "got godspeed?" }], "NOTE");
+    expect(m).toHaveLength(1);
+    expect(m[0].content).toEqual([{ type: "text", text: "got godspeed?" }, { type: "text", text: "NOTE" }]);
+    expect(withNote([{ role: "user", content: "hi" }, { role: "assistant", content: "yo" }], "NOTE")).toHaveLength(3);
   });
 
   it("answers a bare keyword DM with the keyword reply, skipping the AI", async () => {

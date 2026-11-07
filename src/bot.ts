@@ -339,12 +339,16 @@ export class Bot {
       console.log(`[bot] OFF: did not send a message to ${userId}`);
       return;
     }
+    // A blank line in the reply means "send as a separate text", like a person sending two quick DMs.
+    const bubbles = toBubbles(text);
     // Record before sending: Instagram's echo of this message can arrive before the send call returns.
-    for (const part of splitMessage(text)) this.d.store.recordBotMessage(userId, part);
-    const id = await this.d.ig.sendText(userId, text);
-    console.log(`[bot] sent reply to ${userId} (${text.length} chars)`);
-    this.d.store.recordBotMessage(userId, text, id);
-    this.d.store.addTurn(userId, { role: "assistant", text });
+    for (const b of bubbles) for (const part of splitMessage(b)) this.d.store.recordBotMessage(userId, part);
+    for (const b of bubbles) {
+      const id = await this.d.ig.sendText(userId, b);
+      this.d.store.recordBotMessage(userId, b, id);
+    }
+    console.log(`[bot] sent reply to ${userId} (${bubbles.length} message${bubbles.length > 1 ? "s" : ""}, ${text.length} chars)`);
+    this.d.store.addTurn(userId, { role: "assistant", text: bubbles.join("\n\n") });
   }
 
   private async onComment(ownId: string, c: CommentValue): Promise<void> {
@@ -391,4 +395,14 @@ function describeAttachments(msg: NonNullable<MessagingEvent["message"]>): strin
   if (types.length) return `[Customer sent: ${types.join(", ")}]`;
   if (msg.is_unsupported) return "[Customer sent a message type the bot can't read]";
   return "[Customer sent an empty message]";
+}
+
+/** Most texts a single reply is sent as. Anything past this is joined onto the last one. */
+export const MAX_BUBBLES = 3;
+
+/** Splits a reply on blank lines into separate DMs (max MAX_BUBBLES). */
+export function toBubbles(text: string): string[] {
+  const parts = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= MAX_BUBBLES) return parts.length ? parts : [text.trim()];
+  return [...parts.slice(0, MAX_BUBBLES - 1), parts.slice(MAX_BUBBLES - 1).join("\n")];
 }

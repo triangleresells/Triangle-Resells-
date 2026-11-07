@@ -204,6 +204,16 @@ export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
 
 const MAX_ROUNDS = 5;
 
+/** Adds a text note to the last customer turn (the API needs user and assistant turns to alternate). */
+export function withNote(messages: Anthropic.MessageParam[], note: string): Anthropic.MessageParam[] {
+  const out = [...messages];
+  const last = out[out.length - 1];
+  if (!last || last.role !== "user") return [...out, { role: "user", content: note }];
+  const blocks = typeof last.content === "string" ? [{ type: "text" as const, text: last.content }] : [...last.content];
+  out[out.length - 1] = { role: "user", content: [...blocks, { type: "text", text: note }] };
+  return out;
+}
+
 export class ClaudeAgent implements ReplyEngine {
   private client: Anthropic;
 
@@ -283,6 +293,26 @@ export class ClaudeAgent implements ReplyEngine {
     }
 
     let text = (finalTexts.length ? finalTexts : allTexts).join("\n").replace(/\*\*/g, "").trim();
+    if (!text && !handoff) {
+      // The AI used its tools but never wrote the DM. Ask once more for just the message, so the chat
+      // keeps going instead of being handed to the team for no reason.
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: 400,
+          system,
+          messages: withNote(
+            messages,
+            "(Note from the system, not the customer: write your DM reply to the customer now. If we don't have what they asked for, say so and offer what we do have in stock.)",
+          ),
+          tools: TOOLS,
+          tool_choice: { type: "none" },
+        });
+        text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();
+      } catch (err) {
+        console.error("[ai] retry for an empty reply failed:", err);
+      }
+    }
     if (!text) {
       text = handoff
         ? "Bet, let me get someone from the team to jump in for you real quick."

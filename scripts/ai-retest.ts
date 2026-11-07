@@ -62,7 +62,20 @@ const PERSONAS = [
   "asks if the items are real and if they can make money reselling",
   "wants a Bleu de Chanel and a hat shipped",
   "wants to start reselling and asks about vendors",
+  "opens with just 'bet' after seeing a post, then only gives a size ('size small') before saying what piece",
+  "asks for a Godspeed football tee we don't carry",
+  "asks how much for a Rolex watch",
+  "wants Chrome Hearts jeans in a size we don't have",
+  "asks 'what you got in M?'",
+  "shopping for a gift for their girlfriend, not sure what",
+  "asks for Supreme hoodies, then asks what's similar",
+  "asks for Nike Tech, gets offered something else, says nah and leaves",
 ];
+
+const VOICE_CHECK = `Also grade how human the bot sounds (Josh wants it to NOT sound like a bot):
+- FAIL "sounds like a bot" if it repeats answers back flat ("Got it, S."), uses customer-service lines ("How can I assist", "I'd be happy to help", "Is there anything else"), stacks several questions in one text, or starts every text the same way.
+- FAIL "dead end" if the customer asked for something we don't have and the bot didn't offer something we DO have, or answered with "let me get someone to confirm" instead of using the stock sheet.
+- FAIL "invented" if it quoted a price or stock not on the sheet or from quote_order.`;
 
 const RULES = readFileSync(new URL("../config/agent-instructions.md", import.meta.url), "utf8");
 
@@ -108,7 +121,7 @@ async function main() {
     const judge = await client.messages.create({
       model: config.claudeModel, max_tokens: 600,
       system: "You grade a DM sales bot strictly against its rules. Reply with JSON only: {\"pass\": boolean, \"violations\": [string], \"notes\": string}.",
-      messages: [{ role: "user", content: `RULES:\n${RULES}\n\nTOOLS/ALERTS THE BOT FIRED:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}` }],
+      messages: [{ role: "user", content: `RULES:\n${RULES}\n\n${VOICE_CHECK}\n\nTOOLS/ALERTS THE BOT FIRED:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}` }],
     });
     const text = judge.content.map((b) => (b.type === "text" ? b.text : "")).join("");
     let grade: unknown;
@@ -117,7 +130,12 @@ async function main() {
     console.log(`${i + 1}/${n} ${(grade as { pass?: boolean }).pass ? "✅" : "❌"} ${persona}`);
   }
   writeFileSync(out, JSON.stringify(results, null, 1));
-  console.log(`\nSaved ${out}`);
+  const failed = results.filter((r) => !(r as { grade: { pass?: boolean } }).grade.pass) as { persona: string; grade: { violations?: string[] } }[];
+  const counts = new Map<string, number>();
+  for (const f of failed) for (const v of f.grade.violations ?? []) counts.set(v.slice(0, 80), (counts.get(v.slice(0, 80)) ?? 0) + 1);
+  console.log(`\n${results.length - failed.length}/${results.length} passed`);
+  for (const [v, c] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.log(`  ${c}x ${v}`);
+  console.log(`Saved ${out}`);
 }
 
 void main();
