@@ -5,7 +5,8 @@ import { Bot, toBubbles, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
 import type { InstagramApi } from "../src/instagram.js";
-import { quoteOrder, type PricingConfig } from "../src/pricing.js";
+import { loadPricing } from "../src/config.js";
+import { quoteOrder } from "../src/pricing.js";
 import { pickupProblem, scheduleText, shipDateFor, type BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
 import { paidOrderFromEvent, StripeCheckout } from "../src/stripe.js";
@@ -237,13 +238,13 @@ describe("pickup schedule and ship cutoff", () => {
   });
 
   it("refuses a taken pickup time so the AI offers another, and marks test-key checkouts", async () => {
-    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+    const pricing = loadPricing();
     const results: unknown[] = [];
     const agent: ReplyEngine = {
       reply: vi.fn(async (_h, _inv, tools?: OrderTools, schedule?: string) => {
         expect(schedule).toContain("3:00 PM-3:30 PM");
-        results.push(await tools!.checkout([{ product: "alo_hoodie", qty: 1 }], "pickup", "2026-11-06", "3:00 PM"));
-        results.push(await tools!.checkout([{ product: "alo_hoodie", qty: 1 }], "pickup", "2026-11-06", "4:00 PM"));
+        results.push(await tools!.checkout!([{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 1 }], "pickup", "2026-11-06", "3:00 PM"));
+        results.push(await tools!.checkout!([{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 1 }], "pickup", "2026-11-06", "4:00 PM"));
         return { text: "bet" };
       }),
     };
@@ -266,19 +267,19 @@ describe("pickup schedule and ship cutoff", () => {
     });
     await bot.handle(dm("3pm friday", "m-sched"));
     expect(results[0]).toMatchObject({ ok: false, fixable: true });
-    expect(results[1]).toMatchObject({ ok: true, total: 55 });
+    expect(results[1]).toMatchObject({ ok: true, total: 70 });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const body = String((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body);
     expect(decodeURIComponent(body)).toContain("metadata[test_order]=true");
   });
 
   it("pushes a same-day ship link to tomorrow after 7pm ET", async () => {
-    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+    const pricing = loadPricing();
     const create = vi.fn(async () => ({ id: "cs", url: "https://checkout.stripe.com/y", expiresAt: 0 }));
     let note = "";
     const agent: ReplyEngine = {
       reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
-        const r = await tools!.checkout([{ product: "spider_hoodie", qty: 1 }], "ship", "2026-11-06");
+        const r = await tools!.checkout!([{ product: "Spider Hoodie", variant: "White/Black", size: "XS", qty: 1 }], "ship", "2026-11-06");
         if (r.ok) note = r.note ?? "";
         return { text: "bet" };
       }),
@@ -296,10 +297,10 @@ describe("pickup schedule and ship cutoff", () => {
 });
 
 describe("prices and rules from Josh (Nov 5)", () => {
-  it("prices every fragrance at $60 for 1, LV stays $65", () => {
-    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
-    expect(quoteOrder(pricing, [{ product: "cologne", variant: "Bleu de Chanel", qty: 1 }], "ship").total).toBe(70);
-    expect(quoteOrder(pricing, [{ product: "lv_cologne", qty: 1 }], "pickup").total).toBe(65);
+  it("prices every fragrance at $60 for 1 (plus $10 UPS)", () => {
+    const pricing = loadPricing();
+    expect(quoteOrder(pricing, [{ product: "Bleu de Chanel EDP", qty: 1 }], "ship").total).toBe(70);
+    expect(quoteOrder(pricing, [{ product: "YSL Y EDP", qty: 1 }], "pickup").total).toBe(60);
   });
 
   it("keeps the rule fixes in the bot's instructions", () => {
@@ -324,13 +325,14 @@ describe("pickup spot and no-bulk items (Nov 6)", () => {
     expect(instructions).toContain("never offer to let anyone inside");
   });
 
-  it("Valley hoodies and hats are the same price at any quantity; BAPE tees keep their bulk tiers", () => {
-    const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
-    expect(quoteOrder(pricing, [{ product: "valley_hoodie", qty: 10 }], "pickup").groups[0].unitPrice).toBe(60);
-    expect(quoteOrder(pricing, [{ product: "hat", qty: 20 }], "pickup").groups[0].unitPrice).toBe(30);
-    expect(quoteOrder(pricing, [{ product: "bape_tee", qty: 1 }], "pickup").total).toBe(35);
-    expect(quoteOrder(pricing, [{ product: "bape_tee", qty: 3 }], "pickup").groups[0].unitPrice).toBe(31);
-    expect(quoteOrder(pricing, [{ product: "cologne", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
+  it("bulk tiers from the sheet: Valley, hats, BAPE tees and fragrances", () => {
+    const pricing = loadPricing();
+    const valley = quoteOrder(pricing, [{ product: "Valley Hoodie", variant: "White/Black", size: "XL", qty: 1 }, { product: "Valley Hoodie", variant: "Black/Burgundy", size: "M", qty: 1 }, { product: "Valley Hoodie", variant: "Black/Burgundy", size: "L", qty: 1 }], "pickup");
+    expect(valley.groups[0].unitPrice).toBe(58);
+    expect(quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "White/Black", qty: 10 }], "pickup").groups[0].unitPrice).toBe(21);
+    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").total).toBe(35);
+    expect(quoteOrder(pricing, [{ product: "BAPE Tee", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(31);
+    expect(quoteOrder(pricing, [{ product: "YSL Y EDP", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
   });
 });
 
@@ -339,22 +341,150 @@ describe("Render placeholders", () => {
     const { loadConfig } = await import("../src/config.js");
     const cfg = loadConfig({
       IG_APP_SECRET: "pending", IG_ACCESS_TOKEN: "pending", IG_VERIFY_TOKEN: "made-up", ANTHROPIC_API_KEY: "sk-ant-test",
-      INVENTORY_SHEET_CSV_URL: "pending", HANDOFF_WEBHOOK_URL: "Pending", STRIPE_SECRET_KEY: "pending",
+      GOOGLE_SERVICE_ACCOUNT_JSON: "pending", HANDOFF_WEBHOOK_URL: "Pending", STRIPE_SECRET_KEY: "pending",
       STRIPE_WEBHOOK_SECRET: " pending ", CALENDAR_WEBHOOK_URL: "none", ADMIN_KEY: "a-long-admin-password",
     });
-    expect(cfg).toMatchObject({ inventorySheetCsvUrl: "", handoffWebhookUrl: "", stripeSecretKey: "", stripeWebhookSecret: "", calendarWebhookUrl: "", adminKey: "a-long-admin-password" });
+    expect(cfg).toMatchObject({ googleServiceAccountJson: "", stripeEnabled: false, handoffWebhookUrl: "", stripeSecretKey: "", stripeWebhookSecret: "", calendarWebhookUrl: "", adminKey: "a-long-admin-password" });
   });
 });
 
-describe("starter stock list", () => {
-  it("uses config/stock.csv until the Google Sheet is connected, and the sheet once it is", async () => {
-    const { InventorySheet } = await import("../src/inventory.js");
-    const csv = readFileSync(new URL("../config/stock.csv", import.meta.url), "utf8");
-    const starter = await new InventorySheet("", fetch, csv).get();
-    expect(starter).toContain("Alo Hoodie | Gray | M | 3");
-    expect(starter.split("\n")[0]).toContain("Item | Colorway | Size | Qty");
-    const sheet = new InventorySheet("https://sheet", (async () => new Response("Item,Qty\nHat,10")) as unknown as typeof fetch, csv);
-    expect(await sheet.get()).toBe("Item | Qty\nHat | 10");
+describe("warehouse sheet", () => {
+  it("uses the saved snapshot until the sheet is readable, then the live BOT STOCK / BOT PRICES tabs", async () => {
+    const { LiveCatalog, catalogFrom } = await import("../src/sheet.js");
+    const { formatCatalog } = await import("../src/catalog.js");
+    const pricing = loadPricing();
+    const snapshot = { pricing, text: formatCatalog(pricing.stock!, pricing.tables), source: "snapshot" as const };
+    expect(snapshot.text).toContain("Alo Hoodie | Gray | M | 1 | ALO");
+    expect(snapshot.text).toContain("Baccarat Rouge (B tier): 1 free with EVERY order");
+    expect(snapshot.text).toContain("G-Shock: free with any 5+ piece order");
+    expect(snapshot.text).toContain("NOT FOR SALE (if asked, hand off to josh): Rolex, Gallery Dept Jeans");
+    expect(snapshot.text).not.toContain("Essentials");
+    expect(snapshot.text).not.toMatch(/Rolex \| /);
+
+    let calls = 0;
+    const reader = {
+      tabs: async () => {
+        calls++;
+        if (calls > 1) throw new Error("google down");
+        return [
+          [["BOT STOCK title"], ["Category", "Brand", "Item", "Color", "Size", "Qty", "Price List", "Status", "Notes"], ["Hat", "CH", "Chrome Hearts Hat", "Black", "One Size", "3", "CHROME HEARTS HATS", "FOR SALE", ""]],
+          [["BOT PRICES title"], ["Price List", "Pieces", "Total", "Each", "Notes"], ["CHROME HEARTS HATS", "1", "$25.00", "$25.00", ""]],
+        ];
+      },
+    };
+    const live = new LiveCatalog(snapshot, reader);
+    const c = await live.get();
+    expect(c.source).toBe("sheet");
+    expect(quoteOrder(c.pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 1 }], "pickup").total).toBe(25);
+    expect(quoteOrder(c.pricing, [{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 1 }], "pickup").problems[0]).toContain("not on the stock sheet");
+    expect(catalogFrom(pricing, "", "", "snapshot").pricing.stock).toEqual([]);
+    await expect(new LiveCatalog(snapshot).get()).resolves.toBe(snapshot);
+  });
+
+  it("signs a service account JWT and reads both tabs with it", async () => {
+    const { generateKeyPairSync, createVerify } = await import("node:crypto");
+    const { GoogleSheetsReader, parseServiceAccount, signedJwt } = await import("../src/sheet.js");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const keyFile = JSON.stringify({ type: "service_account", client_email: "triangle-bot@proj.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) });
+    const sa = parseServiceAccount(keyFile)!;
+    expect(parseServiceAccount(Buffer.from(keyFile).toString("base64"))?.client_email).toBe(sa.client_email);
+    expect(parseServiceAccount("not json")).toBeUndefined();
+    const [h, c, sig] = signedJwt(sa).split(".");
+    expect(createVerify("RSA-SHA256").update(`${h}.${c}`).verify(publicKey, Buffer.from(sig, "base64url"))).toBe(true);
+    expect(JSON.parse(Buffer.from(c, "base64url").toString())).toMatchObject({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/spreadsheets.readonly" });
+
+    const urls: string[] = [];
+    const fetchFn = (async (url: string) => {
+      urls.push(url);
+      if (url.includes("oauth2")) return new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }));
+      return new Response(JSON.stringify({ valueRanges: [{ values: [["a"]] }, { values: [["b"]] }] }));
+    }) as unknown as typeof fetch;
+    const tabs = await new GoogleSheetsReader(sa, "SHEET123", fetchFn).tabs(["BOT STOCK", "BOT PRICES"]);
+    expect(tabs).toEqual([[["a"]], [["b"]]]);
+    expect(decodeURIComponent(urls[1])).toContain("/spreadsheets/SHEET123/values:batchGet?ranges='BOT STOCK'!A:Z&ranges='BOT PRICES'!A:Z");
+  });
+});
+
+describe("no Stripe: cash, Cash App, Apple Pay", () => {
+  const NOW = new Date("2026-11-05T19:00:00Z"); // Thu 2 PM ET
+  const busy: BusyBlock[] = [];
+  it("locks in the order, hands it to Josh with the freebies, and only offers submit_order", async () => {
+    const { toolsFor } = await import("../src/ai.js");
+    const pricing = loadPricing();
+    const alerts: HandoffAlert[] = [];
+    let result: unknown;
+    let offered: string[] = [];
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
+        offered = toolsFor(tools).map((t) => t.name);
+        result = await tools!.submitOrder!([{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup", "2026-11-06", "4:00 PM", undefined, "cash_app");
+        return { text: "bet, Josh will send the Cash App right here", handoff: { route: "josh", reason: "new order", summary: (result as { summary: string }).summary } };
+      }),
+    };
+    const { ig } = setup();
+    const store = new Store();
+    const bot = new Bot({
+      ig, agent, store, notify: async (a) => void alerts.push(a), getInventory: async () => "", accountName: "Triangle Resells",
+      keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, getBusy: async () => busy, now: () => NOW,
+    });
+    await bot.handle(dm("5 black ch hats, pickup fri 4, cash app", "m-cash"));
+    expect(offered).toContain("submit_order");
+    expect(offered).not.toContain("create_checkout_link");
+    expect(result).toMatchObject({ ok: true, total: 130, freebies: ["1 free Baccarat Rouge (B tier)", "1 free G-Shock"] });
+    expect((result as { summary: string }).summary).toContain("pays by cash_app");
+    expect(alerts[0]).toMatchObject({ route: "josh" });
+    expect(store.isPaused("user-1")).toBe(true);
+  });
+
+  it("nudges a quoted buyer who went quiet once, with the free Baccarat", async () => {
+    const { quietNudgeText } = await import("../src/bot.js");
+    const pricing = loadPricing();
+    const now = { t: NOW };
+    const sent: string[] = [];
+    const ig: InstagramApi = { sendText: vi.fn(async (_to, t) => (sent.push(t), "mid")), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "b") };
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools) => ({ text: `that's ${tools!.quote([{ product: "YSL Y EDP", qty: 1 }], "pickup")}` })),
+    };
+    const store = new Store(() => now.t.getTime());
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, now: () => now.t });
+    await bot.handle(dm("how much ysl y", "m-q1"));
+    now.t = new Date(NOW.getTime() + 60 * 60_000);
+    expect(await bot.followUpUnpaid()).toBe(0);
+    now.t = new Date(NOW.getTime() + 95 * 60_000);
+    expect(await bot.followUpUnpaid()).toBe(1);
+    expect(sent.at(-1)).toBe(quietNudgeText("1x YSL Y EDP", "Baccarat Rouge (B tier)"));
+    expect(sent.at(-1)).toContain("every order comes with a free Baccarat Rouge.");
+    now.t = new Date(NOW.getTime() + 300 * 60_000);
+    expect(await bot.followUpUnpaid()).toBe(0);
+  });
+
+  it("does not nudge when the customer sent the last message", async () => {
+    const pricing = loadPricing();
+    const now = { t: NOW };
+    const store = new Store(() => now.t.getTime());
+    const { ig } = setup();
+    const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, tools?: OrderTools) => ({ text: tools!.quote([{ product: "YSL Y EDP", qty: 1 }], "pickup") })) };
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, now: () => now.t, enabled: () => true });
+    await bot.handle(dm("how much ysl y", "m-q2"));
+    store.addTurn("user-1", { role: "user", text: "hmm" });
+    now.t = new Date(NOW.getTime() + 200 * 60_000);
+    expect(await bot.followUpUnpaid()).toBe(0);
+  });
+});
+
+describe("health check", () => {
+  it("answers /health for Render with no secrets", async () => {
+    const { createServer } = await import("../src/server.js");
+    const app = createServer({ handle: async () => {} }, { appSecret: "s", verifyToken: "v", health: async () => ({ botEnabled: false, stock: "snapshot" }) });
+    const server = app.listen(0);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const r = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(r.status).toBe(200);
+      expect(await r.json()).toMatchObject({ ok: true, botEnabled: false, stock: "snapshot" });
+    } finally {
+      server.close();
+    }
   });
 });
 

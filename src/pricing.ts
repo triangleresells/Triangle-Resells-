@@ -1,8 +1,12 @@
+import { findTable, freebiesFor, matchStock, type StockRow } from "./catalog.js";
+
 export type Fulfillment = "pickup" | "ship" | "delivery";
 
 export interface PricingConfig {
+  /** BOT PRICES tab: price list name -> pieces -> price each. */
   tables: Record<string, Record<string, number>>;
-  products: { key: string; name: string; table?: string; flat?: number }[];
+  /** BOT STOCK tab. Only FOR SALE rows can be sold. */
+  stock?: StockRow[];
   shipping: { flat: number; buyerLabelAtPieces: number };
   delivery?: DeliveryConfig;
 }
@@ -41,9 +45,9 @@ export function deliveryFor(cfg: PricingConfig, area: string | undefined): Deliv
 }
 
 export interface OrderItem {
-  /** Product key from config/pricing.json, e.g. "alo_hoodie". */
+  /** Item name exactly as on the stock sheet, e.g. "Alo Hoodie". */
   product: string;
-  /** Colorway or scent, e.g. "Gray" or "Bleu de Chanel". */
+  /** Color from the stock sheet, e.g. "Gray". */
   variant?: string;
   size?: string;
   qty: number;
@@ -72,7 +76,9 @@ export interface Quote {
   /** Local delivery: area, one-way drive minutes, and fee. */
   delivery?: { area: string; minutes: number; fee: number };
   total: number;
-  /** Items the bot can't price (unknown product or bad quantity). Hand these to the team. */
+  /** Gifts added to every order (Baccarat) and 5+ piece orders (G-Shock). Never charged. */
+  freebies: string[];
+  /** Items the bot can't sell or price (not in stock, not for sale, no price). */
   problems: string[];
 }
 
@@ -99,37 +105,52 @@ export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: 
       problems.push(`Delivery area not on the list: "${deliveryArea ?? ""}". Ask which town, or alert Josh to confirm the fee`);
     } else problems.push("Delivery isn't set up");
   }
-  const byKey = new Map(cfg.products.map((p) => [p.key, p]));
-  const valid = items.filter((it) => {
-    if (!byKey.has(it.product)) {
-      problems.push(`No price listed for "${it.product}"`);
-      return false;
-    }
+  const stock = cfg.stock ?? [];
+  type Valid = OrderItem & { name: string; list: string };
+  const valid: Valid[] = [];
+  for (const it of items) {
     if (!Number.isInteger(it.qty) || it.qty < 1) {
       problems.push(`Bad quantity for ${it.product}: ${it.qty}`);
-      return false;
+      continue;
     }
-    return true;
-  });
+    // The same item/color/size listed twice counts toward the stock check together.
+    const sameBefore = valid
+      .filter((v) => v.product.toLowerCase() === it.product.toLowerCase() && (v.variant ?? "") === (it.variant ?? "") && (v.size ?? "") === (it.size ?? ""))
+      .reduce((n, v) => n + v.qty, 0);
+    const m = matchStock(stock, cfg.tables, it.product, it.variant, it.size, it.qty + sameBefore);
+    if (!m.ok) {
+      problems.push(m.problem);
+      continue;
+    }
+    const row = m.rows[0];
+    const one = m.rows.length === 1;
+    valid.push({
+      ...it,
+      name: row.item,
+      variant: it.variant || (one ? row.color : undefined),
+      size: it.size || (one && row.size.toLowerCase() !== "one size" ? row.size : undefined),
+      list: row.priceList,
+    });
+  }
 
-  // Price per product: every size and colorway of that product counts toward its tier.
+  // The tier is counted per price list: every size, color and item on the same list counts together.
   const pieces = new Map<string, number>();
-  for (const it of valid) pieces.set(it.product, (pieces.get(it.product) ?? 0) + it.qty);
+  for (const it of valid) pieces.set(it.list, (pieces.get(it.list) ?? 0) + it.qty);
   const unit = new Map<string, number>();
-  for (const [key, count] of pieces) {
-    const p = byKey.get(key)!;
-    const price = p.flat ?? (p.table && cfg.tables[p.table] ? tierPrice(cfg.tables[p.table], count) : NaN);
-    if (!Number.isFinite(price)) problems.push(`Pricing table missing for ${key}`);
-    unit.set(key, price);
+  for (const [list, count] of pieces) {
+    const t = findTable(cfg.tables, list);
+    const price = t ? tierPrice(t, count) : NaN;
+    if (!Number.isFinite(price)) problems.push(`No prices for price list ${list}. Hand off to josh`);
+    unit.set(list, price);
   }
 
   const lines: QuoteLine[] = valid
-    .filter((it) => Number.isFinite(unit.get(it.product)))
+    .filter((it) => Number.isFinite(unit.get(it.list)))
     .map((it) => {
-      const unitPrice = unit.get(it.product)!;
+      const unitPrice = unit.get(it.list)!;
       return {
-        product: it.product,
-        name: byKey.get(it.product)!.name,
+        product: it.list,
+        name: it.name,
         variant: it.variant?.trim() || undefined,
         size: it.size?.trim() || undefined,
         qty: it.qty,
@@ -139,13 +160,13 @@ export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: 
     });
 
   const groups = [...pieces.entries()]
-    .filter(([key]) => Number.isFinite(unit.get(key)))
-    .map(([key, count]) => ({
-      product: key,
-      name: byKey.get(key)!.name,
+    .filter(([list]) => Number.isFinite(unit.get(list)))
+    .map(([list, count]) => ({
+      product: list,
+      name: list,
       pieces: count,
-      unitPrice: unit.get(key)!,
-      total: unit.get(key)! * count,
+      unitPrice: unit.get(list)!,
+      total: unit.get(list)! * count,
     }));
 
   const totalPieces = lines.reduce((s, l) => s + l.qty, 0);
@@ -164,6 +185,7 @@ export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: 
     buyerProvidesLabel,
     delivery,
     total: subtotal + shipping + deliveryFee,
+    freebies: freebiesFor(stock, totalPieces),
     problems,
   };
 }
@@ -174,7 +196,8 @@ export function lineLabel(l: Pick<QuoteLine, "name" | "variant" | "size">): stri
 
 /** Short plain-text version for the AI and for team alerts. */
 export function describeQuote(q: Quote): string {
-  const parts = q.groups.map((g) => `${g.pieces}x ${g.name} @ $${g.unitPrice} = $${g.total}`);
+  const parts = q.lines.map((l) => `${l.qty}x ${lineLabel(l)} @ $${l.unitPrice} = $${l.lineTotal}`);
+  const free = q.freebies.length ? `; FREE: ${q.freebies.join(", ")}` : "";
   const ship = q.fulfillment === "pickup"
     ? "warehouse pickup (free)"
     : q.fulfillment === "delivery"
@@ -184,5 +207,5 @@ export function describeQuote(q: Quote): string {
       : q.buyerProvidesLabel
       ? "shipping: buyer sends their own label (10+ pieces)"
       : `UPS shipping $${q.shipping}`;
-  return `${parts.join("; ")}; ${ship}; TOTAL $${q.total}`;
+  return `${parts.join("; ")}${free}; ${ship}; TOTAL $${q.total}`;
 }

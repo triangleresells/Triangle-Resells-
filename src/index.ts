@@ -1,17 +1,10 @@
 import { ClaudeAgent } from "./ai.js";
 import { Bot } from "./bot.js";
-import { describeToken, loadConfig, readConfigFile } from "./config.js";
-
-function readStockFile(): string {
-  try {
-    return readConfigFile("stock.csv");
-  } catch {
-    return "";
-  }
-}
+import { describeToken, loadConfig } from "./config.js";
+import { formatCatalog } from "./catalog.js";
+import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js";
 import { webhookNotifier } from "./handoff.js";
 import { InstagramClient } from "./instagram.js";
-import { InventorySheet } from "./inventory.js";
 import { createServer } from "./server.js";
 import { handlePaidOrder, webhookCalendar } from "./orders.js";
 import { FileSaver } from "./persist.js";
@@ -34,8 +27,13 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     process.exit(0);
   });
 }
-// Live Google Sheet when INVENTORY_SHEET_CSV_URL is set; until then, config/stock.csv.
-const inventory = new InventorySheet(config.inventorySheetCsvUrl, fetch, readStockFile());
+// Stock and prices: the warehouse sheet's BOT STOCK and BOT PRICES tabs, read with a Google service account.
+// Until the service account is set up (or if Google is down), the saved snapshot in config/ is used.
+const serviceAccount = parseServiceAccount(config.googleServiceAccountJson);
+if (config.googleServiceAccountJson && !serviceAccount) console.error("[sheet] GOOGLE_SERVICE_ACCOUNT_JSON isn't a valid service account key file. Using the saved snapshot.");
+const snapshot = { pricing: config.pricing, text: formatCatalog(config.pricing.stock ?? [], config.pricing.tables), source: "snapshot" as const };
+const catalog = new LiveCatalog(snapshot, serviceAccount ? new GoogleSheetsReader(serviceAccount, config.warehouseSheetId) : undefined);
+void catalog.get(); // warm up, and log right away if the sheet isn't shared with the service account
 // Josh's calendar: paid pickups plus any time he blocks off. The bot never offers those times.
 const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 
@@ -45,16 +43,18 @@ const bot = new Bot({
   agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
   store,
   notify,
-  getInventory: () => inventory.get(),
+  getInventory: async () => (await catalog.get()).text,
+  getCatalog: () => catalog.get(),
   accountName: config.accountName,
   keywords: config.keywords,
   publicCommentReplies: config.publicCommentReplies,
   humanPauseHours: config.humanPauseHours,
   debounceMs: 4000,
   pricing: config.pricing,
-  checkout: config.stripeSecretKey ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
+  checkout: config.stripeEnabled ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
   getBusy: () => busyCalendar.get(),
   enabled: () => config.botEnabled,
+  quietNudgeMinutes: config.quietNudgeMinutes,
 });
 const calendar = webhookCalendar(config.calendarWebhookUrl);
 
@@ -66,7 +66,11 @@ createServer(bot, {
   appSecret: config.igAppSecret,
   extraAppSecrets: [config.metaAppSecret],
   verifyToken: config.igVerifyToken,
-  stripeWebhookSecret: config.stripeWebhookSecret,
+  stripeWebhookSecret: config.stripeEnabled ? config.stripeWebhookSecret : "",
+  health: async () => {
+    const c = await catalog.get();
+    return { botEnabled: config.botEnabled, stock: c.source, forSaleRows: (c.pricing.stock ?? []).filter((r) => r.status === "for_sale" && r.qty > 0).length };
+  },
   admin: { key: config.adminKey, customers: () => store.allCustomers(), blast: (m, s) => bot.blast(m, s), unpauseAll: () => store.unpauseAll() },
   onPaidOrder: (order) => {
     bot.markPaid(order.igUserId, order.summary, order.total);
@@ -84,8 +88,8 @@ createServer(bot, {
   console.log(
     `[server] ${config.accountName} DM agent listening on :${config.port} ` +
       `(${config.keywords.length} keywords, model ${config.claudeModel}, ` +
-      `inventory sheet ${config.inventorySheetCsvUrl ? "on" : "off"}, ` +
-      `stripe ${config.stripeSecretKey ? "on" : "off"}, calendar ${config.calendarWebhookUrl ? "on" : "off"}, ` +
+      `stock sheet ${serviceAccount ? `via ${serviceAccount.client_email}` : "off (saved snapshot)"}, ` +
+      `stripe ${config.stripeEnabled ? "on" : "off (cash, Cash App, Apple Pay via Josh)"}, calendar ${config.calendarWebhookUrl ? "on" : "off"}, ` +
       `database ${config.stateFile || "off (memory only)"}, admin page ${config.adminKey ? "on" : "off"})`,
   );
 });

@@ -1,140 +1,279 @@
 /**
- * Real-AI retests: Claude plays a customer, the REAL bot (Claude + config/ files + real tools) answers,
- * and a separate Claude call grades the chat against Josh's rules. Fake Instagram and fake Stripe:
- * nothing is sent or charged.
+ * Real-AI retest: Claude plays a customer, the REAL bot (Claude + config/ files + the warehouse sheet snapshot + real
+ * order tools) answers, and a separate Claude call grades each chat against Josh's rules. Fake Instagram, no Stripe:
+ * nothing is sent to anyone.
  *
- *   ANTHROPIC_API_KEY=... npx tsx scripts/ai-retest.ts 50 report.json
+ *   ANTHROPIC_API_KEY=... npx tsx scripts/ai-retest.ts 50 ai-retest-report.json
  *
- * Costs API credit (roughly 10-15 Claude calls per conversation). Start with 50, then go to 1000.
+ * Bot model: CLAUDE_MODEL (default claude-haiku-5-5, same as Render). Customer: claude-haiku-5-5. Judge: JUDGE_MODEL
+ * (default claude-opus-5-5, a stricter grader). Prints the pass rate, top failures and the API cost.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { readFileSync, writeFileSync } from "node:fs";
-import { ClaudeAgent } from "../src/ai.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { ClaudeAgent, type OrderTools, type ReplyEngine } from "../src/ai.js";
 import { Bot } from "../src/bot.js";
+import { formatCatalog } from "../src/catalog.js";
 import { loadConfig } from "../src/config.js";
 import type { InstagramApi } from "../src/instagram.js";
 import type { BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
-import type { CheckoutApi } from "../src/stripe.js";
 
-const STOCK_SHEET = `Item | Colorway | Size | Qty
-Spider OG Web Hoodie | Black | XS | 5
-Spider OG Web Hoodie | Black | S | 5
-Spider OG Web Hoodie | Black | M | 5
-Spider Hoodie | Pink/Black | S | 5
-Spider Hoodie | Pink/Black | M | 5
-Essentials Hoodie | Black | XS | 5
-Essentials Hoodie | Black | L | 5
-Essentials Sweatpants | Black Uncuffed | S | 2
-Essentials Sweatpants | Black Uncuffed | M | 3
-Alo Hoodie | Black | XS | 5
-Alo Hoodie | Gray | S | 3
-Alo Hoodie | Gray | M | 3
-Alo Hoodie | Gray | L | 3
-Alo Pants | Black Uncuffed | XL | 3
-Alo Pants | Light Gray Uncuffed | L | 3
-BAPE Tee ABC Camo | Green | S/M | 4 each
-BAPE Tee Joshua Vides | - | M/L | 3 each
-BAPE Tee Big Blue Ape Head | White | M/L | 4 each
-Jeans | Blue | 32 | 6
-Valley Hoodie | Black | M | 6
-Hat | Black | - | 10
-Bleu de Chanel | - | - | 8`;
+// $ per million tokens (input, output). Cache reads 0.1x input, cache writes 1.25x input.
+const PRICES: Record<string, [number, number]> = {
+  "claude-haiku-5-5": [0.1, 0.5],
+  "claude-sonnet-5-5": [2, 10],
+  "claude-opus-5-5": [4, 20],
+};
+const usage = new Map<string, { in: number; out: number; cacheRead: number; cacheWrite: number; calls: number }>();
+// Count every Claude call (bot, customer and judge) for the cost report.
+const proto = Anthropic.Messages.prototype as unknown as { create: (...a: unknown[]) => Promise<Anthropic.Message> };
+const realCreate = proto.create;
+proto.create = async function (this: unknown, ...args: unknown[]) {
+  const res = await realCreate.apply(this, args);
+  const model = (args[0] as { model: string }).model;
+  const u = usage.get(model) ?? { in: 0, out: 0, cacheRead: 0, cacheWrite: 0, calls: 0 };
+  u.in += res.usage?.input_tokens ?? 0;
+  u.out += res.usage?.output_tokens ?? 0;
+  u.cacheRead += res.usage?.cache_read_input_tokens ?? 0;
+  u.cacheWrite += res.usage?.cache_creation_input_tokens ?? 0;
+  u.calls++;
+  usage.set(model, u);
+  return res;
+};
 
-const PERSONAS = [
-  "knows exactly what they want and wants to pay right now",
-  "asks lots of questions, slow to decide, eventually buys",
-  "haggles hard and gets annoyed when the price is firm, may argue",
-  "rude and impatient, curses, complains the bot is slow",
-  "asks for something we don't carry (a Supreme set, Gucci belt) then maybe settles for something else",
-  "lives in Greensboro, has no car, wants delivery and wants to pay cash",
-  "lives in Durham, wants delivery tomorrow afternoon",
-  "wants 12 hoodies shipped to Texas, asks about shipping cost",
-  "says Josh promised them a discount last time",
-  "wants to put a deposit down on 50 Essentials from the next restock",
-  "asks how to pay, wants to use Zelle",
-  "sends 'I paid' with a fake payment screenshot before getting a link",
-  "goes quiet after getting the link, then comes back saying 'my bad I was busy'",
-  "talks one day, comes back two days later to finally order",
-  "wants pickup at 9am or 11pm",
-  "asks if you're a bot",
-  "wants to trade their Jordans for a hoodie",
-  "asks if the items are real and if they can make money reselling",
-  "wants a Bleu de Chanel and a hat shipped",
-  "wants to start reselling and asks about vendors",
-  "opens with just 'bet' after seeing a post, then only gives a size ('size small') before saying what piece",
-  "asks for a Godspeed football tee we don't carry",
-  "asks how much for a Rolex watch",
-  "wants Chrome Hearts jeans in a size we don't have",
-  "asks 'what you got in M?'",
-  "shopping for a gift for their girlfriend, not sure what",
-  "asks for Supreme hoodies, then asks what's similar",
-  "asks for Nike Tech, gets offered something else, says nah and leaves",
+function cost(): { total: number; lines: string[] } {
+  let total = 0;
+  const lines: string[] = [];
+  for (const [model, u] of usage) {
+    const [pi, po] = PRICES[model] ?? [0, 0];
+    const c = (u.in * pi + u.cacheRead * pi * 0.1 + u.cacheWrite * pi * 1.25 + u.out * po) / 1e6;
+    total += c;
+    lines.push(`  ${model}: ${u.calls} calls, ${u.in + u.cacheRead + u.cacheWrite} in / ${u.out} out tokens = $${c.toFixed(3)}`);
+  }
+  return { total, lines };
+}
+
+interface Scenario {
+  id: string;
+  persona: string;
+  expect: string;
+  /** Customer goes quiet after the price; the bot's automatic nudge fires. */
+  quiet?: boolean;
+  /** Customer opens with a photo of an item. */
+  photo?: boolean;
+}
+
+const SCENARIOS: Scenario[] = [
+  { id: "single_piece_pickup", persona: "wants 1 Chrome Hearts tee in white XL, picking up tomorrow at 3pm, pays Cash App", expect: "Quotes $35 via quote_order, mentions the free Baccarat, sends an order summary with the free Baccarat, says all sales final, calls submit_order with cash_app." },
+  { id: "single_piece_ship", persona: "lives in Ohio, wants 1 Bleu de Chanel EDP shipped, pays Apple Pay", expect: "Quotes $60 + $10 UPS = $70, free Baccarat on the summary, submit_order with ship and apple_pay. Never offers pickup as the only option." },
+  { id: "bulk_tier_hats", persona: "reseller who wants 10 Chrome Hearts hats (any colors), pickup, cash", expect: "quote_order gives $21 each = $210. Order summary shows free Baccarat AND free G-Shock (5+ pieces). Prices from quote_order only." },
+  { id: "in_between_qty", persona: "wants 7 fragrances mixed (YSL Y EDP x4, Prada Paradoxe Parfum x3), pickup, Cash App", expect: "7 pieces on FRAGRANCES = $38 each = $266 (in-between quantity uses the highest tier reached). Free Baccarat and free G-Shock on the summary." },
+  { id: "in_between_qty_2", persona: "wants 12 Chrome Hearts hats, asks the bot to explain why 12 isn't cheaper than 10", expect: "Uses quote_order: 12 hats at $21 each = $252. Explains the per-piece price comes from the highest tier reached. Freebies on summary. Never invents a cheaper rate." },
+  { id: "tier_upsell", persona: "wants 2 Alo pieces (Alo hoodie black XS and Alo sweatpants black XL), asks if there's a deal", expect: "2 ALO pieces at $52 = $104 from quote_order. Prices firm. May mention the next tier only with numbers from quote_order/price list. Free Baccarat mentioned." },
+  { id: "sold_out_essentials", persona: "only wants an Essentials hoodie in M", expect: "Says Essentials is sold out, pitches 1-2 hoodies we DO have (Alo, Spider, Valley) with real prices, calls alert_team, offers restock list / save_interest. No handoff for this." },
+  { id: "sold_out_alo_light_gray", persona: "wants the light gray Alo pants in L", expect: "Says light gray Alo pants are sold out, offers the black Alo sweatpants (XL) or another item in stock. Never claims light gray is available." },
+  { id: "hellstar_valley", persona: "asks for a Hellstar hoodie, then asks if the Valley hoodie is a Hellstar", expect: "No Hellstar right now. Valley is its own brand, not Hellstar. Pitches Valley as Valley. Never calls Valley Hellstar." },
+  { id: "baccarat_buy", persona: "wants to buy 3 Baccarat Rouge bottles", expect: "Baccarat is never sold. Explains every order comes with 1 free Baccarat. Pitches fragrances we sell. Never quotes a Baccarat price." },
+  { id: "gshock_freebie", persona: "buying 4 Satoshi tees (any colors, sizes S and M), asks about any free stuff", expect: "Mentions free Baccarat on every order, and that at 5 pieces they'd also get a free G-Shock. Prices from quote_order. Never sells the G-Shock." },
+  { id: "rolex", persona: "asks how much for the Rolex they saw on the story", expect: "Never quotes a price or says it's for sale. Hands off to josh (handoff_to_team route josh)." },
+  { id: "gallery_dept", persona: "wants the Gallery Dept jeans in 32", expect: "Never quotes a price. Hands off to josh." },
+  { id: "haggle", persona: "wants a Valley hoodie but haggles hard for $40, gets annoyed", expect: "Prices firm ($60 from quote_order). No discount, no counter-offer. Can mention free Baccarat or bulk tier. Stays calm and professional." },
+  { id: "haggle_josh_promise", persona: "says Josh promised them 20% off last time, wants it on a Gia set", expect: "Doesn't apply any discount. Hands off to josh." },
+  { id: "photo_item", persona: "sends a photo of a tee and asks 'how much for this in XL'", photo: true, expect: "Identifies the photo as a Chrome Hearts tee (white), matches it to the sheet (White, XL in stock), quotes $35 via quote_order. Never guesses stock from the photo." },
+  { id: "quiet_buyer", persona: "asks the price of a Spider hoodie, then goes silent, then comes back later saying 'my bad i was busy, still got it?'", quiet: true, expect: "Quotes from quote_order. The automatic nudge (mentioning the free Baccarat) fires once while they're quiet. When they come back, the bot picks up where it left off without making them start over." },
+  { id: "pickup_vs_ship", persona: "can't decide between pickup and shipping, lives in Garner NC, wants 1 Godspeed tee", expect: "Explains pickup is free (10am-10pm, parking lot, address after payment), shipping $10 UPS, delivery to Garner by quote_order fee. Asks ONE question at a time. Doesn't give out the address." },
+  { id: "ship_10_plus", persona: "wants 11 Amiri button-ups shipped to Georgia (black and white, size L)", expect: "quote_order for 11 AMIRI BUTTON-UPS (10-piece tier $26 each). Says the label is provided by the buyer at 10+ pieces. Free Baccarat + G-Shock on summary." },
+  { id: "over_stock", persona: "wants 5 Alo hoodies in gray M", expect: "Only 1 Alo Hoodie Gray M in stock: says exactly how many are available and offers other Alo pieces. Never promises 5." },
+  { id: "zelle", persona: "wants a Lululemon set in pink size 4, wants to pay with Zelle", expect: "Says we take cash, Cash App or Apple Pay. No Stripe/payment link offered. Proceeds with one of those methods." },
+  { id: "i_paid", persona: "says 'I already sent the cash app' and asks when they can pick up, no order was locked in", expect: "Never confirms payment from a claim or screenshot. Hands off to josh." },
+  { id: "not_carried", persona: "wants a Supreme box logo hoodie", expect: "We don't carry it. Pitches a hoodie we have with the real price + free Baccarat. alert_team. No handoff." },
+  { id: "delivery_durham", persona: "lives in Durham, wants a Goyard bag delivered Saturday afternoon, pays cash", expect: "quote_order with delivery to Durham ($10 fee) + $50 bag = $60. Free Baccarat on summary. Uses submit_order with cash." },
+  { id: "what_you_got_m", persona: "asks 'what you got in M?' then picks something", expect: "Lists only FOR SALE items in M from the sheet (no Essentials, no Rolex). Then closes with quote_order prices and the free Baccarat." },
 ];
 
-const VOICE_CHECK = `Also grade how human the bot sounds (Josh wants it to NOT sound like a bot):
-- FAIL "sounds like a bot" if it repeats answers back flat ("Got it, S."), uses customer-service lines ("How can I assist", "I'd be happy to help", "Is there anything else"), stacks several questions in one text, or starts every text the same way.
-- FAIL "dead end" if the customer asked for something we don't have and the bot didn't offer something we DO have, or answered with "let me get someone to confirm" instead of using the stock sheet.
-- FAIL "invented" if it quoted a price or stock not on the sheet or from quote_order.`;
+function photoPath(): string {
+  const dir = path.join(os.tmpdir(), "triangle-retest");
+  const file = path.join(dir, "white-ch-tee.png");
+  if (existsSync(file)) return file;
+  mkdirSync(dir, { recursive: true });
+  return file;
+}
 
-const RULES = readFileSync(new URL("../config/agent-instructions.md", import.meta.url), "utf8");
+async function makePhoto(file: string): Promise<string> {
+  if (!existsSync(file)) {
+    const { chromium } = await import("playwright" as string);
+    const browser = await chromium.launch();
+    const page = await browser.newPage({ viewport: { width: 480, height: 520 } });
+    await page.setContent(`<body style="margin:0;background:#cfcfcf;display:flex;align-items:center;justify-content:center;height:520px">
+      <svg width="420" height="460" viewBox="0 0 420 460"><path d="M140 20 L60 60 L10 150 L80 180 L100 150 L100 440 L320 440 L320 150 L340 180 L410 150 L360 60 L280 20 Q210 70 140 20 Z" fill="#fafafa" stroke="#999" stroke-width="3"/>
+      <text x="210" y="190" font-family="UnifrakturMaguntia, 'Old English Text MT', serif" font-size="44" text-anchor="middle" fill="#111">Chrome Hearts</text>
+      <text x="210" y="250" font-family="serif" font-size="60" text-anchor="middle" fill="#111">✠</text></svg></body>`);
+    await page.screenshot({ path: file });
+    await browser.close();
+  }
+  return readFileSync(file).toString("base64");
+}
+
+const VOICE_CHECK = `Also grade how it sounds (Josh wants it to NOT sound like a bot):
+- FAIL "sounds like a bot" only for clear cases: customer-service lines ("How can I assist", "I'd be happy to help", "Is there anything else"), or stacking 3+ questions in one text.
+- FAIL "invented" if it stated any price, total, tier, stock count or fee that isn't on the stock sheet or returned by quote_order / submit_order.`;
 
 async function main() {
   const n = Number(process.argv[2] ?? 50);
   const out = process.argv[3] ?? "ai-retest-report.json";
+  const concurrency = Number(process.env.RETEST_CONCURRENCY ?? 5);
+  const judgeModel = process.env.JUDGE_MODEL ?? "claude-opus-5-5";
+  const customerModel = process.env.CUSTOMER_MODEL ?? "claude-haiku-5-5";
   const env = { IG_APP_SECRET: "x", IG_ACCESS_TOKEN: "x", IG_VERIFY_TOKEN: "x", ...process.env } as NodeJS.ProcessEnv;
   const config = loadConfig(env);
   const client = new Anthropic({ apiKey: config.anthropicApiKey });
-  const results: unknown[] = [];
+  const catalogText = formatCatalog(config.pricing.stock ?? [], config.pricing.tables);
+  const catalog = { pricing: config.pricing, text: catalogText };
+  const photo = SCENARIOS.some((s) => s.photo) ? await makePhoto(photoPath()) : "";
+  const results: { id: string; run: number; persona: string; transcript: string[]; tools: string[]; grade: { pass?: boolean; violations?: string[]; notes?: string } }[] = [];
 
-  for (let i = 0; i < n; i++) {
-    const persona = PERSONAS[i % PERSONAS.length];
+  async function runOne(i: number) {
+    const sc = SCENARIOS[i % SCENARIOS.length];
     const transcript: string[] = [];
-    const sent: string[] = [];
-    const ig: InstagramApi = {
-      sendText: async (_to, text) => { sent.push(text); transcript.push(`BOT: ${text}`); return `m${sent.length}`; },
-      sendPrivateReply: async () => "m", replyToComment: async () => {}, getUsername: async () => "tester",
-    };
-    const checkout: CheckoutApi = { create: async () => ({ id: `cs_${i}`, url: `https://checkout.stripe.com/test_${i}_${sent.length}`, expiresAt: 0 }) };
     const tools: string[] = [];
-    const notify = async (a: { reason: string; route: string; paused?: boolean }) => { tools.push(`${a.paused === false ? "alert" : "handoff"}(${a.route}): ${a.reason}`); };
-    const busy: BusyBlock[] = [{ start: "2026-11-06T20:00:00Z", end: "2026-11-06T20:30:00Z" }];
+    const clock = { t: Date.now() };
+    const ig: InstagramApi = {
+      sendText: async (_to, text) => {
+        transcript.push(`BOT: ${text}`);
+        return `m${transcript.length}`;
+      },
+      sendPrivateReply: async () => "m",
+      replyToComment: async () => {},
+      getUsername: async () => "tester",
+    };
+    const real = new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase);
+    // Log every tool result so the judge can check prices against what quote_order really returned.
+    const agent: ReplyEngine = {
+      reply: (h, inv, t?: OrderTools, sched?) => {
+        if (!t) return real.reply(h, inv, t, sched);
+        const wrapped: OrderTools = {
+          quote: (items, f, area) => {
+            const r = t.quote(items, f, area);
+            tools.push(`quote_order(${JSON.stringify(items)}, ${f}${area ? `, ${area}` : ""}) -> ${r}`);
+            return r;
+          },
+          submitOrder: t.submitOrder
+            ? async (...a) => {
+                const r = await t.submitOrder!(...a);
+                tools.push(`submit_order(${JSON.stringify(a)}) -> ${JSON.stringify(r)}`);
+                return r;
+              }
+            : undefined,
+        };
+        return real.reply(h, inv, wrapped, sched);
+      },
+    };
+    const notify = async (a: { reason: string; route: string; paused?: boolean; summary?: string }) => {
+      tools.push(`${a.paused === false ? "alert_team" : "handoff"}(${a.route}): ${a.reason} | ${a.summary ?? ""}`);
+    };
+    const busy: BusyBlock[] = [];
+    const store = new Store(() => clock.t);
     const bot = new Bot({
-      ig, agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
-      store: new Store(), notify, getInventory: async () => STOCK_SHEET, accountName: config.accountName, keywords: config.keywords,
-      publicCommentReplies: [], humanPauseHours: 12, pricing: config.pricing, checkout, getBusy: async () => busy,
+      ig, agent, store, notify, getInventory: async () => catalogText, getCatalog: async () => catalog,
+      accountName: config.accountName, keywords: config.keywords, publicCommentReplies: [], humanPauseHours: 12,
+      pricing: config.pricing, getBusy: async () => busy, now: () => new Date(clock.t),
+      fetchImage: async () => ({ mediaType: "image/png", data: photo }),
     });
 
-    const customerSystem = `You are role-playing an Instagram customer DMing @triangleresells, a clothing/cologne resale shop near Raleigh NC. Persona: ${persona}. Write ONE short DM at a time, like a real person texting. Stay in character. When the conversation is clearly over (paid, said bye, or handed to a human), reply exactly END.`;
+    const quietRule = sc.quiet
+      ? " After the shop tells you a price, your NEXT reply must be exactly SILENT (you go quiet). After that, continue as the persona."
+      : "";
+    const photoRule = sc.photo ? " Your first DM is about a photo you're attaching; don't describe what's in the photo." : "";
+    const customerSystem = `You are role-playing an Instagram customer DMing @triangleresells, a clothing/fragrance resale shop near Raleigh NC. Persona: ${sc.persona}. Write ONE short DM at a time, like a real person texting. Stay in character.${quietRule}${photoRule} When the conversation is clearly over (order locked in, said bye, or handed to a human), reply exactly END.`;
     const convo: Anthropic.MessageParam[] = [{ role: "user", content: "Start the conversation with your first DM." }];
-    for (let turn = 0; turn < 8; turn++) {
-      const c = await client.messages.create({ model: config.claudeModel, max_tokens: 150, system: customerSystem, messages: convo });
+    let wentQuiet = false;
+    for (let turn = 0; turn < 9; turn++) {
+      const c = await client.messages.create({ model: customerModel, max_tokens: 150, system: customerSystem, messages: convo });
       const msg = c.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
       if (!msg || msg === "END") break;
-      transcript.push(`CUSTOMER: ${msg}`);
-      const before = sent.length;
-      await bot.handle({ object: "instagram", entry: [{ id: "own", messaging: [{ sender: { id: `u${i}` }, recipient: { id: "own" }, message: { mid: `${i}-${turn}`, text: msg } }] }] });
-      const reply = sent.slice(before).join("\n") || "(bot stayed quiet: paused for a human)";
+      const before = transcript.length;
+      if (msg === "SILENT" && !wentQuiet) {
+        wentQuiet = true;
+        transcript.push("(customer goes quiet for 2 hours)");
+        clock.t += 120 * 60_000;
+        await bot.followUpUnpaid();
+        const nudge = transcript.slice(before + 1).join("\n") || "(no nudge was sent)";
+        convo.push({ role: "assistant", content: "(no reply)" }, { role: "user", content: `${nudge}\n\n(Some time passed. Continue as the customer.)` });
+        continue;
+      }
+      transcript.push(`CUSTOMER: ${msg}${sc.photo && turn === 0 ? " [photo attached]" : ""}`);
+      clock.t += 60_000;
+      const message: Record<string, unknown> = { mid: `${i}-${turn}`, text: msg };
+      if (sc.photo && turn === 0) message.attachments = [{ type: "image", payload: { url: "https://example.com/photo.png" } }];
+      await bot.handle({ object: "instagram", entry: [{ id: "own", messaging: [{ sender: { id: `u${i}` }, recipient: { id: "own" }, message: message as never }] }] });
+      const reply = transcript.slice(before + 1).join("\n") || "(bot stayed quiet: handed to Josh)";
       convo.push({ role: "assistant", content: msg }, { role: "user", content: reply });
+      if (store.isPaused(`u${i}`)) break;
     }
 
     const judge = await client.messages.create({
-      model: config.claudeModel, max_tokens: 600,
-      system: "You grade a DM sales bot strictly against its rules. Reply with JSON only: {\"pass\": boolean, \"violations\": [string], \"notes\": string}.",
-      messages: [{ role: "user", content: `RULES:\n${RULES}\n\n${VOICE_CHECK}\n\nTOOLS/ALERTS THE BOT FIRED:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}` }],
-    });
+      model: judgeModel,
+      max_tokens: 2000,
+      output_config: { effort: "low" },
+      system:
+        "You grade a DM sales bot strictly against its rules and the scenario's expected behavior. Judge only what the BOT wrote and did, not the customer. Reply with JSON only: {\"pass\": boolean, \"violations\": [string], \"notes\": string}. Each violation is a short label then a colon then specifics, e.g. \"invented: said $50 for 2 hats\". Only fail for real rule breaks, not style nitpicks.",
+      messages: [
+        {
+          role: "user",
+          content: `RULES:\n${config.agentInstructions}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
+        },
+      ],
+    } as Anthropic.MessageCreateParamsNonStreaming);
     const text = judge.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-    let grade: unknown;
-    try { grade = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)); } catch { grade = { pass: false, violations: ["judge reply unreadable"], notes: text }; }
-    results.push({ id: i, persona, transcript, tools, grade });
-    console.log(`${i + 1}/${n} ${(grade as { pass?: boolean }).pass ? "✅" : "❌"} ${persona}`);
+    let grade: { pass?: boolean; violations?: string[]; notes?: string };
+    try {
+      grade = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    } catch {
+      grade = { pass: false, violations: ["judge reply unreadable"], notes: text };
+    }
+    results.push({ id: sc.id, run: i, persona: sc.persona, transcript, tools, grade });
+    console.log(`${results.length}/${n} ${grade.pass ? "PASS" : "FAIL"} ${sc.id}${grade.pass ? "" : `: ${(grade.violations ?? []).join(" | ").slice(0, 200)}`}`);
   }
-  writeFileSync(out, JSON.stringify(results, null, 1));
-  const failed = results.filter((r) => !(r as { grade: { pass?: boolean } }).grade.pass) as { persona: string; grade: { violations?: string[] } }[];
-  const counts = new Map<string, number>();
-  for (const f of failed) for (const v of f.grade.violations ?? []) counts.set(v.slice(0, 80), (counts.get(v.slice(0, 80)) ?? 0) + 1);
-  console.log(`\n${results.length - failed.length}/${results.length} passed`);
-  for (const [v, c] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 15)) console.log(`  ${c}x ${v}`);
+
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, n) }, async () => {
+      while (next < n) {
+        const i = next++;
+        try {
+          await runOne(i);
+        } catch (err) {
+          console.error(`run ${i} crashed:`, err);
+          results.push({ id: SCENARIOS[i % SCENARIOS.length].id, run: i, persona: "", transcript: [], tools: [], grade: { pass: false, violations: [`crashed: ${String(err).slice(0, 120)}`] } });
+        }
+      }
+    }),
+  );
+
+  results.sort((a, b) => a.run - b.run);
+  const failed = results.filter((r) => !r.grade.pass);
+  const byLabel = new Map<string, number>();
+  for (const f of failed) for (const v of f.grade.violations ?? []) {
+    const label = v.split(":")[0].trim().toLowerCase().slice(0, 60);
+    byLabel.set(label, (byLabel.get(label) ?? 0) + 1);
+  }
+  const c = cost();
+  const summary = {
+    passed: results.length - failed.length,
+    total: results.length,
+    passRate: `${(((results.length - failed.length) / Math.max(1, results.length)) * 100).toFixed(1)}%`,
+    costUsd: Number(c.total.toFixed(4)),
+    failedScenarios: failed.map((f) => `${f.id}#${f.run}`),
+    topFailures: [...byLabel].sort((a, b) => b[1] - a[1]).slice(0, 10),
+  };
+  writeFileSync(out, JSON.stringify({ summary, usage: Object.fromEntries(usage), results }, null, 1));
+  console.log(`\n${summary.passed}/${summary.total} passed (${summary.passRate})`);
+  console.log("Top failures:");
+  for (const [v, k] of summary.topFailures) console.log(`  ${k}x ${v}`);
+  console.log(`Cost: $${c.total.toFixed(3)}`);
+  for (const l of c.lines) console.log(l);
   console.log(`Saved ${out}`);
 }
 

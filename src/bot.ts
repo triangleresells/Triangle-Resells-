@@ -3,7 +3,8 @@ import type { KeywordRule } from "./config.js";
 import type { Notifier } from "./handoff.js";
 import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
-import { describeQuote, quoteOrder, type PricingConfig } from "./pricing.js";
+import { freebiesOf } from "./catalog.js";
+import { describeQuote, quoteOrder, type PricingConfig, type Quote } from "./pricing.js";
 import { matchCustomers } from "./customers.js";
 import type { ChatImage, Customer, Store } from "./store.js";
 import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
@@ -26,6 +27,10 @@ export interface BotDeps {
   debounceMs?: number;
   /** Price list for exact quotes. Without it the bot can't quote or sell. */
   pricing?: PricingConfig;
+  /** Live stock + prices from the warehouse sheet. When set, it replaces getInventory and pricing on every reply. */
+  getCatalog?: () => Promise<{ pricing: PricingConfig; text: string }>;
+  /** A buyer who got a quote and then went quiet gets ONE nudge after this many minutes (default 90). 0 = off. */
+  quietNudgeMinutes?: number;
   /** Stripe. Without it the bot quotes but hands off to the team to take payment. */
   checkout?: CheckoutApi;
   /** Downloads a DM picture so the AI can see it. Defaults to a plain fetch. */
@@ -37,6 +42,18 @@ export interface BotDeps {
 }
 
 const MAX_IMAGE_BYTES = 4_500_000;
+
+/** "Baccarat Rouge (B tier)" -> "Baccarat Rouge": what buyers are told they get free. */
+export function giftName(item: string): string {
+  return item.replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** Sent once to a buyer who got a quote and went quiet, with the free gift as the hook. */
+export function quietNudgeText(summary: string, gift?: string): string {
+  const order = summary.length > 100 ? `${summary.slice(0, 97)}...` : summary;
+  const hook = gift ? ` Just so you know, every order comes with a free ${giftName(gift)}.` : "";
+  return `Hey, still got you on the ${order}.${hook} Want me to lock it in?`;
+}
 
 /** Sent once when a payment link expires unpaid. If they answer, the AI sends a fresh link. */
 export function followUpText(summary: string): string {
@@ -171,10 +188,10 @@ export class Bot {
       return;
     }
 
-    const [inventory, busy] = await Promise.all([this.d.getInventory(), this.busy()]);
+    const [catalog, busy] = await Promise.all([this.catalog(), this.busy()]);
     const schedule = scheduleText(busy, this.now());
     const started = Date.now();
-    const result = await this.d.agent.reply(this.d.store.history(userId), inventory, this.orderTools(userId), schedule);
+    const result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
     console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
@@ -209,63 +226,106 @@ export class Bot {
     return got.filter((g): g is ChatImage => !!g);
   }
 
-  /** Quote and checkout actions for one customer. Prices always come from the price list, never the AI. */
-  private orderTools(userId: string): OrderTools | undefined {
-    const pricing = this.d.pricing;
+  private async catalog(): Promise<{ pricing?: PricingConfig; text: string }> {
+    if (this.d.getCatalog) {
+      try {
+        return await this.d.getCatalog();
+      } catch (err) {
+        console.error("[bot] catalog failed, using the saved price list:", err);
+      }
+    }
+    return { pricing: this.d.pricing, text: await this.d.getInventory() };
+  }
+
+  /** Checks an order is sellable and the day/time works. Shared by Stripe links and cash/Cash App/Apple Pay orders. */
+  private async settle(
+    pricing: PricingConfig,
+    items: Parameters<OrderTools["quote"]>[0],
+    fulfillment: Parameters<OrderTools["quote"]>[1],
+    fulfillDate: string,
+    fulfillTime: string | undefined,
+    deliveryArea: string | undefined,
+  ): Promise<{ ok: false; error: string; fixable?: boolean } | { ok: true; q: Quote; fulfillDate: string; fulfillTime?: string; note?: string }> {
+    const q = quoteOrder(pricing, items, fulfillment, deliveryArea);
+    if (q.problems.length) {
+      // Too far or unknown town: the AI can fix it (ship, meet halfway, or ask the town).
+      const fixable = q.problems.every((p) => p.startsWith("Too far") || p.startsWith("Delivery area") || /not in stock|Only \d+ of|sold out/.test(p));
+      return { ok: false, error: q.problems.join("; "), fixable };
+    }
+    if (!q.lines.length) return { ok: false, error: "no items" };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "")) return { ok: false, error: "fulfill_date must be YYYY-MM-DD", fixable: true };
+    const now = this.now();
+    const today = etParts(now);
+    let note: string | undefined;
+    if (fulfillment === "pickup") {
+      const problem = pickupProblem(fulfillDate, fulfillTime, await this.busy(), now);
+      if (problem) return { ok: false, error: problem, fixable: true };
+    } else if (fulfillment === "delivery") {
+      const problem = deliveryProblem(fulfillDate, fulfillTime, q.delivery!.minutes, await this.busy(), now);
+      if (problem) return { ok: false, error: problem, fixable: true };
+    } else {
+      // Ships the day it's paid before 7pm ET, otherwise the next day.
+      const earliest = today.minutes < SHIP_CUTOFF_MIN ? today.date : addDays(today.date, 1);
+      if (fulfillDate < earliest) {
+        fulfillDate = earliest;
+        note = `It's past 7pm ET, so this ships ${earliest} (tell the customer it ships tomorrow).`;
+      }
+      fulfillTime = undefined;
+    }
+    return { ok: true, q, fulfillDate, fulfillTime, note };
+  }
+
+  /** Quote and order actions for one customer. Prices always come from the price list, never the AI. */
+  private orderTools(userId: string, pricing = this.d.pricing): OrderTools | undefined {
     if (!pricing) return undefined;
-    return {
+    const tools: OrderTools = {
       quote: (items, fulfillment, deliveryArea) => {
         const q = quoteOrder(pricing, items, fulfillment, deliveryArea);
-        const issues = q.problems.length ? ` PROBLEMS (hand these to the team): ${q.problems.join("; ")}` : "";
+        const issues = q.problems.length ? ` PROBLEMS: ${q.problems.join("; ")}` : "";
+        if (q.lines.length && !this.d.checkout) {
+          // Remember the quote so a buyer who goes quiet gets one nudge (with the free gift).
+          this.d.store.setPendingLink(userId, { url: "", summary: itemList(q), createdAt: this.now().getTime() });
+        }
         return q.lines.length ? describeQuote(q) + issues : `Nothing could be priced.${issues}`;
       },
-      checkout: async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea) => {
+    };
+    if (!this.d.checkout) {
+      tools.submitOrder = async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea, payment) => {
+        const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
+        if (!r.ok) return r;
+        this.d.store.clearPendingLink(userId);
+        this.d.store.addInterest(userId, itemList(r.q));
+        const when = r.fulfillTime ? `${r.fulfillDate} ${r.fulfillTime}` : r.fulfillDate;
+        const summary = `${describeQuote(r.q)}; ${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}; pays by ${payment}`;
+        return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note };
+      };
+      return tools;
+    }
+    tools.checkout = async (items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea) => {
         if (!this.d.checkout) return { ok: false, error: "card checkout isn't set up yet" };
-        const q = quoteOrder(pricing, items, fulfillment, deliveryArea);
-        if (q.problems.length) {
-          // Too far or unknown town: the AI can fix it (ship, meet halfway, or ask the town).
-          const fixable = q.problems.every((p) => p.startsWith("Too far") || p.startsWith("Delivery area"));
-          return { ok: false, error: q.problems.join("; "), fixable };
-        }
-        if (!q.lines.length) return { ok: false, error: "no items" };
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "")) return { ok: false, error: "fulfill_date must be YYYY-MM-DD", fixable: true };
+        const r = await this.settle(pricing, items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea);
+        if (!r.ok) return r;
+        const { q, fulfillDate, fulfillTime, note } = r;
         const now = this.now();
-        const today = etParts(now);
-        let note: string | undefined;
-        if (fulfillment === "pickup") {
-          const problem = pickupProblem(fulfillDate, fulfillTime, await this.busy(), now);
-          if (problem) return { ok: false, error: problem, fixable: true };
-        } else if (fulfillment === "delivery") {
-          const problem = deliveryProblem(fulfillDate, fulfillTime, q.delivery!.minutes, await this.busy(), now);
-          if (problem) return { ok: false, error: problem, fixable: true };
-        } else {
-          // Ships the day it's paid before 7pm ET, otherwise the next day.
-          const earliest = today.minutes < SHIP_CUTOFF_MIN ? today.date : addDays(today.date, 1);
-          if (fulfillDate < earliest) {
-            fulfillDate = earliest;
-            note = `It's past 7pm ET, so this ships ${earliest} (tell the customer it ships tomorrow).`;
-          }
-          fulfillTime = undefined;
-        }
         const summary = describeQuote(q);
-        const itemList = q.lines.map((l) => `${l.qty}x ${[l.name, l.variant, l.size].filter(Boolean).join(" ")}`).join(", ");
+        const list = itemList(q);
         try {
           const link = await this.d.checkout.create(q, {
             igUserId: userId,
             account: this.d.accountName,
             fulfillDate,
             fulfillTime: fulfillTime?.trim() || undefined,
-            summary: itemList,
+            summary: list,
           });
-          this.d.store.setPendingLink(userId, { url: link.url, summary: itemList, createdAt: now.getTime() });
-          this.d.store.addInterest(userId, itemList);
+          this.d.store.setPendingLink(userId, { url: link.url, summary: list, createdAt: now.getTime() });
+          this.d.store.addInterest(userId, list);
           return { ok: true, url: link.url, total: q.total, summary, note };
         } catch (err) {
           console.error("[bot] checkout failed:", err);
           return { ok: false, error: "payment link failed" };
         }
-      },
     };
+    return tools;
   }
 
   private now(): Date {
@@ -282,12 +342,29 @@ export class Bot {
    */
   async followUpUnpaid(): Promise<number> {
     if (!this.isOn()) return 0;
-    const due = this.d.store.duePendingLinks(this.now().getTime() - HOLD_MINUTES * 60 * 1000);
+    const now = this.now().getTime();
+    const quietMin = this.d.quietNudgeMinutes ?? 90;
+    const linkDue = this.d.store.duePendingLinks(now - HOLD_MINUTES * 60 * 1000).filter((d) => d.link.url);
+    const quietDue = quietMin > 0 ? this.d.store.duePendingLinks(now - quietMin * 60 * 1000).filter((d) => !d.link.url) : [];
+    let gift: string | undefined;
+    if (quietDue.length) {
+      const { pricing } = await this.catalog();
+      gift = freebiesOf(pricing?.stock ?? []).find((f) => f.minPieces <= 1)?.item;
+    }
     let sent = 0;
-    for (const { userId, link } of due) {
-      this.d.store.markFollowedUp(userId);
-      if (this.d.store.isPaused(userId)) continue;
-      await this.inOrder(userId, () => this.send(userId, followUpText(link.summary))).catch((err) =>
+    for (const { userId, link } of [...linkDue, ...quietDue]) {
+      // Quiet nudge: only if our message was the last one (they never answered) and Instagram's 24h window is open.
+      if (!link.url) {
+        const last = this.d.store.history(userId).at(-1);
+        if (last?.role !== "assistant") continue;
+        this.d.store.markFollowedUp(userId);
+        if (this.d.store.isPaused(userId) || !this.d.store.canMessage(userId)) continue;
+      } else {
+        this.d.store.markFollowedUp(userId);
+        if (this.d.store.isPaused(userId)) continue;
+      }
+      const text = link.url ? followUpText(link.summary) : quietNudgeText(link.summary, gift);
+      await this.inOrder(userId, () => this.send(userId, text)).catch((err) =>
         console.error("[bot] follow-up failed:", err),
       );
       sent++;
@@ -349,6 +426,8 @@ export class Bot {
     }
     console.log(`[bot] sent reply to ${userId} (${bubbles.length} message${bubbles.length > 1 ? "s" : ""}, ${text.length} chars)`);
     this.d.store.addTurn(userId, { role: "assistant", text: bubbles.join("\n\n") });
+    // The quiet-buyer clock starts at our last message.
+    this.d.store.touchQuote(userId, this.now().getTime());
   }
 
   private async onComment(ownId: string, c: CommentValue): Promise<void> {
@@ -395,6 +474,10 @@ function describeAttachments(msg: NonNullable<MessagingEvent["message"]>): strin
   if (types.length) return `[Customer sent: ${types.join(", ")}]`;
   if (msg.is_unsupported) return "[Customer sent a message type the bot can't read]";
   return "[Customer sent an empty message]";
+}
+
+function itemList(q: Quote): string {
+  return q.lines.map((l) => `${l.qty}x ${[l.name, l.variant, l.size].filter(Boolean).join(" ")}`).join(", ");
 }
 
 /** Most texts a single reply is sent as. Anything past this is joined onto the last one. */

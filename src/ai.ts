@@ -15,10 +15,22 @@ export interface AgentReply {
   interests?: string[];
 }
 
-/** Order actions the AI can take for the customer it's talking to. Prices always come from config/pricing.json. */
+export type PaymentMethod = "cash" | "cash_app" | "apple_pay";
+
+/** Order actions the AI can take for the customer it's talking to. Prices always come from the warehouse sheet. */
 export interface OrderTools {
   quote(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): string;
-  checkout(
+  /** No Stripe: lock in the order and hand it to Josh to collect cash, Cash App or Apple Pay. */
+  submitOrder?(
+    items: OrderItem[],
+    fulfillment: Fulfillment,
+    fulfillDate: string,
+    fulfillTime: string | undefined,
+    deliveryArea: string | undefined,
+    payment: PaymentMethod,
+  ): Promise<{ ok: true; total: number; summary: string; freebies: string[]; note?: string } | { ok: false; error: string; fixable?: boolean }>;
+  /** Stripe payment link. Only when STRIPE_ENABLED=true. */
+  checkout?(
     items: OrderItem[],
     fulfillment: Fulfillment,
     fulfillDate: string,
@@ -33,13 +45,13 @@ export interface ReplyEngine {
 
 const ITEMS_SCHEMA = {
   type: "array",
-  description: "Every item in the order. One entry per product + variant + size.",
+  description: "Every PAID item in the order, one entry per item + color + size. Never include the free Baccarat or G-Shock: they're added automatically.",
   items: {
     type: "object",
     properties: {
-      product: { type: "string", description: "Product key from the PRODUCT KEYS list, e.g. alo_hoodie." },
-      variant: { type: "string", description: "Colorway or scent, e.g. Gray, Pink/Black, Bleu de Chanel." },
-      size: { type: "string", description: "XS, S, M, L, XL, a shoe size, or blank for colognes." },
+      product: { type: "string", description: "Item name exactly as on the stock sheet, e.g. Alo Hoodie, Chrome Hearts Tee, Bleu de Chanel EDP." },
+      variant: { type: "string", description: "Color exactly as on the stock sheet, e.g. Gray, Black/Pink. Blank for fragrances and bags." },
+      size: { type: "string", description: "Size as on the stock sheet: XS, S, M, L, XL, a waist size like 32, or blank for fragrances, hats and bags." },
       qty: { type: "integer", minimum: 1 },
     },
     required: ["product", "qty"],
@@ -120,6 +132,23 @@ export const TOOLS = [
         delivery_area: DELIVERY_AREA_SCHEMA,
       },
       required: ["items", "fulfillment", "fulfill_date"],
+    },
+  },
+  {
+    name: "submit_order",
+    description:
+      "Lock in a confirmed order and hand it to Josh to collect payment (cash, Cash App or Apple Pay). Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery) and the payment method are all settled, and after you sent the order summary and said all sales are final. It pauses the bot in this chat so Josh can take over.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        items: ITEMS_SCHEMA,
+        fulfillment: FULFILLMENT_SCHEMA,
+        fulfill_date: { type: "string", description: "YYYY-MM-DD of the pickup, delivery or ship day." },
+        fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Blank for shipping." },
+        delivery_area: DELIVERY_AREA_SCHEMA,
+        payment: { type: "string", enum: ["cash", "cash_app", "apple_pay"], description: "How they'll pay." },
+      },
+      required: ["items", "fulfillment", "fulfill_date", "payment"],
     },
   },
   {
@@ -204,6 +233,11 @@ export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
 
 const MAX_ROUNDS = 5;
 
+/** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
+export function toolsFor(tools?: OrderTools) {
+  return TOOLS.filter((t) => (t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : true));
+}
+
 /** Adds a text note to the last customer turn (the API needs user and assistant turns to alternate). */
 export function withNote(messages: Anthropic.MessageParam[], note: string): Anthropic.MessageParam[] {
   const out = [...messages];
@@ -243,7 +277,7 @@ export class ClaudeAgent implements ReplyEngine {
         max_tokens: 500,
         system,
         messages,
-        tools: TOOLS,
+        tools: toolsFor(tools),
       });
 
       const texts: string[] = [];
@@ -269,7 +303,17 @@ export class ClaudeAgent implements ReplyEngine {
           content = "Ordering isn't available right now. Hand off to the team.";
         } else if (block.name === "quote_order") {
           content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
-        } else if (block.name === "create_checkout_link") {
+        } else if (block.name === "submit_order" && tools.submitOrder) {
+          const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment);
+          if (r.ok) {
+            handoff = { route: "josh", reason: `new order, pays by ${String(input.payment).replace("_", " ")}`, summary: r.summary };
+            content = `Order locked in and sent to Josh: total $${r.total}${r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : ""}.${r.note ? ` ${r.note}` : ""} Write ONE short text: Josh will hit them up right here with the ${String(input.payment).replace("_", " ")} info to lock it in. Don't send the order again.`;
+          } else if (r.fixable) {
+            content = `Could not lock it in: ${r.error}. Tell the customer what's wrong and offer the closest fix (another open time, an in-stock color or size, shipping or meeting halfway), then try again once they pick.`;
+          } else {
+            content = `Could not lock it in: ${r.error}. Hand off to josh.`;
+          }
+        } else if (block.name === "create_checkout_link" && tools.checkout) {
           const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area);
           if (r.ok) {
             checkoutUrl = r.url;
@@ -305,7 +349,7 @@ export class ClaudeAgent implements ReplyEngine {
             messages,
             "(Note from the system, not the customer: write your DM reply to the customer now. If we don't have what they asked for, say so and offer what we do have in stock.)",
           ),
-          tools: TOOLS,
+          tools: toolsFor(tools),
           tool_choice: { type: "none" },
         });
         text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();

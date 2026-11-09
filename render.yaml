@@ -3,9 +3,12 @@ services:
     name: triangle-ai-dm
     runtime: node
     plan: starter
+    # Deploys this branch. Change it here (or in Render's Settings) when this work is merged.
+    branch: ai-dm-checkout-calendar
+    autoDeploy: true
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
-    healthCheckPath: /
+    healthCheckPath: /health
     # Small database (chats, follow-ups, customer list) lives on this disk so redeploys don't wipe it.
     disk:
       name: bot-data
@@ -33,14 +36,17 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: INVENTORY_SHEET_CSV_URL
+      # Stock + prices: the whole service account key file (JSON). Share the sheet with its client_email as Viewer.
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
         sync: false
+      # TRIANGLERESELLS WAREHOUSE STOCK (BOT STOCK + BOT PRICES tabs). Not a secret: the sheet stays private.
+      - key: WAREHOUSE_SHEET_ID
+        value: 1hZQltkbmqhN4acr959K7cNxUcvLW-P38Ut60O805wOw
       - key: HANDOFF_WEBHOOK_URL
         sync: false
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
+      # No Stripe links right now: buyers pay cash, Cash App or Apple Pay through Josh.
+      - key: STRIPE_ENABLED
+        value: "false"
       # Pickup spot, sent only after payment. Street only, no unit number: every pickup is in the parking lot.
       - key: WAREHOUSE_ADDRESS
         value: Ample Storage, 1260 Partin Rd, Raleigh, NC 27610
@@ -57,5 +63,6 @@ services:
       # How long the bot stays quiet in a chat after a handoff or after the team types in it.
       - key: HUMAN_PAUSE_MINUTES
         value: "720"
-      - key: HUMAN_PAUSE_HOURS
-        value: "12"
+      # A buyer who got a price and went quiet gets ONE nudge (with the free Baccarat) after this many minutes. 0 = off.
+      - key: QUIET_NUDGE_MINUTES
+        value: "90"

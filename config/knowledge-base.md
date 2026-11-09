@@ -5,32 +5,19 @@ ABOUT US
 - Support email: triangleresells@gmail.com
 
 === PART 1: PHYSICAL PRODUCTS ===
-- Everything is brand new, never worn, top quality.
-- Clothing sizes are mostly XS to XL (varies by brand). Colognes are mostly 150ml.
-- Live stock is in the LIVE STOCK SHEET below and in the "in stock" Instagram highlight (updated daily). Only sell what the sheet shows.
-- Restock: Spider, Alo and Essentials hoodies and pants land Friday November 6. More colognes are coming in. If no restock date is known: "Restock is coming soon, I'll DM you first when it lands."
-- Restock items can be paid for now, but they can't be picked up or shipped before the day they land. Before Friday November 6, set the pickup or ship date for Spider, Alo and Essentials to November 6 or later ("they land Friday, lock it in now and pull up Fri").
-
-PRODUCT KEYS (use these in quote_order and create_checkout_link)
-- alo_hoodie, alo_pants, spider_hoodie, hellstar_hoodie: $55 for 1
-- essentials_hoodie, essentials_sweatpants: $50 for 1
-- bape_tee, chrome_tee (Chrome Hearts), amiri_tee, hellstar_tee: $35 for 1
-- cologne: every fragrance is $60 for 1 (Bleu de Chanel, Dior, Baccarat, Valentino, Prada fragrances, etc.; put the brand and scent in variant). Only exception: Louis Vuitton.
-- lv_cologne (Louis Vuitton fragrances): $65 for 1
-- golf_iron_set (TaylorMade P790, 7 sticks): $400 a set
-- jordan_12_flu_game: $50 a pair
-- jeans: $70 a pair
-- valley_hoodie (Valley hoodies): $60 each
-- hat: $30 each
-- Valley hoodies and hats have no bulk pricing: same price no matter how many. Don't offer a bulk rate or tier upsell on them.
-- Bulk prices for jeans are coming. Until then quote_order charges $70 a pair for any quantity.
-- Anything else (Valentino or Prada clothing, shoes not listed, anything not in this list) has no set price yet: say Josh will confirm it, call alert_team, and keep closing the rest.
-- Prices are back to normal: no liquidation or sale prices. Only quote what quote_order returns.
+- Everything is brand new, never worn.
+- Stock and prices come ONLY from the LIVE STOCK SHEET below (Josh's warehouse sheet, BOT STOCK and BOT PRICES tabs). This knowledge base has no prices or stock on purpose.
+- What we carry right now (only what the sheet lists as FOR SALE): Alo hoodies and sweatpants, Spider hoodies, Valley hoodies and tees, Chrome Hearts tees and hats, BAPE tees, Amiri button-ups, Satoshi tees, Godspeed tees, ERD (Enfant Riches Deprimes) tees, Purple jeans, Gia sets, Lululemon sets, Gucci and Goyard bags, and fragrances (Tom Ford, Bleu de Chanel, Gucci, Creed, Versace, Armani, YSL, Valentino, Prada).
+- Valley is its own brand, not Hellstar. We have no Hellstar right now.
+- Sold out: Essentials (all of it) and the light gray Alo pants.
+- Not for sale: the Rolex and the Gallery Dept jeans. Josh handles those personally.
+- Freebies: every order gets 1 free Baccarat Rouge. Orders of 5+ pieces also get a free G-Shock. Neither one is ever sold.
+- Restock dates: none confirmed right now. Say "Restock is coming soon, I'll DM you first when it lands." Never make up a date.
 
 BULK PRICING
-- No minimum. The per-piece price drops the more of the SAME product they buy. Mixed sizes and colorways of the same product count together, but different products are priced separately (5 Alo hoodies get the 5-piece Alo rate; a BAPE tee is priced on its own).
-- quote_order always has the right numbers. Never quote a bulk price from memory.
-- Examples to mention: hoodies drop from $55 for 1 to $50 each for 3; tees drop from $35 for 1 to $31 each for 3.
+- No minimum. The per-piece price drops the more pieces they buy from the SAME price list (each sheet row says its price list, e.g. ALO, CHROME TEES, FRAGRANCES). Every item, size and color on the same price list counts together; different price lists are priced separately.
+- In-between quantities use the per-piece price of the highest tier reached (12 pieces on a list with 10 and 15 tiers = the 10-piece price).
+- Prices are firm. quote_order always has the right numbers. Never quote a bulk price from memory.
 
 PICKUP, SHIPPING AND DELIVERY
 - Warehouse pickup is free and the default for local buyers (Raleigh, Durham, Wake, Johnston). Local delivery is also available (below). Pickups are in the warehouse parking lot: Josh brings the order out. Pickup hours: every day 10 AM to 10 PM (last pickup 9:30 PM). Some times get taken; the PICKUP SCHEDULE shows which, so only offer open times. The address is sent after payment.
@@ -41,10 +28,10 @@ PICKUP, SHIPPING AND DELIVERY
 - Local delivery: Josh drops off orders himself. The fee is by drive time from the warehouse: 20 min or less $5, 20 to 30 min $10, 30 to 45 min $15, 45 min to 1 hour $20. quote_order works out the fee from the town.
 - Nothing over 1 hour away gets delivered, no matter how big the order. Those buyers can get it shipped, or meet Josh halfway (someone in Greensboro meets in Durham).
 - Deliveries happen 10 AM to 10 PM. When there are several on one day, the farthest one goes first.
-- Some local deliveries can be paid in cash, but only Josh sets those up.
+- Payment: cash, Cash App or Apple Pay. Josh sends the payment info once the order is locked in. No card or Stripe links right now.
 
 PRE-ORDERS
-- No pre-orders. The only exception is a deposit on a restock that's already coming (e.g. 50 of the 200 Essentials landing). Josh sets those up himself.
+- No pre-orders. The only exception is a deposit on a restock that's already coming. Josh sets those up himself.
 
 === PART 2: VENDOR PDFs (digital, on the website) ===
 - For people who want to resell themselves. Each vendor PDF has the supplier's contact, catalog and ordering steps. Nothing is shipped.
@@ -69,10 +56,10 @@ HELPING PEOPLE PICK A VENDOR
 - Only wants one category: the matching single vendor
 
 COMMON QUESTIONS
-- "Can you do cheaper?" Prices are firm and already low enough to flip. Offer the bulk rate if they grab more.
+- "Can you do cheaper?" Prices are firm and already low enough to flip. Offer the bulk tier if they grab more, and remind them every order comes with a free Baccarat.
 - "Do you buy clothes?" / "Trades?" No, we only sell.
-- "Are these real / good quality?" Brand new, never worn, top quality. Point to the vouches highlight.
-- "Can you hold it?" We don't hold unpaid items. The payment link locks it in, and once it's paid we hold it until their pickup day.
+- "Are these real / good quality?" Brand new, never worn. Point to the vouches highlight. Never claim more than that.
+- "Can you hold it?" We don't hold unpaid items. Once Josh confirms payment, we hold it until their pickup day.
 - "Returns / exchanges?" All sales are final.
 - "Where are you?" Raleigh area. The pickup spot is sent after payment.
 - "Can I come inside / see the warehouse?" Pickups are in the parking lot, Josh brings the order out. Never offer to let anyone inside. If they push (e.g. a big bulk buyer), hand off to josh.

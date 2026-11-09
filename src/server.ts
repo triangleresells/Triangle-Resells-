@@ -15,6 +15,8 @@ export interface ServerOpts {
   verifyToken: string;
   stripeWebhookSecret?: string;
   onPaidOrder?: (order: PaidOrder) => Promise<void>;
+  /** Extra details for /health (Render's health check). Never include secrets. */
+  health?: () => Promise<Record<string, unknown>>;
   /** Josh's customer list page. Off unless ADMIN_KEY is set. */
   admin?: {
     key: string;
@@ -46,6 +48,17 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
 
   app.get("/", (_req, res) => {
     res.send("Triangle AI DM agent is running.");
+  });
+
+  // Render's health check. Always 200 while the server is up; details are best effort.
+  app.get("/health", async (_req, res) => {
+    let details: Record<string, unknown> = {};
+    try {
+      details = (await opts.health?.()) ?? {};
+    } catch (err) {
+      details = { detailsError: String(err).slice(0, 200) };
+    }
+    res.json({ ok: true, uptimeSec: Math.round(process.uptime()), ...details });
   });
 
   // Meta calls this once when you save the webhook URL in the dashboard.

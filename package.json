@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "retest": "tsx scripts/retest.ts",
+    "sync-sheet": "tsx scripts/sync-sheet.ts",
     "ai-retest": "tsx scripts/ai-retest.ts"
   },
   "repository": {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildSystemPrompt, toApiMessages } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
-import { formatInventoryCsv, InventorySheet } from "../src/inventory.js";
+import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
 import { isBareKeyword, matchKeyword } from "../src/keywords.js";
 import { isValidSignature } from "../src/signature.js";
 import { loadConfig } from "../src/config.js";
@@ -31,23 +31,18 @@ describe("keywords", () => {
   });
 });
 
-describe("inventory sheet", () => {
-  it("keeps the header and drops blank rows", () => {
-    const csv = 'Item,Price,In stock\nBlack hoodie,$75,Yes\n,,\n"Perfume, 100ml",$60,No\n';
-    expect(formatInventoryCsv(csv)).toBe("Item | Price | In stock\nBlack hoodie | $75 | Yes\nPerfume, 100ml | $60 | No");
+describe("warehouse sheet tabs", () => {
+  it("finds the header under the title row and reads stock rows", () => {
+    const csv = 'BOT STOCK - read me,,,\nCategory,Brand,Item,Color,Size,Qty,Price List,Status,Notes\nHoodie,Alo,Alo Hoodie,Black,XS,2.0,ALO,FOR SALE,\n,,,,,,,,\nFragrance,Baccarat,Baccarat Rouge,,,~60,,FREEBIE,"Never sell, 1 free"\n';
+    const rows = parseStockCsv(csv);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ item: "Alo Hoodie", qty: 2, priceList: "ALO", status: "for_sale" });
+    expect(rows[1]).toMatchObject({ qty: 60, status: "freebie", notes: "Never sell, 1 free" });
   });
 
-  it("caches and survives a failed fetch", async () => {
-    let calls = 0;
-    const fake = (async () => {
-      calls++;
-      if (calls > 1) throw new Error("down");
-      return new Response("Item,Price\nTee,$45\n");
-    }) as typeof fetch;
-    const sheet = new InventorySheet("https://example.com/sheet.csv", fake);
-    expect(await sheet.get()).toContain("Tee | $45");
-    expect(await sheet.get()).toContain("Tee | $45");
-    expect(calls).toBe(1);
+  it("reads per-piece prices, with $ signs, and works from Total when Each is blank", () => {
+    const csv = "BOT PRICES,,,,\nPrice List,Pieces,Total,Each,Notes\nALO,1,$70.00,$70.00,\nALO,2,104,,\n,,,,\n";
+    expect(parsePricesCsv(csv)).toEqual({ ALO: { "1": 70, "2": 52 } });
   });
 });
 

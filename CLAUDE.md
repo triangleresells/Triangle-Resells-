@@ -14,15 +14,18 @@ Instagram → Meta webhook → `POST /webhook` (signature checked) → `src/bot.
 - `config/agent-instructions.md`: voice, flow, rules, handoff cases. `{{ACCOUNT_NAME}}` and `{{VENDOR_SITE_URL}}` are filled from env.
 - `config/knowledge-base.md`: the only facts the bot knows. Update restock dates weekly.
 - `config/keywords.json`: comment/DM keyword triggers, per account. Only rows matching `ACCOUNT_NAME` load.
-- Live prices/stock: a Google Sheet published as CSV (`INVENTORY_SHEET_CSV_URL`). Any columns; it overrides the knowledge base when they disagree.
+- Stock and prices: ONLY the warehouse sheet's BOT STOCK and BOT PRICES tabs, read with a Google service account (`GOOGLE_SERVICE_ACCOUNT_JSON`, `src/sheet.ts`). Never publish the sheet to the web. `config/stock.csv` and the tables in `config/pricing.json` are a snapshot (`npm run sync-sheet`) used when the sheet can't be read. Parsing and stock/freebie rules: `src/catalog.ts`.
+- Payments: no Stripe right now (`STRIPE_ENABLED=false`). The bot locks orders in with `submit_order` and hands them to Josh (cash, Cash App, Apple Pay).
 
 ## Commands
 - `npm run dev`: run locally with reload (needs `.env`, see `.env.example`)
 - `npm test`: vitest suite, no network or API keys needed
 - `npm run typecheck`, `npm run build`, `npm start`
+- `npm run sync-sheet`: refresh the snapshot from the sheet (needs the service account key)
+- `npm run ai-retest -- 50`: real-AI retest, 50 simulated chats graded by Claude (needs `ANTHROPIC_API_KEY`, costs API credit)
 
 ## Rules for working in this repo
-- Never commit `.env`, tokens, or API keys. Secrets live in the host's env settings.
+- Never commit `.env`, tokens, API keys or the Google service account JSON. Secrets live in the host's env settings.
 - Use only Meta's official Instagram API (graph.instagram.com, Instagram Login). No scraping, no logging in with passwords.
 - The bot must never invent prices, stock, restock dates, shipping times, or discounts, and never promise income. Keep those rules in `agent-instructions.md` when editing it.
 - DMs are plain text, max 1,000 chars per message (`splitMessage` handles longer).

@@ -4,12 +4,13 @@ import type { OrderTools, ReplyEngine } from "../src/ai.js";
 import { Bot, followUpText } from "../src/bot.js";
 import type { InstagramApi } from "../src/instagram.js";
 import { calendarEventFor } from "../src/orders.js";
-import { deliveryFor, quoteOrder, type PricingConfig } from "../src/pricing.js";
+import { loadPricing } from "../src/config.js";
+import { deliveryFor, quoteOrder } from "../src/pricing.js";
 import { deliveryProblem, type BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
 import { checkoutParams, paidOrderFromEvent, type CheckoutApi } from "../src/stripe.js";
 
-const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+const pricing = loadPricing();
 const NOW = new Date("2026-11-05T19:00:00Z"); // Thu Nov 5, 2:00 PM ET
 
 describe("delivery fees", () => {
@@ -24,12 +25,12 @@ describe("delivery fees", () => {
   it("won't deliver over an hour away and never guesses unknown towns", () => {
     expect(deliveryFor(pricing, "Greensboro")).toMatchObject({ ok: false, reason: "too_far" });
     expect(deliveryFor(pricing, "Atlantis")).toMatchObject({ ok: false, reason: "unknown_area" });
-    const q = quoteOrder(pricing, [{ product: "alo_hoodie", qty: 50 }], "delivery", "Greensboro");
+    const q = quoteOrder(pricing, [{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 1 }], "delivery", "Greensboro");
     expect(q.problems[0]).toContain("Too far");
   });
 
   it("adds the fee to the total and the Stripe link", () => {
-    const q = quoteOrder(pricing, [{ product: "alo_hoodie", variant: "Gray", size: "M", qty: 2 }], "delivery", "Durham");
+    const q = quoteOrder(pricing, [{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 2 }], "delivery", "Durham");
     expect(q).toMatchObject({ subtotal: 104, total: 114, delivery: { area: "Durham", minutes: 30, fee: 10 } });
     const p = checkoutParams(q, { igUserId: "u", account: "Triangle Resells", fulfillDate: "2026-11-06", fulfillTime: "3:00 PM", summary: "x" }, "https://x") as any;
     expect(p.line_items.at(-1).price_data).toMatchObject({ unit_amount: 1000, product_data: { name: "Local Delivery (Durham)" } });
@@ -88,7 +89,7 @@ function harness(agentFn: ReplyEngine["reply"], now: { t: Date }) {
 
 describe("follow-up on unpaid links", () => {
   const makeLink: ReplyEngine["reply"] = async (_h, _i, tools?: OrderTools) => {
-    const r = await tools!.checkout([{ product: "alo_hoodie", variant: "Gray", size: "M", qty: 1 }], "pickup", "2026-11-06", "3:00 PM");
+    const r = await tools!.checkout!([{ product: "Alo Hoodie", variant: "Gray", size: "M", qty: 1 }], "pickup", "2026-11-06", "3:00 PM");
     return { text: "All sales final. Here's your link, I'm holding it for you.", checkoutUrl: r.ok ? r.url : undefined };
   };
 
@@ -129,25 +130,25 @@ describe("follow-up on unpaid links", () => {
   });
 });
 
-describe("new prices (Nov 5)", () => {
-  it("jeans $70, Valley hoodies $60, hats $30, every cologne $60", () => {
+describe("sheet prices (Nov 9)", () => {
+  it("prices from the BOT PRICES tab: Valley $60, Chrome Hearts hats $30, fragrances $60 then $52 each for 2", () => {
     const q = quoteOrder(
       pricing,
       [
-        { product: "jeans", qty: 1 },
-        { product: "valley_hoodie", qty: 1 },
-        { product: "hat", qty: 2 },
-        { product: "cologne", variant: "Prada Paradoxe", qty: 1 },
-        { product: "cologne", variant: "Valentino Born in Roma", qty: 1 },
+        { product: "Purple Jeans", variant: "All Black", size: "30", qty: 1 },
+        { product: "Valley Hoodie", variant: "White/Black", size: "XL", qty: 1 },
+        { product: "Chrome Hearts Hat", variant: "White/Black", qty: 1 },
+        { product: "Prada Paradoxe Parfum", qty: 1 },
+        { product: "Valentino Born in Roma Uomo", qty: 1 },
       ],
       "pickup",
     );
     expect(q.problems).toEqual([]);
     expect(q.groups.map((g) => [g.product, g.unitPrice])).toEqual([
-      ["jeans", 70],
-      ["valley_hoodie", 60],
-      ["hat", 30],
-      ["cologne", 52], // 2 colognes hit the 2-piece tier
+      ["PURPLE JEANS", 60],
+      ["VALLEY HOODIES", 60],
+      ["CHROME HEARTS HATS", 30],
+      ["FRAGRANCES", 52], // 2 fragrances hit the 2-piece tier
     ]);
   });
 });

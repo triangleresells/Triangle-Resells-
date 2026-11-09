@@ -229,6 +229,15 @@ export class Store {
     this.changed();
   }
 
+  /** A quoted buyer's "went quiet" clock restarts every time the bot messages them. */
+  touchQuote(userId: string, at: number): void {
+    const l = this.convos.get(userId)?.pendingLink;
+    if (l && !l.url && !l.followedUp) {
+      l.createdAt = at;
+      this.changed();
+    }
+  }
+
   clearPendingLink(userId: string): void {
     const c = this.convos.get(userId);
     if (c?.pendingLink) {

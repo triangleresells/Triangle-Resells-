@@ -6,52 +6,107 @@ import { Bot } from "../src/bot.js";
 import type { HandoffAlert } from "../src/handoff.js";
 import type { InstagramApi } from "../src/instagram.js";
 import { calendarEventFor, confirmationText, handlePaidOrder, type CalendarEvent } from "../src/orders.js";
+import { loadPricing } from "../src/config.js";
 import { quoteOrder, tierPrice, type PricingConfig } from "../src/pricing.js";
 import { Store } from "../src/store.js";
 import { checkoutParams, isValidStripeSignature, paidOrderFromEvent, toForm, type CheckoutApi } from "../src/stripe.js";
 
-const pricing = JSON.parse(readFileSync(new URL("../config/pricing.json", import.meta.url), "utf8")) as PricingConfig;
+// The saved snapshot of the warehouse sheet (BOT STOCK + BOT PRICES).
+const pricing = loadPricing();
+// Same prices with deep stock, for bulk-tier math.
+const deep: PricingConfig = { ...pricing, stock: pricing.stock!.map((r) => (r.status === "for_sale" ? { ...r, qty: 999 } : r)) };
 
 describe("pricing", () => {
   it("uses the last tier reached for in-between quantities", () => {
-    expect(tierPrice(pricing.tables.heavy_hoodies, 12)).toBe(43);
-    expect(tierPrice(pricing.tables.heavy_hoodies, 30)).toBe(41);
-    expect(tierPrice(pricing.tables.essentials, 250)).toBe(25);
+    expect(tierPrice(pricing.tables.ALO, 12)).toBe(43);
+    expect(tierPrice(pricing.tables.ALO, 30)).toBe(41);
+    expect(tierPrice(pricing.tables.FRAGRANCES, 250)).toBe(24);
+    expect(tierPrice(pricing.tables["CHROME HEARTS HATS"], 25)).toBe(21);
+    expect(quoteOrder(deep, [{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 12 }], "pickup").total).toBe(12 * 43);
   });
 
-  it("prices each product separately and counts its sizes together (rulebook example: $330)", () => {
+  it("prices each price list separately and counts its items, sizes and colors together", () => {
     const q = quoteOrder(
       pricing,
       [
-        { product: "bape_tee", size: "S", qty: 1 },
-        { product: "spider_hoodie", variant: "Pink/Black", size: "M", qty: 1 },
-        { product: "alo_hoodie", variant: "Gray", size: "S", qty: 2 },
-        { product: "alo_hoodie", variant: "Gray", size: "M", qty: 2 },
-        { product: "alo_hoodie", variant: "Gray", size: "L", qty: 1 },
+        { product: "Chrome Hearts Tee", variant: "White", size: "XL", qty: 1 },
+        { product: "Spider Hoodie", variant: "Black/Pink", size: "S", qty: 1 },
+        { product: "Alo Hoodie", variant: "Black", size: "XS", qty: 2 },
+        { product: "Alo Hoodie", variant: "Gray", size: "M", qty: 1 },
+        { product: "Alo Sweatpants", variant: "Black", size: "XL", qty: 2 },
       ],
       "pickup",
     );
-    expect(q.subtotal).toBe(330);
+    expect(q.problems).toEqual([]);
+    expect(q.groups.find((g) => g.product === "ALO")).toMatchObject({ pieces: 5, unitPrice: 48 });
+    expect(q.subtotal).toBe(35 + 80 + 5 * 48);
     expect(q.shipping).toBe(0);
-    expect(q.groups.find((g) => g.product === "alo_hoodie")).toMatchObject({ pieces: 5, unitPrice: 48 });
+  });
+
+  it("adds 1 free Baccarat to every order and a free G-Shock at 5+ pieces, never charged", () => {
+    const one = quoteOrder(pricing, [{ product: "Bleu de Chanel EDP", qty: 1 }], "pickup");
+    expect(one).toMatchObject({ total: 60, freebies: ["1 free Baccarat Rouge (B tier)"] });
+    const four = quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 4 }], "pickup");
+    expect(four.freebies).toEqual(["1 free Baccarat Rouge (B tier)"]);
+    const five = quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup");
+    expect(five).toMatchObject({ total: 130, freebies: ["1 free Baccarat Rouge (B tier)", "1 free G-Shock"] });
+  });
+
+  it("never sells freebies or NOT FOR SALE rows, and doesn't sell what's not on the sheet", () => {
+    const q = quoteOrder(
+      pricing,
+      [
+        { product: "Baccarat Rouge", qty: 1 },
+        { product: "G-Shock", qty: 1 },
+        { product: "Rolex", qty: 1 },
+        { product: "Gallery Dept Jeans", size: "32", qty: 1 },
+        { product: "Essentials Hoodie", qty: 1 },
+        { product: "Hellstar Hoodie", qty: 1 },
+      ],
+      "pickup",
+    );
+    expect(q.lines).toHaveLength(0);
+    expect(q.problems[0]).toContain("free gift");
+    expect(q.problems[1]).toContain("free gift");
+    expect(q.problems[2]).toContain("NOT FOR SALE");
+    expect(q.problems[3]).toContain("NOT FOR SALE");
+    expect(q.problems[4]).toContain("not on the stock sheet");
+    expect(q.problems[5]).toContain("not on the stock sheet");
+  });
+
+  it("keeps Valley its own brand and checks colors, sizes and counts against the sheet", () => {
+    expect(quoteOrder(pricing, [{ product: "Valley Hoodie", variant: "Black/Burgundy", size: "M", qty: 1 }], "pickup").total).toBe(60);
+    expect(quoteOrder(pricing, [{ product: "Alo Sweatpants", variant: "Light Gray", size: "L", qty: 1 }], "pickup").problems[0]).toContain("not in stock");
+    expect(quoteOrder(pricing, [{ product: "Alo Hoodie", variant: "Gray", size: "M", qty: 2 }], "pickup").problems[0]).toContain("Only 1");
+  });
+
+  it("hands CONFIRM rows and rows with no price to Josh instead of making up a price", () => {
+    const stock = [
+      ...pricing.stock!,
+      { category: "Tee", brand: "X", item: "Mystery Tee", color: "Black", size: "M", qty: 3, priceList: "CHROME TEES", status: "for_sale" as const, rawStatus: "FOR SALE", notes: "CONFIRM price with Josh" },
+      { category: "Tee", brand: "Y", item: "Blank Tee", color: "White", size: "L", qty: 2, priceList: "", status: "for_sale" as const, rawStatus: "FOR SALE", notes: "" },
+    ];
+    const q = quoteOrder({ ...pricing, stock }, [{ product: "Mystery Tee", qty: 1 }, { product: "Blank Tee", qty: 1 }], "pickup");
+    expect(q.lines).toHaveLength(0);
+    expect(q.problems.every((p) => p.includes("Hand off to josh"))).toBe(true);
   });
 
   it("adds $10 UPS under 10 pieces and none at 10+ (buyer label)", () => {
-    expect(quoteOrder(pricing, [{ product: "essentials_hoodie", qty: 2 }], "ship")).toMatchObject({ shipping: 10, total: 100 });
-    const big = quoteOrder(pricing, [{ product: "essentials_hoodie", qty: 10 }], "ship");
-    expect(big).toMatchObject({ shipping: 0, buyerProvidesLabel: true, total: 330 });
+    expect(quoteOrder(pricing, [{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 2 }], "ship")).toMatchObject({ shipping: 10, total: 114 });
+    const big = quoteOrder(deep, [{ product: "Alo Hoodie", variant: "Black", size: "XS", qty: 10 }], "ship");
+    expect(big).toMatchObject({ shipping: 0, buyerProvidesLabel: true, total: 430 });
   });
 
   it("flags unpriced items instead of guessing", () => {
-    const q = quoteOrder(pricing, [{ product: "supreme_set", qty: 1 }, { product: "bape_tee", qty: 0 }], "pickup");
+    const q = quoteOrder(pricing, [{ product: "Supreme Set", qty: 1 }, { product: "BAPE Tee", qty: 0 }], "pickup");
     expect(q.lines).toHaveLength(0);
     expect(q.problems).toHaveLength(2);
   });
 });
 
 describe("stripe", () => {
-  const q = quoteOrder(pricing, [{ product: "essentials_hoodie", variant: "Black", size: "L", qty: 1 }], "ship");
-  const order = { igUserId: "u1", account: "Triangle Resells", fulfillDate: "2026-11-12", summary: "1x Essentials Hoodie Black L" };
+  const q = quoteOrder(pricing, [{ product: "Chrome Hearts Tee", variant: "White", size: "XL", qty: 1 }], "ship");
+  const order = { igUserId: "u1", account: "Triangle Resells", fulfillDate: "2026-11-12", summary: "1x Chrome Hearts Tee White XL" };
 
   it("builds a branded link with shipping, metadata, and a 31-minute hold", () => {
     const p = checkoutParams(q, order, "https://triangleresells.com", 1_000_000_000_000) as any;
@@ -158,7 +213,7 @@ describe("bot checkout", () => {
     let seenTotal = 0;
     const agent: ReplyEngine = {
       reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
-        const r = await tools!.checkout([{ product: "essentials_hoodie", size: "L", qty: 1 }, { product: "spider_hoodie", size: "M", qty: 1 }], "pickup", "2026-11-12", "3:00 PM");
+        const r = await tools!.checkout!([{ product: "Alo Hoodie", variant: "Gray", size: "M", qty: 1 }, { product: "Spider Hoodie", variant: "Black/Pink", size: "S", qty: 1 }], "pickup", "2026-11-12", "3:00 PM");
         if (r.ok) seenTotal = r.total;
         return { text: "bet, all sales final. here's your link, holding it for you", checkoutUrl: r.ok ? r.url : undefined };
       }),
@@ -178,7 +233,7 @@ describe("bot checkout", () => {
       now: () => new Date("2026-11-05T17:00:00Z"),
     });
     await bot.handle({ object: "instagram", entry: [{ id: "own", messaging: [{ sender: { id: "u1" }, recipient: { id: "own" }, message: { mid: "m1", text: "ok send it" } }] }] });
-    expect(seenTotal).toBe(105);
+    expect(seenTotal).toBe(150);
     expect(sent[0]).toContain("https://checkout.stripe.com/c/pay/cs_1");
     expect((checkout.create as any).mock.calls[0][1]).toMatchObject({ igUserId: "u1", fulfillDate: "2026-11-12", fulfillTime: "3:00 PM" });
   });
