@@ -8,7 +8,8 @@ Instagram → Meta webhook → `POST /webhook` (signature checked) → `src/bot.
 - **Comment with a keyword** → one private-reply DM (Instagram allows one per comment, within 7 days) + a public "Sent you a DM!" reply.
 - **Handoff**: Claude calls the `handoff_to_team` tool → bot pauses in that chat for `HUMAN_PAUSE_MINUTES` (720 = 12 hours in render.yaml; `HUMAN_PAUSE_HOURS` if minutes isn't set) and posts to `HANDOFF_WEBHOOK_URL` (Discord/Slack).
 - **Team typed in the inbox** (an echo the bot didn't send) → bot pauses in that chat.
-- Quick back-to-back texts are debounced (4s) into one reply.
+- Reply timing (`ReplyTiming` in `src/bot.ts`): waits a random 42-58s on a cold DM (first message, or they were gone 1+ min), 8-18s in a live back-and-forth, and shows "typing..." before answering. A burst of texts gets one reply. `HUMAN_REPLY_DELAY=false` falls back to the old 4s debounce.
+- Order labels: Instagram's native DM labels (Paid, Booked) can't be set through Meta's API, so the bot keeps its own list on `/admin`: `submit_order` → BOOKED (not paid yet), Stripe paid → PAID. Josh marks Cash App/Apple Pay orders paid and clears labels when orders are fulfilled.
 
 ## Where to change things (no code needed)
 - `config/agent-instructions.md`: voice, flow, rules, handoff cases. `{{ACCOUNT_NAME}}` and `{{VENDOR_SITE_URL}}` are filled from env.

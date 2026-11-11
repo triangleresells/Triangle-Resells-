@@ -7,6 +7,8 @@ export interface InstagramApi {
   getUsername(userId: string): Promise<string | undefined>;
   /** Our own Instagram account id (from the webhook), used to find the right Facebook Page for EAA tokens. */
   setAccountId?(id: string): void;
+  /** Shows "typing..." to the customer. Optional, best effort. */
+  typingOn?(recipientId: string): Promise<void>;
 }
 
 /** Splits long replies into chunks under Instagram's 1,000-character DM limit. */
@@ -106,6 +108,15 @@ export class InstagramClient implements InstagramApi {
       lastId = r.message_id;
     }
     return lastId;
+  }
+
+  /** Shows "typing..." in the chat. Instagram turns it off when the next message arrives. */
+  async typingOn(recipientId: string): Promise<void> {
+    await this.ready();
+    await this.call(this.sendPath, {
+      method: "POST",
+      body: JSON.stringify({ recipient: { id: recipientId }, sender_action: "typing_on" }),
+    });
   }
 
   /** DMs someone who commented. Instagram allows one per comment, within 7 days. */

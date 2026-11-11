@@ -434,6 +434,9 @@ describe("no Stripe: cash, Cash App, Apple Pay", () => {
     expect((result as { summary: string }).summary).toContain("pays by cash_app");
     expect(alerts[0]).toMatchObject({ route: "josh" });
     expect(store.isPaused("user-1")).toBe(true);
+    // Not paid yet, so it's BOOKED until Josh marks the Cash App as received.
+    expect(store.allLabels()).toMatchObject([{ userId: "user-1", label: "BOOKED", payment: "cash app", total: 130 }]);
+    expect(store.allLabels()[0].when).toContain("pickup 2026-11-06 4:00 PM");
   });
 
   it("nudges a quoted buyer who went quiet once, with the free Baccarat", async () => {
@@ -615,5 +618,73 @@ describe("master switch (BOT_ENABLED)", () => {
     expect(loadConfig({ ...base, BOT_ENABLED: "false" }).botEnabled).toBe(false);
     expect(loadConfig({ ...base, BOT_ENABLED: "pending" }).botEnabled).toBe(false);
     expect(loadConfig({ ...base, BOT_ENABLED: "true" }).botEnabled).toBe(true);
+  });
+});
+
+describe("order labels (PAID / BOOKED)", () => {
+  it("labels a Stripe-paid order PAID, and Josh can clear it when it's done", () => {
+    const t = setup();
+    t.bot.markPaid(USER, "1x Spider Hoodie Black/Gold M", 80, "pickup 2026-11-14 3:00 PM");
+    const [l] = t.store.allLabels();
+    expect(l).toMatchObject({ label: "PAID", payment: "stripe", total: 80, when: "pickup 2026-11-14 3:00 PM" });
+    expect(t.store.clearLabel(l.id)).toBe(true);
+    expect(t.store.allLabels()).toHaveLength(0);
+  });
+
+  it("flips BOOKED to PAID, clears all at end of day, and survives a restart", () => {
+    const store = new Store();
+    const a = store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x ERD Tee", total: 40, payment: "cash", when: "delivery" });
+    store.addLabel({ userId: "u2", label: "BOOKED", summary: "3x cologne", total: 180, payment: "cash app", when: "pickup" });
+    expect(store.markLabelPaid(a.id)).toBe(true);
+    expect(store.allLabels().find((l) => l.id === a.id)?.label).toBe("PAID");
+    const copy = new Store();
+    copy.restore(JSON.parse(JSON.stringify(store.snapshot())));
+    expect(copy.allLabels()).toHaveLength(2);
+    expect(copy.clearAllLabels()).toBe(2);
+    expect(copy.allLabels()).toHaveLength(0);
+  });
+
+  it("shows open orders on the admin page with a DM link", async () => {
+    const { adminPage } = await import("../src/customers.js");
+    const store = new Store();
+    store.setUsername("u1", "kbventuresco");
+    store.addLabel({ userId: "u1", label: "BOOKED", summary: "6x Chrome Hearts Hat", total: 120, payment: "cash", when: "pickup" });
+    const html = adminPage("k", undefined, store.allLabels());
+    expect(html).toContain("BOOKED");
+    expect(html).toContain("https://ig.me/m/kbventuresco");
+    expect(html).toContain("Mark paid");
+  });
+});
+
+describe("human-like reply timing", () => {
+  it("waits longer on a cold DM than in a live back-and-forth", async () => {
+    const { pickReplyDelay, DEFAULT_REPLY_TIMING: T } = await import("../src/bot.js");
+    for (const r of [0, 0.5, 0.999]) {
+      const cold = pickReplyDelay(T, undefined, () => r);
+      expect(cold).toBeGreaterThanOrEqual(42_000);
+      expect(cold).toBeLessThanOrEqual(58_000);
+      const gone = pickReplyDelay(T, 5 * 60_000, () => r);
+      expect(gone).toBeGreaterThanOrEqual(42_000);
+      const live = pickReplyDelay(T, 20_000, () => r);
+      expect(live).toBeGreaterThanOrEqual(8_000);
+      expect(live).toBeLessThanOrEqual(18_000);
+    }
+  });
+
+  it("holds the reply, answers a burst of texts once, and shows typing first", async () => {
+    const t = setup();
+    const typing = vi.fn(async () => {});
+    t.ig.typingOn = typing;
+    (t.bot as any).d.replyTiming = { coldMinMs: 80, coldMaxMs: 80, activeMinMs: 10, activeMaxMs: 10, activeWindowMs: 60_000, settleMs: 20 };
+    const started = Date.now();
+    await Promise.all([t.bot.handle(dm("yo", "m1")), t.bot.handle(dm("u got essentials?", "m2"))]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(75);
+    expect(t.sent).toHaveLength(1);
+    expect(typing).toHaveBeenCalledWith(USER);
+    // They answer right away: live chat, short wait.
+    const again = Date.now();
+    await t.bot.handle(dm("L please", "m3"));
+    expect(Date.now() - again).toBeLessThan(75);
+    expect(t.sent).toHaveLength(2);
   });
 });

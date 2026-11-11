@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type Request } from "express";
 import { adminPage, customersCsv } from "./customers.js";
-import type { Customer } from "./store.js";
+import type { Customer, OrderLabel } from "./store.js";
 import type { Bot, WebhookPayload } from "./bot.js";
 import { isValidSignature } from "./signature.js";
 import { isValidStripeSignature, paidOrderFromEvent, type PaidOrder } from "./stripe.js";
@@ -24,6 +24,13 @@ export interface ServerOpts {
     blast: (message: string, search: string) => Promise<{ sent: Customer[]; manual: Customer[] }>;
     /** Turns the bot back on in every chat it paused itself in. Returns how many. */
     unpauseAll?: () => number;
+    /** PAID / BOOKED orders (Instagram's own DM labels can't be set by API, so they live here). */
+    labels?: {
+      all: () => OrderLabel[];
+      markPaid: (id: string) => boolean;
+      clear: (id: string) => boolean;
+      clearAll: () => number;
+    };
   };
 }
 
@@ -115,8 +122,23 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
   if (admin?.key) {
     app.use("/admin", express.urlencoded({ extended: false, limit: "20kb" }));
     app.use("/admin", (req, res, next) => (keyOk(req.query.key, admin.key) ? next() : res.sendStatus(404)));
+    const page = (key: unknown, notice = "", result?: Parameters<typeof adminPage>[1]) =>
+      adminPage(String(key), result, admin.labels?.all() ?? [], notice);
     app.get("/admin", (req, res) => {
-      res.type("html").send(adminPage(String(req.query.key)));
+      res.type("html").send(page(req.query.key));
+    });
+    app.post("/admin/labels/paid", (req, res) => {
+      const ok = admin.labels?.markPaid(String(req.body?.id ?? "")) ?? false;
+      res.type("html").send(page(req.query.key, ok ? "Marked PAID." : "That order wasn't found."));
+    });
+    app.post("/admin/labels/clear", (req, res) => {
+      const ok = admin.labels?.clear(String(req.body?.id ?? "")) ?? false;
+      res.type("html").send(page(req.query.key, ok ? "Label cleared." : "That order wasn't found."));
+    });
+    app.post("/admin/labels/clear-all", (req, res) => {
+      const n = admin.labels?.clearAll() ?? 0;
+      console.log(`[admin] cleared ${n} order label(s)`);
+      res.type("html").send(page(req.query.key, `Cleared ${n} label(s).`));
     });
     app.get("/admin/customers.csv", (_req, res) => {
       res.type("text/csv").attachment("triangle-customers.csv").send(customersCsv(admin.customers()));
@@ -124,7 +146,7 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
     app.post("/admin/unpause", (req, res) => {
       const n = admin.unpauseAll?.() ?? 0;
       console.log(`[admin] unpaused ${n} chat(s)`);
-      res.type("html").send(`${adminPage(String(req.query.key))}<p><b>Bot turned back on in ${n} chat(s).</b></p>`);
+      res.type("html").send(page(req.query.key, `Bot turned back on in ${n} chat(s).`));
     });
     app.post("/admin/blast", async (req, res) => {
       const message = String(req.body?.message ?? "").trim().slice(0, 1000);
@@ -134,7 +156,7 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
         return;
       }
       const result = await admin.blast(message, search);
-      res.type("html").send(adminPage(String(req.query.key), { ...result, message }));
+      res.type("html").send(page(req.query.key, "", { ...result, message }));
     });
   }
 

@@ -63,6 +63,9 @@ services:
       # How long the bot stays quiet in a chat after a handoff or after the team types in it.
       - key: HUMAN_PAUSE_MINUTES
         value: "720"
+      # Wait ~42-58s before answering a cold DM (8-18s mid-conversation) so it doesn't answer like a bot.
+      - key: HUMAN_REPLY_DELAY
+        value: "true"
       # A buyer who got a price and went quiet gets ONE nudge (with the free Baccarat) after this many minutes. 0 = off.
       - key: QUIET_NUDGE_MINUTES
         value: "90"

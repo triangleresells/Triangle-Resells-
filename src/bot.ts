@@ -25,6 +25,8 @@ export interface BotDeps {
   enabled?: () => boolean;
   /** Wait this long for more messages before replying, so 3 quick texts get 1 answer. */
   debounceMs?: number;
+  /** Human-like reply timing. When set it replaces debounceMs (see ReplyTiming). */
+  replyTiming?: ReplyTiming;
   /** Price list for exact quotes. Without it the bot can't quote or sell. */
   pricing?: PricingConfig;
   /** Live stock + prices from the warehouse sheet. When set, it replaces getInventory and pricing on every reply. */
@@ -39,6 +41,38 @@ export interface BotDeps {
   getBusy?: () => Promise<BusyBlock[]>;
   /** Clock, for tests. */
   now?: () => Date;
+}
+
+/**
+ * How long the bot waits before answering, so it doesn't look like a bot.
+ * Cold message (first DM, or they come back after being gone longer than activeWindowMs): a random
+ * coldMin-coldMax wait. Live back-and-forth (they answered within activeWindowMs of the bot's last text):
+ * a shorter activeMin-activeMax wait, so the bot stays in the conversation. The clock starts at their
+ * FIRST unanswered text; every newer text still gets at least settleMs so a burst of texts gets one answer.
+ */
+export interface ReplyTiming {
+  coldMinMs: number;
+  coldMaxMs: number;
+  activeMinMs: number;
+  activeMaxMs: number;
+  activeWindowMs: number;
+  settleMs: number;
+}
+
+export const DEFAULT_REPLY_TIMING: ReplyTiming = {
+  coldMinMs: 42_000,
+  coldMaxMs: 58_000,
+  activeMinMs: 8_000,
+  activeMaxMs: 18_000,
+  activeWindowMs: 60_000,
+  settleMs: 4_000,
+};
+
+/** The wait (ms) before the first reply to a new burst of texts. */
+export function pickReplyDelay(t: ReplyTiming, msSinceBotTexted: number | undefined, random: () => number = Math.random): number {
+  const active = msSinceBotTexted !== undefined && msSinceBotTexted <= t.activeWindowMs;
+  const [lo, hi] = active ? [t.activeMinMs, t.activeMaxMs] : [t.coldMinMs, t.coldMaxMs];
+  return Math.round(lo + random() * Math.max(0, hi - lo));
 }
 
 const MAX_IMAGE_BYTES = 4_500_000;
@@ -112,6 +146,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class Bot {
   private chains = new Map<string, Promise<void>>();
   private seq = new Map<string, number>();
+  /** When the bot will answer the texts it's holding for each chat (Date.now() ms). */
+  private replyAt = new Map<string, number>();
 
   constructor(private d: BotDeps) {}
 
@@ -169,8 +205,20 @@ export class Bot {
 
     const mySeq = (this.seq.get(userId) ?? 0) + 1;
     this.seq.set(userId, mySeq);
-    if (this.d.debounceMs) await sleep(this.d.debounceMs);
+    const timing = this.d.replyTiming;
+    if (timing) {
+      let at = this.replyAt.get(userId);
+      if (at === undefined) {
+        const lastBot = this.d.store.lastBotAt(userId);
+        at = Date.now() + pickReplyDelay(timing, lastBot ? Date.now() - lastBot : undefined);
+        this.replyAt.set(userId, at);
+      }
+      await sleep(Math.max(at - Date.now(), timing.settleMs));
+    } else if (this.d.debounceMs) {
+      await sleep(this.d.debounceMs);
+    }
     if (this.seq.get(userId) !== mySeq) return; // a newer message will get the reply
+    this.replyAt.delete(userId);
 
     await this.inOrder(userId, () => this.replyTo(userId, text));
   }
@@ -188,6 +236,8 @@ export class Bot {
       return;
     }
 
+    // "typing..." while the AI writes, like a person. Best effort.
+    void this.d.ig.typingOn?.(userId).catch(() => {});
     const [catalog, busy] = await Promise.all([this.catalog(), this.busy()]);
     const schedule = scheduleText(busy, this.now());
     const started = Date.now();
@@ -297,6 +347,15 @@ export class Bot {
         this.d.store.addInterest(userId, itemList(r.q));
         const when = r.fulfillTime ? `${r.fulfillDate} ${r.fulfillTime}` : r.fulfillDate;
         const summary = `${describeQuote(r.q)}; ${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}; pays by ${payment}`;
+        // Locked in but not paid yet: BOOKED. Josh flips Cash App / Apple Pay to PAID on the admin page once it lands.
+        this.d.store.addLabel({
+          userId,
+          label: "BOOKED",
+          summary: itemList(r.q),
+          total: r.q.total,
+          payment: payment.replace("_", " "),
+          when: `${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}`,
+        });
         return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note };
       };
       return tools;
@@ -373,9 +432,10 @@ export class Bot {
   }
 
   /** Stripe says they paid: no follow-up for that link, and it goes on their customer record. */
-  markPaid(userId: string, summary = "", total = 0): void {
+  markPaid(userId: string, summary = "", total = 0, when = ""): void {
     this.d.store.clearPendingLink(userId);
     if (summary || total) this.d.store.addOrder(userId, summary, total);
+    this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when });
   }
 
   /**

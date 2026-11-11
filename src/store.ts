@@ -24,6 +24,29 @@ interface Conversation {
   pausedUntil: number;
   lastActivity: number;
   recentBotTexts: { text: string; at: number }[];
+  /** When the bot last sent a DM in this chat (0 = never). Used to tell a live back-and-forth from a cold message. */
+  lastBotAt: number;
+}
+
+/**
+ * Josh's order labels. Instagram's own DM labels (Paid, Booked...) can't be set through Meta's API,
+ * so the bot keeps the same list itself and shows it on the admin page.
+ * PAID = paid online (Stripe, or Josh marked the Cash App / Apple Pay as received). BOOKED = locked in, pays on pickup/delivery.
+ */
+export type OrderLabelKind = "PAID" | "BOOKED";
+
+export interface OrderLabel {
+  id: string;
+  userId: string;
+  username?: string;
+  label: OrderLabelKind;
+  summary: string;
+  total: number;
+  /** cash, cash app, apple pay, stripe */
+  payment: string;
+  /** "pickup 2026-11-14 3:00 PM" etc. */
+  when: string;
+  createdAt: number;
 }
 
 /** Everything the bot remembers about one buyer, kept forever so Josh can reach them on a restock. */
@@ -43,6 +66,7 @@ export interface StoreSnapshot {
   version: 1;
   convos: { userId: string; turns: ChatTurn[]; pausedUntil: number; lastActivity: number; pendingLink?: PendingLink }[];
   customers: Customer[];
+  labels?: OrderLabel[];
 }
 
 const MAX_TURNS = 20;
@@ -59,6 +83,7 @@ export class Store {
   private seen = new Map<string, number>();
   private botMessageIds = new Set<string>();
   private customers = new Map<string, Customer>();
+  private labels: OrderLabel[] = [];
   /** Called after anything worth saving changes (the file saver listens here). */
   onChange?: () => void;
 
@@ -71,7 +96,7 @@ export class Store {
   private get(userId: string): Conversation {
     let c = this.convos.get(userId);
     if (!c) {
-      c = { turns: [], pausedUntil: 0, lastActivity: this.now(), recentBotTexts: [] };
+      c = { turns: [], pausedUntil: 0, lastActivity: this.now(), recentBotTexts: [], lastBotAt: 0 };
       this.convos.set(userId, c);
     }
     c.lastActivity = this.now();
@@ -152,13 +177,14 @@ export class Store {
         ...(c.pendingLink ? { pendingLink: c.pendingLink } : {}),
       })),
       customers: this.allCustomers(),
+      labels: this.labels,
     };
   }
 
   restore(snap: StoreSnapshot | undefined): void {
     if (!snap || snap.version !== 1) return;
     for (const c of snap.convos ?? []) {
-      this.convos.set(c.userId, { turns: c.turns ?? [], pausedUntil: c.pausedUntil ?? 0, lastActivity: c.lastActivity ?? this.now(), recentBotTexts: [], pendingLink: c.pendingLink });
+      this.convos.set(c.userId, { turns: c.turns ?? [], pausedUntil: c.pausedUntil ?? 0, lastActivity: c.lastActivity ?? this.now(), recentBotTexts: [], lastBotAt: 0, pendingLink: c.pendingLink });
     }
     for (const c of snap.customers ?? []) {
       this.customers.set(c.userId, {
@@ -169,14 +195,62 @@ export class Store {
         firstSeen: c.firstSeen ?? this.now(),
       });
     }
+    this.labels = (snap.labels ?? []).filter((l) => l && l.id && (l.label === "PAID" || l.label === "BOOKED"));
+  }
+
+  // ---- order labels (PAID / BOOKED) ----
+
+  addLabel(l: Omit<OrderLabel, "id" | "createdAt" | "username">): OrderLabel {
+    const createdAt = this.now();
+    const label: OrderLabel = { ...l, id: `${l.userId}-${createdAt}-${this.labels.length}`, createdAt, username: this.customers.get(l.userId)?.username };
+    this.labels.push(label);
+    this.changed();
+    return label;
+  }
+
+  /** Newest first. Usernames are filled in late (the lookup runs in the background). */
+  allLabels(): OrderLabel[] {
+    return [...this.labels]
+      .map((l) => ({ ...l, username: l.username ?? this.customers.get(l.userId)?.username }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** BOOKED -> PAID once Josh has the money. */
+  markLabelPaid(id: string): boolean {
+    const l = this.labels.find((x) => x.id === id);
+    if (!l || l.label === "PAID") return false;
+    l.label = "PAID";
+    this.changed();
+    return true;
+  }
+
+  /** Order fulfilled: take the label off. */
+  clearLabel(id: string): boolean {
+    const before = this.labels.length;
+    this.labels = this.labels.filter((l) => l.id !== id);
+    if (this.labels.length !== before) this.changed();
+    return this.labels.length !== before;
+  }
+
+  clearAllLabels(): number {
+    const n = this.labels.length;
+    this.labels = [];
+    if (n) this.changed();
+    return n;
   }
 
   /** Remember what the bot just sent so its own echo isn't mistaken for a team member typing. */
   recordBotMessage(userId: string, text: string, messageId?: string): void {
     if (messageId) this.botMessageIds.add(messageId);
     const c = this.get(userId);
+    c.lastBotAt = this.now();
     c.recentBotTexts.push({ text, at: this.now() });
     c.recentBotTexts = c.recentBotTexts.filter((t) => this.now() - t.at < 5 * 60 * 1000);
+  }
+
+  /** When the bot last DM'd this person (0 = never, or not since a restart). */
+  lastBotAt(userId: string): number {
+    return this.convos.get(userId)?.lastBotAt ?? 0;
   }
 
   isBotEcho(userId: string, text: string, messageId?: string): boolean {

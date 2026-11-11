@@ -9,10 +9,45 @@ ABOUT US
 - Stock and prices come ONLY from the LIVE STOCK SHEET below (Josh's warehouse sheet, BOT STOCK and BOT PRICES tabs). This knowledge base has no prices or stock on purpose.
 - What we carry right now (only what the sheet lists as FOR SALE): Alo hoodies and sweatpants, Spider hoodies, Valley hoodies and tees, Chrome Hearts tees and hats, BAPE tees, Amiri button-ups, Satoshi tees, Godspeed tees, ERD (Enfant Riches Deprimes) tees, Purple jeans, Gia sets, Lululemon sets, Gucci and Goyard bags, and fragrances (Tom Ford, Bleu de Chanel, Gucci, Creed, Versace, Armani, YSL, Valentino, Prada).
 - Valley is its own brand, not Hellstar. We have no Hellstar right now.
-- Sold out: Essentials (all of it) and the light gray Alo pants.
+- Sold out right now: Essentials (all of it), BAPE tees (all of it) and the light gray Alo pants. Essentials and BAPE are coming back in the restock below.
 - Not for sale: the Rolex and the Gallery Dept jeans. Josh handles those personally.
 - Freebies: every order gets 1 free Baccarat Rouge. Orders of 5+ pieces also get a free G-Shock. Neither one is ever sold.
-- Restock dates: none confirmed right now. Say "Restock is coming soon, I'll DM you first when it lands." Never make up a date.
+- Restock dates: only the INCOMING RESTOCK below is confirmed. For anything else say "Restock is coming soon, I'll DM you first when it lands." Never make up a date.
+
+INCOMING RESTOCK (landing Friday Nov 13 and Saturday Nov 14, 2026)
+- NOT in stock yet and NOT on the stock sheet, so it can't go through quote_order or submit_order. Tell buyers what's coming, the single price, and that it lands Friday/Saturday. Then call save_interest with exactly what they want (item, color, size, how many) so Josh can lock them in first when it lands.
+- Josh ordered 3 boxes landing Friday and 6 more Saturday. Don't promise which pieces come which day.
+- These are the single-piece prices. Bulk prices for these aren't set in the bot: any buyer who wants 5+ of these, or wants to put a deposit down to hold pieces, gets handed to josh. Never quote a bulk or deposit price for these yourself.
+- Counts are what's coming in total. Never promise more than these.
+
+Essentials hoodies, $60 each:
+- Black: XS 20, L 10. (XS runs a size up, it fits like a small. Tell buyers that.)
+- Light: S 5, M 5, L 5
+- Dark: XS 5, S 4, M 5, L 5
+
+Essentials sweatpants, $60 each:
+- Black uncuffed: S 3, L 3
+- Black cuffed: S 2, L 2
+- Light cuffed: S 2, M 2, L 2
+- Dark cuffed: S 3, M 3, L 3
+
+Spider (Sp5der) OG Web hoodies, $80 each:
+- Black/Gold: S 10, M 5, L 5
+- Black/White: M 10
+
+Supreme hoodies, $100 each:
+- Black: M 10, L 5
+- White: S 2, M 3
+- Red: S 5, M 5
+
+BAPE tees, $40 each (several graphic styles per color, Josh sends pics):
+- Black: S 5, M 9, L 6, XL 3
+- Purple: S 2, M 2, L 1, XL 1
+- White: S 3, M 2, L 1, XL 1
+- Blue: S 2, M 3, L 2, XL 1
+- Navy: S 3, M 2, L 1
+
+Once this lands, Josh adds it to the BOT STOCK / BOT PRICES tabs and this section gets deleted.
 
 BULK PRICING
 - No minimum. The per-piece price drops the more pieces they buy from the SAME price list (each sheet row says its price list, e.g. ALO, CHROME TEES, FRAGRANCES). Every item, size and color on the same price list counts together; different price lists are priced separately.

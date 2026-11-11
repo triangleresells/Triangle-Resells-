@@ -1,5 +1,5 @@
 import { ClaudeAgent } from "./ai.js";
-import { Bot } from "./bot.js";
+import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
 import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js";
@@ -50,6 +50,8 @@ const bot = new Bot({
   publicCommentReplies: config.publicCommentReplies,
   humanPauseHours: config.humanPauseHours,
   debounceMs: 4000,
+  // Waits ~42-58s on a cold DM and ~8-18s in a live back-and-forth, so it doesn't answer like a bot.
+  replyTiming: config.humanReplyDelay ? DEFAULT_REPLY_TIMING : undefined,
   pricing: config.pricing,
   checkout: config.stripeEnabled ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
   getBusy: () => busyCalendar.get(),
@@ -71,9 +73,15 @@ createServer(bot, {
     const c = await catalog.get();
     return { botEnabled: config.botEnabled, stock: c.source, forSaleRows: (c.pricing.stock ?? []).filter((r) => r.status === "for_sale" && r.qty > 0).length };
   },
-  admin: { key: config.adminKey, customers: () => store.allCustomers(), blast: (m, s) => bot.blast(m, s), unpauseAll: () => store.unpauseAll() },
+  admin: {
+    key: config.adminKey,
+    customers: () => store.allCustomers(),
+    blast: (m, s) => bot.blast(m, s),
+    unpauseAll: () => store.unpauseAll(),
+    labels: { all: () => store.allLabels(), markPaid: (id) => store.markLabelPaid(id), clear: (id) => store.clearLabel(id), clearAll: () => store.clearAllLabels() },
+  },
   onPaidOrder: (order) => {
-    bot.markPaid(order.igUserId, order.summary, order.total);
+    bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "));
     return handlePaidOrder(order, {
       sendDm: (id, text) => bot.sendDm(id, text),
       calendar,

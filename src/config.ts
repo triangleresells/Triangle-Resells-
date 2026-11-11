@@ -42,6 +42,8 @@ export interface Config {
   botEnabled: boolean;
   /** Minutes before a quoted buyer who went quiet gets one nudge. 0 = off. */
   quietNudgeMinutes: number;
+  /** Wait ~42-58s before answering a cold DM (8-18s mid-conversation). HUMAN_REPLY_DELAY=false turns it off (4s debounce only). */
+  humanReplyDelay: boolean;
   /** Password for the /admin customer list page. Blank = page off. */
   adminKey: string;
   pricing: PricingConfig;
@@ -130,6 +132,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
     stateFile: env.STATE_FILE?.trim() || "",
     adminKey: optional(env.ADMIN_KEY),
+    humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",
     quietNudgeMinutes: env.QUIET_NUDGE_MINUTES?.trim() ? Math.max(0, Number(env.QUIET_NUDGE_MINUTES) || 0) : 90,
     botEnabled: /^(true|on|yes|1)$/i.test(env.BOT_ENABLED?.trim() ?? ""),
     pricing: loadPricing(),
