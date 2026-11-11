@@ -128,7 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warehouseSheetId: optional(env.WAREHOUSE_SHEET_ID) || DEFAULT_SHEET_ID,
     trackerSheetId: optional(env.TRACKER_SHEET_ID) || "1ks_DjoGUucVHgzf7mhx9P1B1HTySaNxWbGGsteQ1eGI",
     payZelle: env.PAY_ZELLE?.trim() || "",
-    payCashApp: env.PAY_CASHAPP?.trim() || "",
+    payCashApp: env.PAY_CASHAPP?.trim() || "$triangleresells",
     handoffWebhookUrl: optional(env.HANDOFF_WEBHOOK_URL),
     // HUMAN_PAUSE_MINUTES wins if set (e.g. 5); otherwise HUMAN_PAUSE_HOURS; default 12 hours.
     humanPauseHours: Number(env.HUMAN_PAUSE_MINUTES) > 0 ? Number(env.HUMAN_PAUSE_MINUTES) / 60 : Number(env.HUMAN_PAUSE_HOURS) || 12,

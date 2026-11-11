@@ -50,7 +50,7 @@ services:
       - key: PAY_ZELLE
         sync: false
       - key: PAY_CASHAPP
-        sync: false
+        value: $triangleresells
       - key: HANDOFF_WEBHOOK_URL
         sync: false
       # Card + Apple Pay links. Off until Stripe ID verification is done; cash, Cash App and Zelle work either way.
