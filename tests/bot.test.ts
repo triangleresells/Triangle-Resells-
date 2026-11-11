@@ -332,8 +332,8 @@ describe("pickup spot and no-bulk items (Nov 6)", () => {
     const valley = quoteOrder(pricing, [{ product: "Valley Hoodie", variant: "White/Black", size: "XL", qty: 1 }, { product: "Valley Hoodie", variant: "Black/Burgundy", size: "M", qty: 1 }, { product: "Valley Hoodie", variant: "Black/Burgundy", size: "L", qty: 1 }], "pickup");
     expect(valley.groups[0].unitPrice).toBe(58);
     expect(quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "White/Black", qty: 10 }], "pickup").groups[0].unitPrice).toBe(21);
-    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").total).toBe(35);
-    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(31);
+    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").total).toBe(40);
+    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(36);
     expect(quoteOrder(pricing, [{ product: "YSL Y EDP", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
   });
 });

@@ -17,7 +17,7 @@ ABOUT US
 INCOMING RESTOCK (landing Friday Nov 13 and Saturday Nov 14, 2026)
 - NOT in stock yet and NOT on the stock sheet, so it can't go through quote_order or submit_order. Tell buyers what's coming, the single price, and that it lands Friday/Saturday. Then call save_interest with exactly what they want (item, color, size, how many) so Josh can lock them in first when it lands.
 - Josh ordered 3 boxes landing Friday and 6 more Saturday. Don't promise which pieces come which day.
-- These are the single-piece prices. Bulk prices for these aren't set in the bot: any buyer who wants 5+ of these, or wants to put a deposit down to hold pieces, gets handed to josh. Never quote a bulk or deposit price for these yourself.
+- These are the single-piece prices. Bulk prices are set and quote_order will price them once it lands. Until then, any buyer who wants 5+ of these, or wants to put a deposit down to hold pieces, gets handed to josh. Never quote a bulk or deposit price for these yourself.
 - Counts are what's coming in total. Never promise more than these.
 
 Essentials hoodies, $60 each:
