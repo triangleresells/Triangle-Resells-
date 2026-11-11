@@ -56,6 +56,9 @@ export function isTestKey(key: string): boolean {
   return /^(sk|rk)_test_/.test(key);
 }
 
+/** What happened to an old link we tried to cancel. "paid" = the buyer already paid it, so don't make a new one. */
+export type ExpireResult = "expired" | "paid";
+
 export interface CheckoutLink {
   id: string;
   url: string;
@@ -64,6 +67,8 @@ export interface CheckoutLink {
 
 export interface CheckoutApi {
   create(quote: Quote, order: OrderDetails): Promise<CheckoutLink>;
+  /** Kills an unpaid link so it can't be paid any more (used when the order changes). */
+  expire?(sessionId: string): Promise<ExpireResult>;
 }
 
 /** Brand look for every checkout page: black background, gold buttons. */
@@ -165,6 +170,19 @@ export class StripeCheckout implements CheckoutApi {
     const body = (await res.json().catch(() => ({}))) as { id?: string; url?: string; expires_at?: number; error?: unknown };
     if (!res.ok || !body.url || !body.id) throw new Error(`Stripe ${res.status}: ${JSON.stringify(body.error ?? body)}`);
     return { id: body.id, url: body.url, expiresAt: body.expires_at ?? 0 };
+  }
+
+  async expire(sessionId: string): Promise<ExpireResult> {
+    const auth = { Authorization: `Bearer ${this.secretKey}` };
+    const url = `https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`;
+    const res = await this.fetchFn(`${url}/expire`, { method: "POST", headers: auth });
+    if (res.ok) return "expired";
+    // Stripe refuses to expire a session that's already paid or already expired: look at which one it is.
+    const look = await this.fetchFn(url, { headers: auth });
+    const body = (await look.json().catch(() => ({}))) as { status?: string };
+    if (body.status === "complete") return "paid";
+    if (body.status === "expired") return "expired";
+    throw new Error(`Stripe couldn't cancel ${sessionId}: HTTP ${res.status}, status ${body.status ?? "unknown"}`);
   }
 }
 

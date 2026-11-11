@@ -78,6 +78,8 @@ setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 // One follow-up DM when a payment link expires unpaid.
 setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();
 
+if (config.stripeLiveBlocked) console.warn("[stripe] OFF: STRIPE_SECRET_KEY is a LIVE key. Use a sandbox key (sk_test_...), or set STRIPE_ALLOW_LIVE=true when you're ready for real money.");
+
 createServer(bot, {
   appSecret: config.igAppSecret,
   extraAppSecrets: [config.metaAppSecret],

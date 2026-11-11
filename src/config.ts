@@ -36,6 +36,8 @@ export interface Config {
   humanPauseHours: number;
   /** Stripe payment links. Off unless STRIPE_ENABLED=true AND a key is set. Right now buyers pay cash, Cash App or Apple Pay. */
   stripeEnabled: boolean;
+  /** STRIPE_ENABLED is on with a LIVE key but STRIPE_ALLOW_LIVE isn't: Stripe stays off so no real links go out. */
+  stripeLiveBlocked: boolean;
   stripeSecretKey: string;
   stripeWebhookSecret: string;
   checkoutSuccessUrl: string;
@@ -132,7 +134,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     handoffWebhookUrl: optional(env.HANDOFF_WEBHOOK_URL),
     // HUMAN_PAUSE_MINUTES wins if set (e.g. 5); otherwise HUMAN_PAUSE_HOURS; default 12 hours.
     humanPauseHours: Number(env.HUMAN_PAUSE_MINUTES) > 0 ? Number(env.HUMAN_PAUSE_MINUTES) / 60 : Number(env.HUMAN_PAUSE_HOURS) || 12,
-    stripeEnabled: /^(true|on|yes|1)$/i.test(env.STRIPE_ENABLED?.trim() ?? "") && !!optional(env.STRIPE_SECRET_KEY),
+    // Sandbox (sk_test_ / rk_test_) keys only, until STRIPE_ALLOW_LIVE=true. A live key with that off turns Stripe off.
+    stripeEnabled:
+      /^(true|on|yes|1)$/i.test(env.STRIPE_ENABLED?.trim() ?? "") &&
+      !!optional(env.STRIPE_SECRET_KEY) &&
+      (/^(sk|rk)_test_/.test(optional(env.STRIPE_SECRET_KEY)) || /^(true|on|yes|1)$/i.test(env.STRIPE_ALLOW_LIVE?.trim() ?? "")),
+    stripeLiveBlocked:
+      /^(true|on|yes|1)$/i.test(env.STRIPE_ENABLED?.trim() ?? "") &&
+      /^(sk|rk)_live_/.test(optional(env.STRIPE_SECRET_KEY)) &&
+      !/^(true|on|yes|1)$/i.test(env.STRIPE_ALLOW_LIVE?.trim() ?? ""),
     stripeSecretKey: optional(env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: optional(env.STRIPE_WEBHOOK_SECRET),
     checkoutSuccessUrl: env.CHECKOUT_SUCCESS_URL?.trim() || `https://${vendorSiteUrl.replace(/^https?:\/\//, "")}`,

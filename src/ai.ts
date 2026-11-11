@@ -124,7 +124,7 @@ export const TOOLS = [
   {
     name: "create_checkout_link",
     description:
-      "Make a branded Stripe payment link for the confirmed order. Only call it once items, sizes, stock, pickup or ship, and the date are all settled, and after you told them all sales are final.",
+      "Make a branded Stripe payment link for the confirmed order. Only call it when the buyer says they're ready to pay, after items, sizes, stock, pickup or ship, and the date are all settled and you told them all sales are final. If they change the order after getting a link (add, remove or swap anything), call it again with the FULL new order: their old link is cancelled automatically and only the new one works.",
     input_schema: {
       type: "object" as const,
       properties: {

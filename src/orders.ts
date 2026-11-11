@@ -109,8 +109,8 @@ export async function handlePaidOrder(o: PaidOrder, d: OrderHandlerDeps): Promis
           userId: o.igUserId,
           route: "team",
           paused: false,
-          reason: `PAID $${o.total} – ${o.fulfillment} ${o.fulfillDate} ${o.fulfillTime}`.trim(),
-          summary: `${o.summary}. Buyer: ${o.buyerName ?? "?"}${o.shipTo ? `. Ship to: ${o.shipTo}` : ""}. Log the sale and take these off the stock sheet.`,
+          reason: `${o.test ? "[TEST] " : ""}PAID $${o.total} – ${o.fulfillment} ${o.fulfillDate} ${o.fulfillTime}`.trim(),
+          summary: `${o.summary}. Buyer: ${o.buyerName ?? "?"}${o.shipTo ? `. Ship to: ${o.shipTo}` : ""}. ${o.test ? "Sandbox practice payment: no real money, stock sheet and sales tracker left alone." : "Log the sale and take these off the stock sheet."}`,
         }),
     ],
   ];

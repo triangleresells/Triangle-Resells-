@@ -252,7 +252,8 @@ export class Bot {
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
-    if (result.cancelFollowUp || result.handoff) this.d.store.clearPendingLink(userId);
+    // No follow-up, but keep the link on record: it's still payable, so it still holds stock and can be cancelled later.
+    if (result.cancelFollowUp || result.handoff) this.d.store.markFollowedUp(userId);
     // Customer list: whatever they asked about or wanted, for restock blasts later.
     for (const item of [...(result.interests ?? []), ...(result.alerts ?? []).map((a) => a.summary)]) this.d.store.addInterest(userId, item);
 
@@ -386,6 +387,8 @@ export class Bot {
       }
       const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea, userId);
       if (!r.ok) return r;
+      const old = await this.cancelOldLink(userId);
+      if (old) return old;
       this.d.store.clearPendingLink(userId);
       this.d.store.addInterest(userId, itemList(r.q));
       const when = r.fulfillTime ? `${r.fulfillDate} ${r.fulfillTime}` : r.fulfillDate;
@@ -453,6 +456,9 @@ export class Bot {
         const r = await this.settle(pricing, items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea, userId);
         if (!r.ok) return r;
         const { q, fulfillDate, fulfillTime, note } = r;
+        // The order changed (or they asked again): the old link dies before the new one goes out.
+        const old = await this.cancelOldLink(userId);
+        if (old) return old;
         const now = this.now();
         const summary = describeQuote(q);
         const list = itemList(q);
@@ -468,6 +474,7 @@ export class Bot {
           });
           this.d.store.setPendingLink(userId, {
             url: link.url,
+            sessionId: link.id,
             summary: list,
             createdAt: now.getTime(),
             lines,
@@ -480,6 +487,28 @@ export class Bot {
         }
     };
     return tools;
+  }
+
+  /**
+   * Cancels the buyer's previous unpaid Stripe link, so only the newest order can be paid.
+   * Returns an error for the AI if the old link was already paid or couldn't be cancelled.
+   */
+  private async cancelOldLink(userId: string): Promise<{ ok: false; error: string; handoff?: boolean } | undefined> {
+    const old = this.d.store.pendingLink(userId);
+    if (!old?.sessionId || !this.d.checkout?.expire) return undefined;
+    try {
+      const r = await this.d.checkout.expire(old.sessionId);
+      if (r === "paid") {
+        this.d.store.clearPendingLink(userId);
+        return { ok: false, error: `Their previous link (${old.summary}) was already PAID. Don't make another one for those items. Anything new is a separate order.`, handoff: true };
+      }
+      console.log(`[bot] cancelled old payment link ${old.sessionId} for ${userId}`);
+      this.d.store.clearPendingLink(userId);
+      return undefined;
+    } catch (err) {
+      console.error("[bot] couldn't cancel the old payment link:", err);
+      return { ok: false, error: "Couldn't cancel their previous payment link, so no new one was made. Josh needs to handle it.", handoff: true };
+    }
   }
 
   private now(): Date {

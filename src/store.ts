@@ -16,6 +16,8 @@ export interface PendingLink {
   summary: string;
   createdAt: number;
   followedUp?: boolean;
+  /** Stripe Checkout Session id, so the link can be cancelled when the order changes. */
+  sessionId?: string;
   /** Sheet lines of a Stripe link, so stock comes off when it's paid. */
   lines?: { name: string; variant?: string; size?: string; qty: number }[];
 }

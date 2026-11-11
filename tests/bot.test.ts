@@ -768,3 +768,65 @@ describe("Stripe paid orders (review fixes)", () => {
     expect(copy.firstTime("mid-1")).toBe(false);
   });
 });
+
+describe("one live payment link per buyer", () => {
+  function linkBot(expire: (id: string) => Promise<"expired" | "paid">) {
+    const pricing = loadPricing();
+    const store = new Store();
+    let n = 0;
+    const create = vi.fn(async () => ({ id: `cs_${++n}`, url: `https://checkout.stripe.com/${n}`, expiresAt: 0 }));
+    const results: any[] = [];
+    let order = [{ product: "Spider Hoodie", variant: "White/Black", size: "XS", qty: 1 }];
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
+        results.push(await tools!.checkout!(order, "pickup", "2026-11-12", "3:00 PM"));
+        return { text: "ok" };
+      }),
+    };
+    const { ig } = setup();
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, checkout: { create, expire: vi.fn(expire) }, now: () => new Date("2026-11-05T17:00:00Z") });
+    const say = (mid: string) => bot.handle({ object: "instagram", entry: [{ id: OWN_ID, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN_ID }, message: { mid, text: "ready" } }] }] });
+    return { store, create, results, say, setOrder: (o: typeof order) => (order = o) };
+  }
+
+  it("cancels the old link before sending a new one when the order changes", async () => {
+    const expire = vi.fn(async () => "expired" as const);
+    const t = linkBot(expire);
+    await t.say("l1");
+    t.setOrder([{ product: "Spider Hoodie", variant: "White/Black", size: "XS", qty: 2 }]);
+    await t.say("l2");
+    expect(expire).toHaveBeenCalledWith("cs_1");
+    expect(t.create).toHaveBeenCalledTimes(2);
+    expect(t.store.pendingLink("u1")).toMatchObject({ sessionId: "cs_2" });
+  });
+
+  it("won't make a new link if the old one was already paid", async () => {
+    const t = linkBot(async () => "paid");
+    await t.say("p1");
+    await t.say("p2");
+    expect(t.create).toHaveBeenCalledTimes(1);
+    expect(t.results[1]).toMatchObject({ ok: false, handoff: true });
+  });
+
+  it("StripeCheckout.expire: cancels, or reports an already-paid session", async () => {
+    const calls: string[] = [];
+    const fetchFn = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url.endsWith("/expire")) return new Response("{}", { status: url.includes("paid") ? 400 : 200 });
+      return new Response(JSON.stringify({ status: "complete" }), { status: 200 });
+    });
+    const s = new StripeCheckout("sk_test_1", "https://x", fetchFn as unknown as typeof fetch);
+    expect(await s.expire("cs_open")).toBe("expired");
+    expect(await s.expire("cs_paid")).toBe("paid");
+    expect(calls).toContain("https://api.stripe.com/v1/checkout/sessions/cs_paid");
+  });
+
+  it("only turns Stripe on with a sandbox key, unless live is allowed", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    const base = { IG_APP_SECRET: "s", IG_ACCESS_TOKEN: "t", IG_VERIFY_TOKEN: "v", ANTHROPIC_API_KEY: "k", STRIPE_ENABLED: "true" };
+    expect(loadConfig({ ...base, STRIPE_SECRET_KEY: "sk_test_abc" }).stripeEnabled).toBe(true);
+    const live = loadConfig({ ...base, STRIPE_SECRET_KEY: "sk_live_abc" });
+    expect([live.stripeEnabled, live.stripeLiveBlocked]).toEqual([false, true]);
+    expect(loadConfig({ ...base, STRIPE_SECRET_KEY: "sk_live_abc", STRIPE_ALLOW_LIVE: "true" }).stripeEnabled).toBe(true);
+  });
+});
