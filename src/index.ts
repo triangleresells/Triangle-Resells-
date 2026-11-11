@@ -95,7 +95,18 @@ createServer(bot, {
     labels: { all: () => store.allLabels(), markPaid: (id) => desk.markPaid(id), done: (id) => desk.done(id), doneAll: () => desk.doneAll(), cancel: (id) => desk.cancel(id) },
   },
   onPaidOrder: async (order) => {
-    await bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "), order.fulfillment);
+    // Stripe can deliver the same event more than once: handle each paid session once.
+    if (!store.firstTime(`stripe:${order.sessionId}`)) {
+      console.log(`[stripe] already handled ${order.sessionId}, skipping the repeat`);
+      return;
+    }
+    await bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "), order.fulfillment, {
+      lines: order.lines,
+      shipping: order.shipping,
+      deliveryFee: order.deliveryFee,
+      shipTo: order.shipAddress,
+      test: order.test,
+    });
     return handlePaidOrder(order, {
       sendDm: (id, text) => bot.sendDm(id, text),
       calendar,

@@ -3,12 +3,12 @@ import type { KeywordRule } from "./config.js";
 import type { Notifier } from "./handoff.js";
 import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
-import { freebiesOf } from "./catalog.js";
+import { freebiesOf, rowMatches } from "./catalog.js";
 import { describeQuote, quoteOrder, type PricingConfig, type Quote } from "./pricing.js";
 import { matchCustomers } from "./customers.js";
 import type { ChatImage, Customer, Store } from "./store.js";
 import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
-import { HOLD_MINUTES } from "./stripe.js";
+import { HOLD_MINUTES, type PaidLine } from "./stripe.js";
 import type { OrderDesk } from "./desk.js";
 import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
@@ -301,8 +301,9 @@ export class Bot {
     fulfillDate: string,
     fulfillTime: string | undefined,
     deliveryArea: string | undefined,
+    userId?: string,
   ): Promise<{ ok: false; error: string; fixable?: boolean } | { ok: true; q: Quote; fulfillDate: string; fulfillTime?: string; note?: string }> {
-    const q = quoteOrder(pricing, items, fulfillment, deliveryArea);
+    const q = quoteOrder(this.withHeld(pricing, userId), items, fulfillment, deliveryArea);
     if (q.problems.length) {
       // Too far or unknown town: the AI can fix it (ship, meet halfway, or ask the town).
       const fixable = q.problems.every((p) => p.startsWith("Too far") || p.startsWith("Delivery area") || /not in stock|Only \d+ of|sold out/.test(p));
@@ -329,6 +330,29 @@ export class Bot {
       fulfillTime = undefined;
     }
     return { ok: true, q, fulfillDate, fulfillTime, note };
+  }
+
+  /**
+   * Stock minus what other buyers' open (unexpired) card links hold. Card orders only come off the
+   * sheet once paid, so without this two buyers could each get a link for the last piece.
+   */
+  private withHeld(pricing: PricingConfig, userId?: string): PricingConfig {
+    if (!pricing.stock?.length) return pricing;
+    const since = this.now().getTime() - HOLD_MINUTES * 60 * 1000;
+    const held = this.d.store.openLinks(since).filter((l) => l.userId !== userId).flatMap((l) => l.link.lines ?? []);
+    if (!held.length) return pricing;
+    const stock = pricing.stock.map((r) => ({ ...r }));
+    for (const line of held) {
+      let left = line.qty;
+      for (const r of stock) {
+        if (!left) break;
+        if (r.status !== "for_sale" || !rowMatches(r, line)) continue;
+        const take = Math.min(r.qty, left);
+        r.qty -= take;
+        left -= take;
+      }
+    }
+    return { ...pricing, stock };
   }
 
   /** Quote and order actions for one customer. Prices always come from the price list, never the AI. */
@@ -360,7 +384,7 @@ export class Bot {
         const missing = (["name", "street", "city", "state", "zip"] as const).filter((k) => !String(shipTo?.[k] ?? "").trim());
         if (missing.length) return { ok: false, error: `Need the buyer's shipping info first: ${missing.join(", ")}`, fixable: true };
       }
-      const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
+      const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea, userId);
       if (!r.ok) return r;
       this.d.store.clearPendingLink(userId);
       this.d.store.addInterest(userId, itemList(r.q));
@@ -426,12 +450,13 @@ export class Bot {
     if (!this.d.checkout) return tools;
     tools.checkout = async (items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea) => {
         if (!this.d.checkout) return { ok: false, error: "card checkout isn't set up yet" };
-        const r = await this.settle(pricing, items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea);
+        const r = await this.settle(pricing, items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea, userId);
         if (!r.ok) return r;
         const { q, fulfillDate, fulfillTime, note } = r;
         const now = this.now();
         const summary = describeQuote(q);
         const list = itemList(q);
+        const lines = q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty }));
         try {
           const link = await this.d.checkout.create(q, {
             igUserId: userId,
@@ -439,12 +464,13 @@ export class Bot {
             fulfillDate,
             fulfillTime: fulfillTime?.trim() || undefined,
             summary: list,
+            lines,
           });
           this.d.store.setPendingLink(userId, {
             url: link.url,
             summary: list,
             createdAt: now.getTime(),
-            lines: q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty })),
+            lines,
           });
           this.d.store.addInterest(userId, list);
           return { ok: true, url: link.url, total: q.total, summary, note };
@@ -500,13 +526,29 @@ export class Bot {
     return sent;
   }
 
-  /** Stripe says they paid: no follow-up for that link, and it goes on their customer record. */
-  async markPaid(userId: string, summary = "", total = 0, when = "", fulfillment: "pickup" | "delivery" | "ship" = "pickup"): Promise<void> {
-    const lines = this.d.store.pendingLink(userId)?.lines ?? [];
+  /**
+   * Stripe says they paid: no follow-up for that link, and it goes on their customer record.
+   * `extra.lines` are the paid session's own lines; the chat's latest link is only a fallback for older links.
+   * Test-mode payments touch nothing real (no stock, label, sales tracker or customer record).
+   */
+  async markPaid(
+    userId: string,
+    summary = "",
+    total = 0,
+    when = "",
+    fulfillment: "pickup" | "delivery" | "ship" = "pickup",
+    extra: { lines?: PaidLine[]; shipping?: number; deliveryFee?: number; shipTo?: ShipTo; test?: boolean } = {},
+  ): Promise<void> {
+    const lines = extra.lines ?? this.d.store.pendingLink(userId)?.lines ?? [];
     this.d.store.clearPendingLink(userId);
+    if (extra.test) {
+      console.log(`[bot] TEST payment from ${userId} ($${total}): stock, sales tracker and labels left alone`);
+      return;
+    }
     if (summary || total) this.d.store.addOrder(userId, summary, total);
-    if (this.d.desk) await this.d.desk.stripePaid(userId, lines, summary, total, when, fulfillment);
-    else this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment });
+    const fees = { shipping: extra.shipping, deliveryFee: extra.deliveryFee, shipTo: extra.shipTo };
+    if (this.d.desk) await this.d.desk.stripePaid(userId, lines, summary, total, when, fulfillment, fees);
+    else this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment, ...fees });
   }
 
   /**

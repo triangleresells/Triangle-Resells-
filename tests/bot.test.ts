@@ -9,7 +9,7 @@ import { loadPricing } from "../src/config.js";
 import { quoteOrder } from "../src/pricing.js";
 import { pickupProblem, scheduleText, shipDateFor, type BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
-import { paidOrderFromEvent, StripeCheckout } from "../src/stripe.js";
+import { checkoutParams, paidOrderFromEvent, StripeCheckout } from "../src/stripe.js";
 
 const OWN_ID = "17840000000000000";
 const USER = "user-1";
@@ -689,5 +689,82 @@ describe("human-like reply timing", () => {
     await t.bot.handle(dm("L please", "m3"));
     expect(Date.now() - again).toBeLessThan(75);
     expect(t.sent).toHaveLength(2);
+  });
+});
+
+describe("Stripe paid orders (review fixes)", () => {
+  const paidEvent = (metadata: Record<string, string>, extra: Record<string, unknown> = {}) => ({
+    type: "checkout.session.completed",
+    created: 1_762_000_000,
+    data: { object: { id: "cs_9", payment_status: "paid", amount_total: 9500, metadata: { source: "ai_dm_bot", ig_user_id: "u1", ...metadata }, ...extra } },
+  });
+
+  it("carries the paid lines, fees and split address through the session metadata", () => {
+    const pricing = loadPricing();
+    const q = quoteOrder(pricing, [{ product: "Spider Hoodie", variant: "White/Black", size: "XS", qty: 2 }], "ship");
+    const lines = q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty }));
+    const p = checkoutParams(q, { igUserId: "u1", account: "Triangle Resells", fulfillDate: "2026-11-12", summary: "2x Spider", lines }, "https://x") as any;
+    expect(Object.values(p.metadata).every((v) => String(v).length <= 500)).toBe(true);
+    const order = paidOrderFromEvent(
+      paidEvent(p.metadata, {
+        collected_information: { shipping_details: { name: "Jay Smith", address: { line1: "1 Main St", line2: "Apt 2", city: "Atlanta", state: "GA", postal_code: "30301" } } },
+      }),
+    )!;
+    expect(order.lines).toEqual(lines.map((l) => ({ name: l.name, ...(l.variant ? { variant: l.variant } : {}), ...(l.size ? { size: l.size } : {}), qty: l.qty })));
+    expect(order.shipping).toBe(q.shipping);
+    expect(order.shipAddress).toEqual({ name: "Jay Smith", street: "1 Main St", apt: "Apt 2", city: "Atlanta", state: "GA", zip: "30301" });
+  });
+
+  it("deducts the paid session's lines even after the chat's link was cleared or replaced", async () => {
+    const t = setup();
+    const stripePaid = vi.fn(async () => ({}) as any);
+    const bot = new Bot({ ig: t.ig, agent: t.agent, store: t.store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, desk: { stripePaid } as any });
+    t.store.setPendingLink("u1", { url: "https://new", summary: "other", createdAt: 0, lines: [{ name: "Other", qty: 9 }] });
+    await bot.markPaid("u1", "2x Spider", 95, "ship", "ship", { lines: [{ name: "Spider Hoodie", qty: 2 }], shipping: 15 });
+    expect((stripePaid.mock.calls[0] as any[])[1]).toEqual([{ name: "Spider Hoodie", qty: 2 }]);
+    expect((stripePaid.mock.calls[0] as any[])[6]).toMatchObject({ shipping: 15 });
+  });
+
+  it("leaves stock, labels and the tracker alone for a test-mode payment", async () => {
+    const t = setup();
+    const stripePaid = vi.fn();
+    const bot = new Bot({ ig: t.ig, agent: t.agent, store: t.store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, desk: { stripePaid } as any });
+    await bot.markPaid("u1", "1x Alo", 50, "pickup", "pickup", { lines: [{ name: "Alo Hoodie", qty: 1 }], test: true });
+    expect(stripePaid).not.toHaveBeenCalled();
+    expect(t.store.allLabels()).toHaveLength(0);
+  });
+
+  it("won't link the last piece to a second buyer while the first buyer's link is open", async () => {
+    const pricing = loadPricing();
+    const store = new Store();
+    const create = vi.fn(async () => ({ id: "cs", url: `https://checkout.stripe.com/${create.mock.calls.length}`, expiresAt: 0 }));
+    const results: { ok: boolean }[] = [];
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
+        // Alo Hoodie Gray M: 1 on the sheet.
+        results.push(await tools!.checkout!([{ product: "Alo Hoodie", variant: "Gray", size: "M", qty: 1 }], "pickup", "2026-11-12", "3:00 PM"));
+        return { text: "ok" };
+      }),
+    };
+    const { ig } = setup();
+    let now = new Date("2026-11-05T17:00:00Z");
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, checkout: { create }, now: () => now });
+    const from = (u: string, mid: string): WebhookPayload => ({ object: "instagram", entry: [{ id: OWN_ID, messaging: [{ sender: { id: u }, recipient: { id: OWN_ID }, message: { mid, text: "send it" } }] }] });
+    await bot.handle(from("a", "h1"));
+    await bot.handle(from("b", "h2"));
+    expect(results.map((r) => r.ok)).toEqual([true, false]);
+    now = new Date(now.getTime() + 32 * 60 * 1000); // A's link expired
+    await bot.handle(from("b", "h3"));
+    expect(results[2].ok).toBe(true);
+  });
+
+  it("remembers handled webhook ids (Meta and Stripe) across a restart", () => {
+    const store = new Store();
+    expect(store.firstTime("stripe:cs_1")).toBe(true);
+    expect(store.firstTime("mid-1")).toBe(true);
+    const copy = new Store();
+    copy.restore(JSON.parse(JSON.stringify(store.snapshot())));
+    expect(copy.firstTime("stripe:cs_1")).toBe(false);
+    expect(copy.firstTime("mid-1")).toBe(false);
   });
 });

@@ -63,16 +63,21 @@ export class StockKeeper {
       return m ? Number(m[0]) : 0;
     };
     const problems: string[] = [];
-    const writes: { range: string; values: number[][] }[] = [];
+    const writes: { range: string; values: (string | number)[][] }[] = [];
+    const statusWrites: { range: string; values: string[][] }[] = [];
     const pending = new Map<number, number>();
     for (const line of lines) {
-      const candidates: number[] = [];
+      const matching: number[] = [];
       for (let i = at + 1; i < rows.length; i++) {
         const r = rows[i];
         if (!r?.[ci]) continue;
-        if (norm(r[cst] ?? "") !== "for sale") continue;
-        if (rowMatches({ item: r[ci] ?? "", color: r[cc] ?? "", size: r[cs] ?? "" }, line)) candidates.push(i);
+        if (rowMatches({ item: r[ci] ?? "", color: r[cc] ?? "", size: r[cs] ?? "" }, line)) matching.push(i);
       }
+      const forSale = matching.filter((i) => norm(rows[i][cst] ?? "") === "for sale");
+      // Putting stock back: a row flipped to "Sold out" at 0 still takes it, and goes back on sale.
+      const soldOut = sign > 0 && !forSale.length ? matching.filter((i) => /\bsold\b/.test(norm(rows[i][cst] ?? ""))) : [];
+      const candidates = forSale.length ? forSale : soldOut;
+      for (const i of soldOut.slice(0, 1)) if (cst >= 0) statusWrites.push({ range: `'${STOCK_TAB}'!${colLetter(cst)}${i + 1}`, values: [["FOR SALE"]] });
       if (!candidates.length) {
         problems.push(`not found on ${STOCK_TAB}: ${[line.name, line.variant, line.size].filter(Boolean).join(" ")}`);
         continue;
@@ -89,6 +94,7 @@ export class StockKeeper {
       if (left && sign < 0) problems.push(`only part of ${line.qty}x ${line.name} was on ${STOCK_TAB}`);
     }
     for (const [i, q] of pending) writes.push({ range: `'${STOCK_TAB}'!${colLetter(cq)}${i + 1}`, values: [[q]] });
+    writes.push(...statusWrites);
     await this.io.write(writes);
     this.onChange?.();
     return problems;
@@ -119,12 +125,21 @@ const mdy = (d: Date) => new Intl.DateTimeFormat("en-US", { timeZone: "America/N
 
 /** Writes sales into Josh's tracker (one tab per month; local table AD-AN, shipped table A-AA). Never writes the Profit columns. */
 export class SalesLog {
+  /** One sale at a time, so two logs never pick the same empty row. */
+  private chain: Promise<unknown> = Promise.resolve();
+
   constructor(
     private io: Pick<SheetIO, "ranges" | "write">,
     private trackerId: string,
   ) {}
 
-  async log(s: Sale): Promise<void> {
+  log(s: Sale): Promise<void> {
+    const run = this.chain.then(() => this.doLog(s));
+    this.chain = run.catch(() => {});
+    return run;
+  }
+
+  private async doLog(s: Sale): Promise<void> {
     const tab = trackerTab(s.date);
     const ship = s.fulfillment === "ship";
     const keyCol = ship ? "A" : "AD";
@@ -291,9 +306,30 @@ export class OrderDesk {
   }
 
   /** Stripe said it's paid: stock off, PAID label, logged as a sale. (Calendar + alert happen in handlePaidOrder.) */
-  async stripePaid(userId: string, lines: OrderLine[], summary: string, total: number, when: string, fulfillment: "pickup" | "delivery" | "ship" = "pickup"): Promise<OrderLabel> {
+  async stripePaid(
+    userId: string,
+    lines: OrderLine[],
+    summary: string,
+    total: number,
+    when: string,
+    fulfillment: "pickup" | "delivery" | "ship" = "pickup",
+    fees: { shipping?: number; deliveryFee?: number; shipTo?: ShipTo } = {},
+  ): Promise<OrderLabel> {
     await this.takeStock(lines, -1, userId);
-    const label = this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment, cost: await this.costOf(lines) });
+    const label = this.d.store.addLabel({
+      userId,
+      label: "PAID",
+      summary,
+      total,
+      payment: "stripe",
+      when,
+      lines,
+      fulfillment,
+      cost: await this.costOf(lines),
+      ...(fees.shipping ? { shipping: fees.shipping } : {}),
+      ...(fees.deliveryFee ? { deliveryFee: fees.deliveryFee } : {}),
+      ...(fees.shipTo ? { shipTo: fees.shipTo } : {}),
+    });
     await this.logSale(label);
     return label;
   }
@@ -313,9 +349,10 @@ export class OrderDesk {
     return this.d.store.clearLabel(id);
   }
 
+  /** End of day: clears PAID labels. BOOKED ones stay until Josh marks them paid, done or cancelled one by one. */
   async doneAll(): Promise<number> {
     let n = 0;
-    for (const l of this.d.store.allLabels()) if (await this.done(l.id)) n++;
+    for (const l of this.d.store.allLabels()) if (l.label === "PAID" && (await this.done(l.id))) n++;
     return n;
   }
 

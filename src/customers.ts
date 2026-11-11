@@ -70,5 +70,5 @@ function labelsHtml(labels: OrderLabel[], key: string, esc: (s: string) => strin
     }${btn("clear", l.id, "Done, clear label")} ${btn("cancel", l.id, "Cancel (put stock back)")}</li>`;
   };
   if (!labels.length) return "<p>No open orders.</p>";
-  return `<ul>${labels.map(row).join("")}</ul><form method="post" action="/admin/labels/clear-all?key=${k}"><button>Clear ALL labels (end of day)</button></form>`;
+  return `<ul>${labels.map(row).join("")}</ul><form method="post" action="/admin/labels/clear-all?key=${k}"><button>Clear all PAID labels (end of day)</button></form>`;
 }

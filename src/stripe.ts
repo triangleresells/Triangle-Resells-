@@ -1,6 +1,41 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { lineLabel, type Quote } from "./pricing.js";
 import { shipDateFor } from "./schedule.js";
+import type { ShipTo } from "./store.js";
+
+/** One sheet line of an order (what comes off BOT STOCK when it's paid). */
+export interface PaidLine {
+  name: string;
+  variant?: string;
+  size?: string;
+  qty: number;
+}
+
+/** Stripe metadata values max out at 500 chars, so the order lines are spread over order_lines_0, _1, ... */
+const LINES_CHUNK = 450;
+
+export function linesToMetadata(lines: PaidLine[]): Record<string, string> {
+  const json = JSON.stringify(lines.map((l) => [l.name, l.variant ?? "", l.size ?? "", l.qty]));
+  const out: Record<string, string> = {};
+  for (let i = 0; i * LINES_CHUNK < json.length; i++) out[`order_lines_${i}`] = json.slice(i * LINES_CHUNK, (i + 1) * LINES_CHUNK);
+  return out;
+}
+
+export function linesFromMetadata(m: Record<string, string | undefined>): PaidLine[] | undefined {
+  let json = "";
+  for (let i = 0; m[`order_lines_${i}`] !== undefined; i++) json += m[`order_lines_${i}`];
+  if (!json) return undefined;
+  try {
+    return (JSON.parse(json) as [string, string, string, number][]).map(([name, variant, size, qty]) => ({
+      name,
+      ...(variant ? { variant } : {}),
+      ...(size ? { size } : {}),
+      qty: Number(qty) || 0,
+    }));
+  } catch {
+    return undefined;
+  }
+}
 
 export interface OrderDetails {
   igUserId: string;
@@ -10,6 +45,8 @@ export interface OrderDetails {
   /** e.g. "3:00 PM". Pickups only. */
   fulfillTime?: string;
   summary: string;
+  /** Sheet lines, carried in the session metadata so the paid items (not the chat's latest link) come off stock. */
+  lines?: PaidLine[];
   /** Marks a test checkout (metadata test_order=true). Set automatically for Stripe test-mode keys. */
   testOrder?: boolean;
 }
@@ -101,6 +138,9 @@ export function checkoutParams(quote: Quote, order: OrderDetails, successUrl: st
       buyer_label: String(quote.buyerProvidesLabel),
       ...(quote.delivery ? { delivery_area: quote.delivery.area, delivery_minutes: String(quote.delivery.minutes) } : {}),
       order_summary: order.summary.slice(0, 500),
+      ...(quote.shipping > 0 ? { shipping: String(quote.shipping) } : {}),
+      ...(quote.delivery && quote.delivery.fee > 0 ? { delivery_fee: String(quote.delivery.fee) } : {}),
+      ...(order.lines ? linesToMetadata(order.lines) : {}),
       ...(order.testOrder ? { test_order: "true" } : {}),
     },
   };
@@ -157,6 +197,12 @@ export interface PaidOrder {
   buyerEmail?: string;
   buyerPhone?: string;
   shipTo?: string;
+  /** The same address, split up for the sales tracker. */
+  shipAddress?: ShipTo;
+  /** Sheet lines from the session metadata. Undefined for links made before lines were sent to Stripe. */
+  lines?: PaidLine[];
+  shipping?: number;
+  deliveryFee?: number;
 }
 
 /** Pulls a paid bot order out of a checkout.session.completed event. Returns undefined for anything else. */
@@ -170,6 +216,10 @@ export function paidOrderFromEvent(event: any): PaidOrder | undefined {
     ? [s.collected_information?.shipping_details?.name ?? s.shipping_details?.name, addr.line1, addr.line2, `${addr.city}, ${addr.state} ${addr.postal_code}`]
         .filter(Boolean)
         .join(", ")
+    : undefined;
+  const shipName = s.collected_information?.shipping_details?.name ?? s.shipping_details?.name ?? s.customer_details?.name ?? "";
+  const shipAddress: ShipTo | undefined = addr
+    ? { name: shipName, street: addr.line1 ?? "", ...(addr.line2 ? { apt: addr.line2 } : {}), city: addr.city ?? "", state: addr.state ?? "", zip: addr.postal_code ?? "" }
     : undefined;
   const ship = m.fulfillment === "ship";
   const paidAt = new Date(Number(event.created) > 0 ? Number(event.created) * 1000 : Date.now());
@@ -190,5 +240,9 @@ export function paidOrderFromEvent(event: any): PaidOrder | undefined {
     buyerEmail: s.customer_details?.email ?? undefined,
     buyerPhone: s.customer_details?.phone ?? undefined,
     shipTo,
+    ...(shipAddress ? { shipAddress } : {}),
+    lines: linesFromMetadata(m),
+    ...(Number(m.shipping) > 0 ? { shipping: Number(m.shipping) } : {}),
+    ...(Number(m.delivery_fee) > 0 ? { deliveryFee: Number(m.delivery_fee) } : {}),
   };
 }

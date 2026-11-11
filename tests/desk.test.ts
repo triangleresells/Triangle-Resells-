@@ -178,3 +178,57 @@ describe("bot payment rules", () => {
     expect(payTextFor("cash_app", 58, { cashApp: "$X" })).toContain("Cash App $58 to $X");
   });
 });
+
+describe("review fixes", () => {
+  it("puts cancelled stock back on a row that was flipped to SOLD OUT, and back on sale", async () => {
+    const rows = STOCK.map((r) => [...r]);
+    rows[2][5] = "0";
+    rows[2][7] = "SOLD OUT";
+    const f = fakeSheets(rows);
+    expect(await new StockKeeper(f.io).adjust([{ name: "Chrome Hearts Hat", variant: "Black", qty: 1 }], 1)).toEqual([]);
+    expect(f.rows[2][5]).toBe("1");
+    expect(f.writes.find((w) => w.range === "'BOT STOCK'!H3")?.values[0][0]).toBe("FOR SALE");
+  });
+
+  it("logs two sales at once into two different rows", async () => {
+    const filled: string[][] = [];
+    const io: SheetIO = {
+      tabs: vi.fn(async () => [[]]),
+      ranges: vi.fn(async () => {
+        const snap = filled.map((x) => [...x]); // read now, answer later, like a slow Sheets API
+        await new Promise((r) => setTimeout(r, 5));
+        return [snap];
+      }),
+      write: vi.fn(async (data) => {
+        if (data[0].range.includes("AD")) filled.push(["x"]);
+      }),
+    };
+    const log = new SalesLog(io, "T");
+    const sale = { date: new Date("2026-11-12T20:00:00Z"), products: "x", itemsTotal: 1, payment: "cash", fulfillment: "pickup" as const, notes: "" };
+    await Promise.all([log.log(sale), log.log(sale)]);
+    const ranges = (io.write as any).mock.calls.map((c: any) => c[0][0].range);
+    expect(ranges).toEqual(["'Nov 2026'!AD6:AI6", "'Nov 2026'!AD7:AI7"]);
+  });
+
+  it("Stripe PAID label keeps shipping and address, so the tracker gets items-only revenue", async () => {
+    const f = fakeSheets();
+    const desk = new OrderDesk({ store: new Store(), notify: async () => {}, accountName: "x", sales: new SalesLog(f.io, "T") });
+    const shipTo = { name: "Jay Smith", street: "1 Main St", city: "Atlanta", state: "GA", zip: "30301" };
+    await desk.stripePaid("u1", [], "1x YSL Y EDP", 70, "ship", "ship", { shipping: 10, shipTo });
+    const head = f.writes.find((w) => w.range.startsWith("'Nov 2026'!A") && !w.range.includes("AA"))!;
+    expect(head.values[0][5]).toBe(70); // 60 items + 10 shipping, not 70 + 10
+    expect(f.writes.find((w) => w.range.includes("!J"))!.values[0]).toContain("Jay Smith");
+  });
+
+  it("end-of-day clear only clears PAID labels, never logs unconfirmed BOOKED ones", async () => {
+    const f = fakeSheets();
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "x", sales: new SalesLog(f.io, "T") });
+    store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x cologne", total: 60, payment: "cash app", when: "pickup", saysPaid: "cash app: sent" } as any);
+    const paid = store.addLabel({ userId: "u2", label: "PAID", summary: "1x hat", total: 29, payment: "stripe", when: "pickup", logged: true } as any);
+    expect(await desk.doneAll()).toBe(1);
+    expect(store.allLabels().map((l) => l.label)).toEqual(["BOOKED"]);
+    expect(store.getLabel(paid.id)).toBeUndefined();
+    expect(f.writes.filter((w) => w.sheetId === "T")).toHaveLength(0);
+  });
+});

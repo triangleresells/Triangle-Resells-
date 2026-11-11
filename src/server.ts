@@ -148,7 +148,7 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
     app.post("/admin/labels/clear-all", async (req, res) => {
       const n = (await admin.labels?.doneAll()) ?? 0;
       console.log(`[admin] cleared ${n} order label(s)`);
-      res.type("html").send(page(req.query.key, `Cleared ${n} label(s).`));
+      res.type("html").send(page(req.query.key, `Cleared ${n} PAID label(s). BOOKED orders stay until you mark them paid, done or cancelled.`));
     });
     app.get("/admin/customers.csv", (_req, res) => {
       res.type("text/csv").attachment("triangle-customers.csv").send(customersCsv(admin.customers()));

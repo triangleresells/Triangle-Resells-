@@ -90,12 +90,16 @@ export interface StoreSnapshot {
   convos: { userId: string; turns: ChatTurn[]; pausedUntil: number; lastActivity: number; pendingLink?: PendingLink }[];
   customers: Customer[];
   labels?: OrderLabel[];
+  /** Webhook ids already handled (Meta mids, comments, Stripe sessions), so redeliveries after a restart are skipped. */
+  seen?: [string, number][];
 }
 
 const MAX_TURNS = 20;
 const MAX_INTERESTS = 30;
 const CONVO_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const SEEN_TTL_MS = 24 * 60 * 60 * 1000;
+/** Stripe retries a webhook for up to 3 days. */
+const STRIPE_SEEN_TTL_MS = 4 * 24 * 60 * 60 * 1000;
 
 /**
  * Conversation state and the customer list. Lives in memory; src/persist.ts saves it to a file
@@ -130,6 +134,7 @@ export class Store {
   firstTime(eventId: string): boolean {
     if (this.seen.has(eventId)) return false;
     this.seen.set(eventId, this.now());
+    this.changed();
     return true;
   }
 
@@ -201,6 +206,7 @@ export class Store {
       })),
       customers: this.allCustomers(),
       labels: this.labels,
+      seen: [...this.seen],
     };
   }
 
@@ -218,6 +224,7 @@ export class Store {
         firstSeen: c.firstSeen ?? this.now(),
       });
     }
+    for (const [id, at] of snap.seen ?? []) this.seen.set(id, at);
     this.labels = (snap.labels ?? []).filter((l) => l && l.id && (l.label === "PAID" || l.label === "BOOKED"));
   }
 
@@ -371,6 +378,13 @@ export class Store {
     }
   }
 
+  /** Card links made after `createdAfter` (still payable), for holding their stock. */
+  openLinks(createdAfter: number): { userId: string; link: PendingLink }[] {
+    const out: { userId: string; link: PendingLink }[] = [];
+    for (const [userId, c] of this.convos) if (c.pendingLink?.url && c.pendingLink.createdAt > createdAfter) out.push({ userId, link: c.pendingLink });
+    return out;
+  }
+
   /** Unpaid links made before `createdBefore` that haven't been followed up yet. */
   duePendingLinks(createdBefore: number): { userId: string; link: PendingLink }[] {
     const out: { userId: string; link: PendingLink }[] = [];
@@ -384,7 +398,7 @@ export class Store {
   cleanup(): void {
     const t = this.now();
     for (const [id, c] of this.convos) if (t - c.lastActivity > CONVO_TTL_MS) this.convos.delete(id);
-    for (const [id, at] of this.seen) if (t - at > SEEN_TTL_MS) this.seen.delete(id);
+    for (const [id, at] of this.seen) if (t - at > (id.startsWith("stripe:") ? STRIPE_SEEN_TTL_MS : SEEN_TTL_MS)) this.seen.delete(id);
     if (this.botMessageIds.size > 5000) this.botMessageIds.clear();
   }
 }
