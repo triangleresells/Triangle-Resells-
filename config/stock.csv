@@ -1,65 +1,85 @@
-Category,Brand,Item,Color,Size,Qty,Price List,Status,Notes
-Hoodie,Alo,Alo Hoodie,Black,XS,2,ALO,FOR SALE,
-Hoodie,Alo,Alo Hoodie,Gray,M,1,ALO,FOR SALE,
-Pants,Alo,Alo Sweatpants,Black,XL,2,ALO,FOR SALE,
-Hoodie,Spider,Spider Hoodie,Black/Pink,S,1,SPIDER HOODIES,FOR SALE,
-Hoodie,Spider,Spider Hoodie,White/Black,XS,2,SPIDER HOODIES,FOR SALE,
-Hoodie,Valley,Valley Hoodie,White/Black,XL,1,VALLEY HOODIES,FOR SALE,
-Hoodie,Valley,Valley Hoodie,Black/Burgundy,M,1,VALLEY HOODIES,FOR SALE,
-Hoodie,Valley,Valley Hoodie,Black/Burgundy,L,1,VALLEY HOODIES,FOR SALE,
-Tee,Chrome Hearts,Chrome Hearts Tee,Black Multicolor,L,1,CHROME TEES,FOR SALE,
-Tee,Chrome Hearts,Chrome Hearts Tee,White,XL,1,CHROME TEES,FOR SALE,
-Tee,Chrome Hearts,Chrome Hearts Tee,Black/Green,L,1,CHROME TEES,FOR SALE,
-Tee,Chrome Hearts,Chrome Hearts Tee,Black/Pink/Blue,M,1,CHROME TEES,FOR SALE,
-Tee,Chrome Hearts,Chrome Hearts Tee,Black/Pink/Blue,L,1,CHROME TEES,FOR SALE,
-Tee,BAPE,BAPE Tee (B tier),Black/Green/Pink,S,2,BAPE TEES,FOR SALE,
-Tee,BAPE,BAPE Tee (B tier),Black/Green,M,2,BAPE TEES,FOR SALE,
-Button-Up,Amiri,Amiri Button-Up,White,L,5,AMIRI BUTTON-UPS,FOR SALE,
-Button-Up,Amiri,Amiri Button-Up,Black,L,6,AMIRI BUTTON-UPS,FOR SALE,
-Tee,Valley,Valley Tee,White/Orange,M,1,VALLEY TEES,FOR SALE,
-Tee,Valley,Valley Tee,White/Orange,L,1,VALLEY TEES,FOR SALE,
-Tee,Valley,Valley Tee,Blue/Red,S,1,VALLEY TEES,FOR SALE,
-Tee,Satoshi Nakamoto,Satoshi Tee,White/Black/Green,S,2,SATOSHI TEES,FOR SALE,
-Tee,Satoshi Nakamoto,Satoshi Tee,Black/White,S,1,SATOSHI TEES,FOR SALE,
-Tee,Satoshi Nakamoto,Satoshi Tee,Black/White,L,1,SATOSHI TEES,FOR SALE,
-Tee,Satoshi Nakamoto,Satoshi Tee,Black/Blue,M,1,SATOSHI TEES,FOR SALE,
-Tee,Satoshi Nakamoto,Satoshi Tee,Black/Red,M,1,SATOSHI TEES,FOR SALE,
-Tee,Godspeed,Godspeed Tee,Yellow/Orange,M,1,GODSPEED TEES,FOR SALE,
-Tee,Godspeed,Godspeed Tee,World Cup,M,1,GODSPEED TEES,FOR SALE,
-Tee,Enfant Riches Deprimes,ERD Tee,White/Black,M,1,ERD TEES,FOR SALE,
-Jeans,Purple,Purple Jeans,All Black,28,1,PURPLE JEANS,FOR SALE,
-Jeans,Purple,Purple Jeans,All Black,30,2,PURPLE JEANS,FOR SALE,
-Jeans,Purple,Purple Jeans,All Black,32,2,PURPLE JEANS,FOR SALE,
-Jeans,Purple,Purple Jeans,Black/Gray,34,1,PURPLE JEANS,FOR SALE,
-Jeans,Purple,Purple Jeans,Blue,28,1,PURPLE JEANS,FOR SALE,
-Set,Gia,Gia Set,Yellow,S,1,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Yellow,M,1,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Dark Pink,S,2,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Light Pink,M,1,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Blue,M,1,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Red Polka Dot,M,1,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Purple,S,1,GIA SETS,FOR SALE,
-Set,Gia,Gia Set,Purple,M,1,GIA SETS,FOR SALE,
-Set,Lululemon,Lululemon Set,Pink,4,3,LULULEMON SETS,FOR SALE,
-Set,Lululemon,Lululemon Set,Blue,6,1,LULULEMON SETS,FOR SALE,
-Hat,Chrome Hearts,Chrome Hearts Hat,White/Black,One Size,10,CHROME HEARTS HATS,FOR SALE,
-Hat,Chrome Hearts,Chrome Hearts Hat,Black,One Size,8,CHROME HEARTS HATS,FOR SALE,
-Bag,Gucci,Gucci Bag,,One Size,2,BAGS,FOR SALE,
-Bag,Goyard,Goyard Bag,,One Size,1,BAGS,FOR SALE,
-Fragrance,,Tom Ford F*cking Fabulous,,,7,FRAGRANCES,FOR SALE,
-Fragrance,,Tom Ford Ombre Leather,,,2,FRAGRANCES,FOR SALE,
-Fragrance,,Bleu de Chanel EDP,,,5,FRAGRANCES,FOR SALE,
-Fragrance,,Bleu de Chanel Parfum,,,1,FRAGRANCES,FOR SALE,
-Fragrance,,Gucci Guilty,,,1,FRAGRANCES,FOR SALE,
-Fragrance,,Creed Himalaya,,,3,FRAGRANCES,FOR SALE,
-Fragrance,,Versace Eros Flame,,,6,FRAGRANCES,FOR SALE,
-Fragrance,,Stronger With You Intensely,,,7,FRAGRANCES,FOR SALE,
-Fragrance,,YSL Y EDP,,,10,FRAGRANCES,FOR SALE,
-Fragrance,,Valentino Born in Roma Uomo,,,6,FRAGRANCES,FOR SALE,
-Fragrance,,Valentino Born in Roma Donna,,,1,FRAGRANCES,FOR SALE,
-Fragrance,,Gucci Flora,,,7,FRAGRANCES,FOR SALE,
-Fragrance,,Prada Paradoxe Parfum,,,7,FRAGRANCES,FOR SALE,
-Fragrance,Baccarat,Baccarat Rouge (B tier),,,~60,,FREEBIE,"Never sell. 1 free with EVERY order. Always mention it: add it to every order, use it to hook interested buyers, and to bring back buyers who go quiet or seem unsure (example: 'just so you know, every purchase comes with a free Baccarat')."
-Watch,Casio,G-Shock,Black,,1,,FREEBIE,Free with any 5+ piece order. Never sell.
-Watch,Rolex,Rolex,Silver/Gold,,1,,NOT FOR SALE,Reserved for a bulk client. Hand off to Josh if asked.
-Jeans,Gallery Dept,Gallery Dept Jeans,,32,1,,NOT FOR SALE,Not listed. Josh may give it away free. Hand off if asked.
+Category,Brand,Item,Color,Size,Qty,Price List,Status,Notes,Cost
+Hoodie,Alo,Alo Hoodie,Black,XS,2,ALO,FOR SALE,,25
+Hoodie,Alo,Alo Hoodie,Gray,M,1,ALO,FOR SALE,,25
+Pants,Alo,Alo Sweatpants,Black,XL,2,ALO,FOR SALE,,25
+Hoodie,Spider,Spider Hoodie,Black/Pink,S,1,SPIDER HOODIES,FOR SALE,,28
+Hoodie,Spider,Spider Hoodie,White/Black,XS,2,SPIDER HOODIES,FOR SALE,,28
+Hoodie,Valley,Valley Hoodie,White/Black,XL,1,VALLEY HOODIES,FOR SALE,,55
+Hoodie,Valley,Valley Hoodie,Black/Burgundy,M,1,VALLEY HOODIES,FOR SALE,,55
+Hoodie,Valley,Valley Hoodie,Black/Burgundy,L,1,VALLEY HOODIES,FOR SALE,,55
+Tee,Chrome Hearts,Chrome Hearts Tee,Black Multicolor,L,1,CHROME TEES,FOR SALE,,22
+Tee,Chrome Hearts,Chrome Hearts Tee,White,XL,1,CHROME TEES,FOR SALE,,22
+Tee,Chrome Hearts,Chrome Hearts Tee,Black/Green,L,1,CHROME TEES,FOR SALE,,22
+Tee,Chrome Hearts,Chrome Hearts Tee,Black/Pink/Blue,M,1,CHROME TEES,FOR SALE,,22
+Tee,Chrome Hearts,Chrome Hearts Tee,Black/Pink/Blue,L,1,CHROME TEES,FOR SALE,,22
+Tee,BAPE,BAPE Tee (B tier),Black/Green/Pink,S,0,BAPE TEES,FOR SALE,,14
+Tee,BAPE,BAPE Tee (B tier),Black/Green,M,0,BAPE TEES,FOR SALE,,14
+Button-Up,Amiri,Amiri Button-Up,White,L,5,AMIRI BUTTON-UPS,FOR SALE,,
+Button-Up,Amiri,Amiri Button-Up,Black,L,6,AMIRI BUTTON-UPS,FOR SALE,,
+Tee,Valley,Valley Tee,White/Orange,M,1,VALLEY TEES,FOR SALE,,
+Tee,Valley,Valley Tee,White/Orange,L,1,VALLEY TEES,FOR SALE,,
+Tee,Valley,Valley Tee,Blue/Red,S,1,VALLEY TEES,FOR SALE,,
+Tee,Satoshi Nakamoto,Satoshi Tee,White/Black/Green,S,2,SATOSHI TEES,FOR SALE,,
+Tee,Satoshi Nakamoto,Satoshi Tee,Black/White,S,1,SATOSHI TEES,FOR SALE,,
+Tee,Satoshi Nakamoto,Satoshi Tee,Black/White,L,1,SATOSHI TEES,FOR SALE,,
+Tee,Satoshi Nakamoto,Satoshi Tee,Black/Blue,M,1,SATOSHI TEES,FOR SALE,,
+Tee,Satoshi Nakamoto,Satoshi Tee,Black/Red,M,1,SATOSHI TEES,FOR SALE,,
+Tee,Godspeed,Godspeed Tee,Yellow/Orange,M,1,GODSPEED TEES,FOR SALE,,27
+Tee,Godspeed,Godspeed Tee,World Cup,M,1,GODSPEED TEES,FOR SALE,,27
+Tee,Enfant Riches Deprimes,ERD Tee,White/Black,M,0,ERD TEES,FOR SALE,,27
+Jeans,Purple,Purple Jeans,All Black,28,1,PURPLE JEANS,FOR SALE,,55
+Jeans,Purple,Purple Jeans,All Black,30,1,PURPLE JEANS,FOR SALE,,55
+Jeans,Purple,Purple Jeans,All Black,32,2,PURPLE JEANS,FOR SALE,,55
+Jeans,Purple,Purple Jeans,Black/Gray,34,1,PURPLE JEANS,FOR SALE,,55
+Jeans,Purple,Purple Jeans,Blue,28,1,PURPLE JEANS,FOR SALE,,55
+Set,Gia,Gia Set,Yellow,S,1,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Yellow,M,1,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Dark Pink,S,2,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Light Pink,M,1,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Blue,M,1,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Red Polka Dot,M,1,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Purple,S,1,GIA SETS,FOR SALE,,
+Set,Gia,Gia Set,Purple,M,1,GIA SETS,FOR SALE,,
+Set,Lululemon,Lululemon Set,Pink,4,3,LULULEMON SETS,FOR SALE,,
+Set,Lululemon,Lululemon Set,Blue,6,1,LULULEMON SETS,FOR SALE,,
+Hat,Chrome Hearts,Chrome Hearts Hat,White/Black,One Size,7,CHROME HEARTS HATS,FOR SALE,,15
+Hat,Chrome Hearts,Chrome Hearts Hat,Black,One Size,5,CHROME HEARTS HATS,FOR SALE,,15
+Bag,Gucci,Gucci Bag,,One Size,2,BAGS,FOR SALE,,
+Bag,Goyard,Goyard Bag,,One Size,1,BAGS,FOR SALE,,
+Fragrance,,Tom Ford F*cking Fabulous,,,6,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Tom Ford Ombre Leather,,,1,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Bleu de Chanel EDP,,,5,FRAGRANCES,FOR SALE,,16
+Fragrance,,Bleu de Chanel Parfum,,,1,FRAGRANCES,FOR SALE,,16
+Fragrance,,Gucci Guilty,,,1,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Creed Himalaya,,,3,FRAGRANCES,FOR SALE,,16
+Fragrance,,Versace Eros Flame,,,6,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Stronger With You Intensely,,,5,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,YSL Y EDP,,,9,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Valentino Born in Roma Uomo,,,4,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Valentino Born in Roma Donna,,,0,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Gucci Flora,,,7,FRAGRANCES,FOR SALE,,10.75
+Fragrance,,Prada Paradoxe Parfum,,,7,FRAGRANCES,FOR SALE,,10.75
+Fragrance,Baccarat,Baccarat Rouge (B tier),,,~60,,FREEBIE,"Never sell. 1 free with EVERY order. Always mention it: add it to every order, use it to hook interested buyers, and to bring back buyers who go quiet or seem unsure (example: 'just so you know, every purchase comes with a free Baccarat').",
+Watch,Casio,G-Shock,Black,,1,,FREEBIE,Free with any 5+ piece order. Never sell.,
+Watch,Rolex,Rolex,Silver/Gold,,1,,NOT FOR SALE,Reserved for a bulk client. Hand off to Josh if asked.,
+Jeans,Gallery Dept,Gallery Dept Jeans,,32,1,,NOT FOR SALE,Not listed. Josh may give it away free. Hand off if asked.,
+Hoodie,Essentials,Essentials Hoodie,Black,,,ESSENTIALS,INCOMING,,15.5
+Hoodie,Essentials,Essentials Hoodie,Light,,,ESSENTIALS,INCOMING,,15.5
+Hoodie,Essentials,Essentials Hoodie,Dark,,,ESSENTIALS,INCOMING,,15.5
+Pants,Essentials,Essentials Sweatpants,Black Uncuffed,,,ESSENTIALS,INCOMING,,15.5
+Pants,Essentials,Essentials Sweatpants,Black Cuffed,,,ESSENTIALS,INCOMING,,15.5
+Pants,Essentials,Essentials Sweatpants,Light Cuffed,,,ESSENTIALS,INCOMING,,15.5
+Pants,Essentials,Essentials Sweatpants,Dark Cuffed,,,ESSENTIALS,INCOMING,,15.5
+Hoodie,Spider,Spider OG Web Hoodie,Black/Gold,,,SPIDER HOODIES,INCOMING,,28
+Hoodie,Spider,Spider OG Web Hoodie,Black/White,,,SPIDER HOODIES,INCOMING,,28
+Hoodie,Supreme,Supreme Hoodie,Black,,,SUPREME HOODIES,INCOMING,,30
+Hoodie,Supreme,Supreme Hoodie,White,,,SUPREME HOODIES,INCOMING,,30
+Hoodie,Supreme,Supreme Hoodie,Red,,,SUPREME HOODIES,INCOMING,,30
+Tee,BAPE,BAPE Tee,Black (1F80120036),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,Black (1M20110011),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,Black (1L23191008),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,Black (1L8011001),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,Purple (1K80110019),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,Navy (1K80110019),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,White (1J20110010),,,BAPE TEES,INCOMING,,14
+Tee,BAPE,BAPE Tee,Blue (1L23191008),,,BAPE TEES,INCOMING,,14

@@ -27,6 +27,11 @@ export interface Config {
   googleServiceAccountJson: string;
   /** The warehouse sheet with the BOT STOCK and BOT PRICES tabs. */
   warehouseSheetId: string;
+  /** Josh's sales tracker spreadsheet (one tab per month). */
+  trackerSheetId: string;
+  /** What the bot sends Zelle / Cash App buyers, e.g. "919-480-7349 (Josh ...)" and "$TriangleResells". Blank = Josh sends it. */
+  payZelle: string;
+  payCashApp: string;
   handoffWebhookUrl: string;
   humanPauseHours: number;
   /** Stripe payment links. Off unless STRIPE_ENABLED=true AND a key is set. Right now buyers pay cash, Cash App or Apple Pay. */
@@ -121,6 +126,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vendorSiteUrl,
     googleServiceAccountJson: optional(env.GOOGLE_SERVICE_ACCOUNT_JSON),
     warehouseSheetId: optional(env.WAREHOUSE_SHEET_ID) || DEFAULT_SHEET_ID,
+    trackerSheetId: optional(env.TRACKER_SHEET_ID) || "1ks_DjoGUucVHgzf7mhx9P1B1HTySaNxWbGGsteQ1eGI",
+    payZelle: env.PAY_ZELLE?.trim() || "",
+    payCashApp: env.PAY_CASHAPP?.trim() || "",
     handoffWebhookUrl: optional(env.HANDOFF_WEBHOOK_URL),
     // HUMAN_PAUSE_MINUTES wins if set (e.g. 5); otherwise HUMAN_PAUSE_HOURS; default 12 hours.
     humanPauseHours: Number(env.HUMAN_PAUSE_MINUTES) > 0 ? Number(env.HUMAN_PAUSE_MINUTES) / 60 : Number(env.HUMAN_PAUSE_HOURS) || 12,

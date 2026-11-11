@@ -9,6 +9,8 @@ import { matchCustomers } from "./customers.js";
 import type { ChatImage, Customer, Store } from "./store.js";
 import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
 import { HOLD_MINUTES } from "./stripe.js";
+import type { OrderDesk } from "./desk.js";
+import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
 
 export interface BotDeps {
@@ -39,6 +41,10 @@ export interface BotDeps {
   fetchImage?: (url: string) => Promise<ChatImage | undefined>;
   /** Taken times from Josh's calendar. Without it every time from 10 AM to 10 PM is open. */
   getBusy?: () => Promise<BusyBlock[]>;
+  /** Stock off the sheet, calendar, alerts and the sales tracker for locked-in orders. Without it orders only get a label. */
+  desk?: Pick<OrderDesk, "booked" | "stripePaid">;
+  /** What the bot sends buyers to pay. Unset = Josh sends it himself. */
+  payInfo?: { zelle?: string; cashApp?: string };
   /** Clock, for tests. */
   now?: () => Date;
 }
@@ -339,27 +345,85 @@ export class Bot {
         return q.lines.length ? describeQuote(q) + issues : `Nothing could be priced.${issues}`;
       },
     };
-    if (!this.d.checkout) {
-      tools.submitOrder = async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea, payment) => {
-        const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
-        if (!r.ok) return r;
-        this.d.store.clearPendingLink(userId);
-        this.d.store.addInterest(userId, itemList(r.q));
-        const when = r.fulfillTime ? `${r.fulfillDate} ${r.fulfillTime}` : r.fulfillDate;
-        const summary = `${describeQuote(r.q)}; ${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}; pays by ${payment}`;
-        // Locked in but not paid yet: BOOKED. Josh flips Cash App / Apple Pay to PAID on the admin page once it lands.
+    tools.submitOrder = async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea, payment, shipTo) => {
+      // Payment rules first, so the AI can fix them with the buyer.
+      if (payment === "apple_pay" && this.d.checkout) {
+        return { ok: false, error: "Card and Apple Pay go through the payment link: use create_checkout_link instead", fixable: true };
+      }
+      if (payment === "cash" && fulfillment === "ship") {
+        return { ok: false, error: "Shipped orders are paid up front (Cash App, Zelle or the card link), not cash", fixable: true };
+      }
+      if (payment === "cash" && fulfillment === "delivery") {
+        return { ok: false, error: "Cash orders are pickup at the warehouse. If they can pick up, switch to pickup. If they have no ride, Josh handles cash deliveries himself", handoff: true };
+      }
+      if (fulfillment === "ship") {
+        const missing = (["name", "street", "city", "state", "zip"] as const).filter((k) => !String(shipTo?.[k] ?? "").trim());
+        if (missing.length) return { ok: false, error: `Need the buyer's shipping info first: ${missing.join(", ")}`, fixable: true };
+      }
+      const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
+      if (!r.ok) return r;
+      this.d.store.clearPendingLink(userId);
+      this.d.store.addInterest(userId, itemList(r.q));
+      const when = r.fulfillTime ? `${r.fulfillDate} ${r.fulfillTime}` : r.fulfillDate;
+      const pay = payment.replace("_", " ");
+      const summary = `${describeQuote(r.q)}; ${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}; pays by ${pay}`;
+      const lines = r.q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty }));
+      const itemsTotal = r.q.lines.reduce((t, l) => t + l.lineTotal, 0);
+      const ship: ShipTo | undefined = fulfillment === "ship" && shipTo ? shipTo : undefined;
+      if (this.d.desk) {
+        await this.d.desk.booked({
+          userId,
+          username: this.d.store.customer(userId).username,
+          lines,
+          items: itemList(r.q),
+          itemsTotal,
+          total: r.q.total,
+          payment: pay,
+          fulfillment,
+          fulfillDate: r.fulfillDate,
+          fulfillTime: r.fulfillTime,
+          deliveryArea: r.q.delivery?.area,
+          deliveryMinutes: r.q.delivery?.minutes,
+          deliveryFee: r.q.delivery?.fee,
+          shipping: r.q.shipping || undefined,
+          shipTo: ship,
+          freebies: r.q.freebies,
+        });
+      } else {
         this.d.store.addLabel({
           userId,
           label: "BOOKED",
           summary: itemList(r.q),
           total: r.q.total,
-          payment: payment.replace("_", " "),
+          payment: pay,
           when: `${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}`,
+          lines,
+          fulfillment,
+          shipTo: ship,
+          deliveryFee: r.q.delivery?.fee,
+          shipping: r.q.shipping || undefined,
         });
-        return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note };
-      };
-      return tools;
-    }
+      }
+      return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note, payText: payTextFor(payment, r.q.total, this.d.payInfo) };
+    };
+    tools.paymentSent = async (method, note) => {
+      const label = this.d.store.latestLabelFor(userId);
+      if (label) this.d.store.updateLabel(label.id, { saysPaid: `${method.replace("_", " ")}: ${note}`.slice(0, 200) });
+      const username = await this.d.ig.getUsername(userId).catch(() => undefined);
+      await this.d
+        .notify({
+          account: this.d.accountName,
+          userId,
+          username,
+          route: "josh",
+          paused: false,
+          reason: `💸 Says they paid${label ? ` $${label.total}` : ""} by ${method.replace("_", " ")}: CHECK YOUR APP`,
+          summary: `${note}${label ? `. Order: ${label.summary}` : ""}. Screenshots can be faked: only Mark paid on /admin once the money is actually in.`,
+        })
+        .catch((err) => console.error("[bot] payment alert failed:", err));
+      return "Josh was told to check his app. Tell the buyer: got it, Josh will confirm as soon as it shows on his end. Never say the payment is confirmed or received.";
+    };
+    if (!this.d.checkout) return tools;
     tools.checkout = async (items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea) => {
         if (!this.d.checkout) return { ok: false, error: "card checkout isn't set up yet" };
         const r = await this.settle(pricing, items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea);
@@ -376,7 +440,12 @@ export class Bot {
             fulfillTime: fulfillTime?.trim() || undefined,
             summary: list,
           });
-          this.d.store.setPendingLink(userId, { url: link.url, summary: list, createdAt: now.getTime() });
+          this.d.store.setPendingLink(userId, {
+            url: link.url,
+            summary: list,
+            createdAt: now.getTime(),
+            lines: q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty })),
+          });
           this.d.store.addInterest(userId, list);
           return { ok: true, url: link.url, total: q.total, summary, note };
         } catch (err) {
@@ -432,10 +501,12 @@ export class Bot {
   }
 
   /** Stripe says they paid: no follow-up for that link, and it goes on their customer record. */
-  markPaid(userId: string, summary = "", total = 0, when = ""): void {
+  async markPaid(userId: string, summary = "", total = 0, when = "", fulfillment: "pickup" | "delivery" | "ship" = "pickup"): Promise<void> {
+    const lines = this.d.store.pendingLink(userId)?.lines ?? [];
     this.d.store.clearPendingLink(userId);
     if (summary || total) this.d.store.addOrder(userId, summary, total);
-    this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when });
+    if (this.d.desk) await this.d.desk.stripePaid(userId, lines, summary, total, when, fulfillment);
+    else this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment });
   }
 
   /**
@@ -527,6 +598,14 @@ export class Bot {
     );
     return next;
   }
+}
+
+/** What the bot tells the buyer right after an order is locked in. */
+export function payTextFor(payment: string, total: number, info?: { zelle?: string; cashApp?: string }): string {
+  if (payment === "cash") return "Write ONE short text: it's booked, cash at pickup, and Josh will send the pickup spot before the day. Don't give out any address.";
+  if (payment === "zelle" && info?.zelle) return `Write ONE short text with the payment info exactly: "Zelle $${total} to ${info.zelle}". Ask them to send a screenshot here once it's sent. Never say it's paid until Josh confirms.`;
+  if (payment === "cash_app" && info?.cashApp) return `Write ONE short text with the payment info exactly: "Cash App $${total} to ${info.cashApp}". Ask them to send a screenshot here once it's sent. Never say it's paid until Josh confirms.`;
+  return `Write ONE short text: Josh will send the ${payment.replace("_", " ")} info right here to lock it in.`;
 }
 
 function describeAttachments(msg: NonNullable<MessagingEvent["message"]>): string {

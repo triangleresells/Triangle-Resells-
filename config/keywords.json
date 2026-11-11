@@ -1,15 +1,15 @@
 {
   "_note": "Keywords fire when someone comments the word on a post or DMs only that word. Only keywords for ACCOUNT_NAME are used. Add rows here; the AI takes over once they reply.",
   "keywords": [
-    { "account": "Triangle Scales", "keyword": "VENDOR", "reply": "Yo, I got you! Want the vendor list? Reply YES and I'll send the link." },
-    { "account": "Triangle Scales", "keyword": "PRICE", "reply": "Yo, which vendor are you looking at? I'll send you the price." },
-    { "account": "Triangle Scales", "keyword": "LEGIT", "reply": "Yo, 100% legit. Over 2,000 resellers helped. Want me to send you some vouches?" },
-    { "account": "Triangle Resells", "keyword": "SHIP", "reply": "Yo, we ship nationwide! What are you looking for, and what state are you in?" },
-    { "account": "Triangle Resells", "keyword": "RESTOCK", "reply": "Yo, which item are you waiting on? I'll let you know when it's back." },
-    { "account": "Triangle Resells", "keyword": "PRICE", "reply": "Yo, which item? I'll get you the price. Pickup's free or UPS anywhere in the US." },
-    { "account": "Triangle Sales", "keyword": "VENDOR", "reply": "Yo! Want the vendor list? Reply YES and I'll send you the link." },
-    { "account": "Triangle Sales", "keyword": "SHOP", "reply": "Yo, what are you looking for? We ship nationwide." },
-    { "account": "Triangle Sales", "keyword": "INFO", "reply": "Yo, what can I do for you? Looking to buy something, or wanna start reselling yourself?" }
+    { "account": "Triangle Scales", "keyword": "VENDOR", "reply": "Got you! Want the vendor list? Reply YES and I'll send the link." },
+    { "account": "Triangle Scales", "keyword": "PRICE", "reply": "Which vendor are you looking at? I'll send you the price." },
+    { "account": "Triangle Scales", "keyword": "LEGIT", "reply": "100% legit. Over 2,000 resellers helped. Want me to send you some vouches?" },
+    { "account": "Triangle Resells", "keyword": "SHIP", "reply": "We ship nationwide! What are you looking for, and what state are you in?" },
+    { "account": "Triangle Resells", "keyword": "RESTOCK", "reply": "Which item are you waiting on? I'll let you know when it's back." },
+    { "account": "Triangle Resells", "keyword": "PRICE", "reply": "Which item? I'll get you the price. Pickup's free or UPS anywhere in the US." },
+    { "account": "Triangle Sales", "keyword": "VENDOR", "reply": "Hey! Want the vendor list? Reply YES and I'll send you the link." },
+    { "account": "Triangle Sales", "keyword": "SHOP", "reply": "Hey, what are you looking for? We ship nationwide." },
+    { "account": "Triangle Sales", "keyword": "INFO", "reply": "Hey, what can I do for you? Looking to buy something, or want to start reselling yourself?" }
   ],
   "publicCommentReplies": ["Sent you a DM!", "Check your DMs 🔺", "Just DMed you!"]
 }

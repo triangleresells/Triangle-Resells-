@@ -66,6 +66,13 @@ interface Scenario {
 }
 
 const SCENARIOS: Scenario[] = [
+  { id: "zelle_pickup_screenshot", persona: "wants 2 black Chrome Hearts hats, pickup tomorrow at 5pm, pays Zelle. After getting the Zelle info, says 'sent it, here's the screenshot'", photo: true, expect: "Quotes from quote_order with the free Baccarat, says all sales final, submit_order with zelle and pickup, sends the exact Zelle info from submit_order ($ total to 919-480-7349 (TEST)) and asks for a screenshot. On the screenshot: calls payment_sent and says Josh will confirm. NEVER says paid/received/confirmed." },
+  { id: "ship_full_address", persona: "lives in Atlanta GA, wants 1 YSL Y EDP shipped, pays Cash App; gives name and street first, then city/state/zip only when asked", expect: "Quotes $60 + $10 shipping via quote_order. Collects full name, street, city, state and zip before submit_order (ship_to filled). Sends the exact Cash App info from submit_order. Never offers cash for shipping." },
+  { id: "cash_no_ride", persona: "in Garner, wants 1 Spider hoodie, wants to pay cash, says they don't have a car and asks if it can be dropped off", expect: "Offers pickup first. When they say no ride + cash, does NOT book a cash delivery: hands off to josh. Clean voice, one question at a time." },
+  { id: "cash_pickup", persona: "wants 1 Bleu de Chanel EDP, pickup Saturday 2pm, cash", expect: "submit_order with cash + pickup. Says cash at pickup and that Josh sends the pickup spot. Never gives an address or a payment handle." },
+  { id: "slang_buyer", persona: "texts in heavy slang and no punctuation: 'yo u got that ch tee in a L fr', 'how much', 'bet wya', 'ion got a car tho can u ship it', lives in Charlotte, pays cash app", expect: "Understands the slang (Chrome Hearts tee, size L). Replies clean (proper capitalization, no 'bet'/'fr'/slang back), short, one question at a time. Ships for $10 with full address collected, Cash App info from submit_order." },
+  { id: "incoming_redirect", persona: "wants a Supreme hoodie in M, then asks about Essentials hoodies", expect: "Says it's not in stock right now but Supreme and Essentials land Friday/Saturday with the right colors/sizes/$ from the knowledge base (Supreme $100, Essentials $60). Calls save_interest. Never books incoming items with submit_order/quote_order. Pitches once, doesn't pile on." },
+  { id: "not_carried_redirect", persona: "wants a Nike Tech fleece in L", expect: "Says we don't carry it, pitches ONE in-stock or incoming hoodie in their size with a real price, alert_team, then leaves the door open if they pass. No handoff." },
   { id: "single_piece_pickup", persona: "wants 1 Chrome Hearts tee in white XL, picking up tomorrow at 3pm, pays Cash App", expect: "Quotes $35 via quote_order, mentions the free Baccarat, sends an order summary with the free Baccarat, says all sales final, calls submit_order with cash_app." },
   { id: "single_piece_ship", persona: "lives in Ohio, wants 1 Bleu de Chanel EDP shipped, pays Apple Pay", expect: "Quotes $60 + $10 UPS = $70, free Baccarat on the summary, submit_order with ship and apple_pay. Never offers pickup as the only option." },
   { id: "bulk_tier_hats", persona: "reseller who wants 10 Chrome Hearts hats (any colors), pickup, cash", expect: "quote_order gives $21 each = $210. Order summary shows free Baccarat AND free G-Shock (5+ pieces). Prices from quote_order only." },
@@ -166,6 +173,13 @@ async function main() {
                 return r;
               }
             : undefined,
+          paymentSent: t.paymentSent
+            ? async (m, n) => {
+                const r = await t.paymentSent!(m, n);
+                tools.push(`payment_sent(${m}, ${JSON.stringify(n)}) -> ${r}`);
+                return r;
+              }
+            : undefined,
         };
         return real.reply(h, inv, wrapped, sched);
       },
@@ -180,6 +194,7 @@ async function main() {
       accountName: config.accountName, keywords: config.keywords, publicCommentReplies: [], humanPauseHours: 12,
       pricing: config.pricing, getBusy: async () => busy, now: () => new Date(clock.t),
       fetchImage: async () => ({ mediaType: "image/png", data: photo }),
+      payInfo: { zelle: "919-480-7349 (TEST)", cashApp: "$TestCashtag" },
     });
 
     const quietRule = sc.quiet

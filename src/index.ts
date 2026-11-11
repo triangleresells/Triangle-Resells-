@@ -3,6 +3,7 @@ import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
 import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js";
+import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
 import { webhookNotifier } from "./handoff.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
@@ -32,12 +33,24 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
 const serviceAccount = parseServiceAccount(config.googleServiceAccountJson);
 if (config.googleServiceAccountJson && !serviceAccount) console.error("[sheet] GOOGLE_SERVICE_ACCOUNT_JSON isn't a valid service account key file. Using the saved snapshot.");
 const snapshot = { pricing: config.pricing, text: formatCatalog(config.pricing.stock ?? [], config.pricing.tables), source: "snapshot" as const };
-const catalog = new LiveCatalog(snapshot, serviceAccount ? new GoogleSheetsReader(serviceAccount, config.warehouseSheetId) : undefined);
+const sheets = serviceAccount ? new GoogleSheetsReader(serviceAccount, config.warehouseSheetId) : undefined;
+const catalog = new LiveCatalog(snapshot, sheets);
 void catalog.get(); // warm up, and log right away if the sheet isn't shared with the service account
 // Josh's calendar: paid pickups plus any time he blocks off. The bot never offers those times.
 const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 
 const notify = webhookNotifier(config.handoffWebhookUrl);
+const calendar = webhookCalendar(config.calendarWebhookUrl);
+// Locked-in orders: stock off BOT STOCK, on the calendar, Josh alerted, sales tracker once paid.
+const desk = new OrderDesk({
+  store,
+  notify,
+  accountName: config.accountName,
+  stock: sheets ? new StockKeeper(sheets, () => catalog.refresh()) : undefined,
+  sales: sheets ? new SalesLog(sheets, config.trackerSheetId) : undefined,
+  calendar,
+  stockRows: async () => (await catalog.get()).pricing.stock ?? [],
+});
 const bot = new Bot({
   ig: new InstagramClient(config.igAccessToken, config.igApiVersion),
   agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
@@ -57,8 +70,9 @@ const bot = new Bot({
   getBusy: () => busyCalendar.get(),
   enabled: () => config.botEnabled,
   quietNudgeMinutes: config.quietNudgeMinutes,
+  desk,
+  payInfo: { zelle: config.payZelle, cashApp: config.payCashApp },
 });
-const calendar = webhookCalendar(config.calendarWebhookUrl);
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 // One follow-up DM when a payment link expires unpaid.
@@ -78,10 +92,10 @@ createServer(bot, {
     customers: () => store.allCustomers(),
     blast: (m, s) => bot.blast(m, s),
     unpauseAll: () => store.unpauseAll(),
-    labels: { all: () => store.allLabels(), markPaid: (id) => store.markLabelPaid(id), clear: (id) => store.clearLabel(id), clearAll: () => store.clearAllLabels() },
+    labels: { all: () => store.allLabels(), markPaid: (id) => desk.markPaid(id), done: (id) => desk.done(id), doneAll: () => desk.doneAll(), cancel: (id) => desk.cancel(id) },
   },
-  onPaidOrder: (order) => {
-    bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "));
+  onPaidOrder: async (order) => {
+    await bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "), order.fulfillment);
     return handlePaidOrder(order, {
       sendDm: (id, text) => bot.sendDm(id, text),
       calendar,

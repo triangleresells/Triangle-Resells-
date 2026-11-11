@@ -70,7 +70,7 @@ describe("pricing", () => {
     expect(q.problems[1]).toContain("free gift");
     expect(q.problems[2]).toContain("NOT FOR SALE");
     expect(q.problems[3]).toContain("NOT FOR SALE");
-    expect(q.problems[4]).toContain("not on the stock sheet");
+    expect(q.problems[4]).toContain("INCOMING");
     expect(q.problems[5]).toContain("not on the stock sheet");
   });
 

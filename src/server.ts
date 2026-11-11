@@ -27,9 +27,13 @@ export interface ServerOpts {
     /** PAID / BOOKED orders (Instagram's own DM labels can't be set by API, so they live here). */
     labels?: {
       all: () => OrderLabel[];
-      markPaid: (id: string) => boolean;
-      clear: (id: string) => boolean;
-      clearAll: () => number;
+      /** Money confirmed: PAID, logged in the sales tracker. */
+      markPaid: (id: string) => Promise<boolean>;
+      /** Fulfilled: logged if it wasn't yet, label cleared. */
+      done: (id: string) => Promise<boolean>;
+      doneAll: () => Promise<number>;
+      /** No-show / changed mind: stock goes back on the sheet, label removed. */
+      cancel: (id: string) => Promise<{ ok: boolean; wasLogged?: boolean }>;
     };
   };
 }
@@ -127,16 +131,22 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
     app.get("/admin", (req, res) => {
       res.type("html").send(page(req.query.key));
     });
-    app.post("/admin/labels/paid", (req, res) => {
-      const ok = admin.labels?.markPaid(String(req.body?.id ?? "")) ?? false;
-      res.type("html").send(page(req.query.key, ok ? "Marked PAID." : "That order wasn't found."));
+    app.post("/admin/labels/paid", async (req, res) => {
+      const ok = (await admin.labels?.markPaid(String(req.body?.id ?? ""))) ?? false;
+      res.type("html").send(page(req.query.key, ok ? "Marked PAID and logged in the sales tracker." : "That order wasn't found (or was already paid)."));
     });
-    app.post("/admin/labels/clear", (req, res) => {
-      const ok = admin.labels?.clear(String(req.body?.id ?? "")) ?? false;
-      res.type("html").send(page(req.query.key, ok ? "Label cleared." : "That order wasn't found."));
+    app.post("/admin/labels/clear", async (req, res) => {
+      const ok = (await admin.labels?.done(String(req.body?.id ?? ""))) ?? false;
+      res.type("html").send(page(req.query.key, ok ? "Done. Label cleared." : "That order wasn't found."));
     });
-    app.post("/admin/labels/clear-all", (req, res) => {
-      const n = admin.labels?.clearAll() ?? 0;
+    app.post("/admin/labels/cancel", async (req, res) => {
+      const r = (await admin.labels?.cancel(String(req.body?.id ?? ""))) ?? { ok: false };
+      res
+        .type("html")
+        .send(page(req.query.key, r.ok ? `Cancelled. Items are back on BOT STOCK.${r.wasLogged ? " It was already in the sales tracker: delete that row by hand." : ""}` : "That order wasn't found."));
+    });
+    app.post("/admin/labels/clear-all", async (req, res) => {
+      const n = (await admin.labels?.doneAll()) ?? 0;
       console.log(`[admin] cleared ${n} order label(s)`);
       res.type("html").send(page(req.query.key, `Cleared ${n} label(s).`));
     });

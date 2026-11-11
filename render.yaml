@@ -36,15 +36,24 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      # Stock + prices: the whole service account key file (JSON). Share the sheet with its client_email as Viewer.
+      # Stock + prices + sales log: the whole service account key file (JSON). Share BOTH the warehouse sheet and the
+      # sales tracker with its client_email as EDITOR (the bot takes sold items off BOT STOCK and logs paid sales).
       - key: GOOGLE_SERVICE_ACCOUNT_JSON
         sync: false
       # TRIANGLERESELLS WAREHOUSE STOCK (BOT STOCK + BOT PRICES tabs). Not a secret: the sheet stays private.
       - key: WAREHOUSE_SHEET_ID
         value: 1hZQltkbmqhN4acr959K7cNxUcvLW-P38Ut60O805wOw
+      # Triangle_Resells_Sales_Tracker (one tab per month). Paid bot orders are written here.
+      - key: TRACKER_SHEET_ID
+        value: 1ks_DjoGUucVHgzf7mhx9P1B1HTySaNxWbGGsteQ1eGI
+      # What the bot sends Zelle / Cash App buyers after an order is locked in. Blank = Josh sends it himself.
+      - key: PAY_ZELLE
+        sync: false
+      - key: PAY_CASHAPP
+        sync: false
       - key: HANDOFF_WEBHOOK_URL
         sync: false
-      # No Stripe links right now: buyers pay cash, Cash App or Apple Pay through Josh.
+      # Card + Apple Pay links. Off until Stripe ID verification is done; cash, Cash App and Zelle work either way.
       - key: STRIPE_ENABLED
         value: "false"
       # Pickup spot, sent only after payment. Street only, no unit number: every pickup is in the parking lot.

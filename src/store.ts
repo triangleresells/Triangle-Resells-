@@ -16,6 +16,8 @@ export interface PendingLink {
   summary: string;
   createdAt: number;
   followedUp?: boolean;
+  /** Sheet lines of a Stripe link, so stock comes off when it's paid. */
+  lines?: { name: string; variant?: string; size?: string; qty: number }[];
 }
 
 interface Conversation {
@@ -47,6 +49,27 @@ export interface OrderLabel {
   /** "pickup 2026-11-14 3:00 PM" etc. */
   when: string;
   createdAt: number;
+  /** Exact sheet lines, so stock can go back on the sheet if the order is cancelled. */
+  lines?: { name: string; variant?: string; size?: string; qty: number }[];
+  fulfillment?: "pickup" | "delivery" | "ship";
+  shipTo?: ShipTo;
+  deliveryFee?: number;
+  shipping?: number;
+  /** What Josh paid for the items, if the sheet has costs. */
+  cost?: number;
+  /** Already written to the sales tracker. */
+  logged?: boolean;
+  /** Buyer said they sent the money (Cash App / Zelle). Josh still has to check. */
+  saysPaid?: string;
+}
+
+export interface ShipTo {
+  name: string;
+  street: string;
+  apt?: string;
+  city: string;
+  state: string;
+  zip: string;
 }
 
 /** Everything the bot remembers about one buyer, kept forever so Josh can reach them on a restock. */
@@ -199,6 +222,26 @@ export class Store {
   }
 
   // ---- order labels (PAID / BOOKED) ----
+
+  getLabel(id: string): OrderLabel | undefined {
+    return this.labels.find((l) => l.id === id);
+  }
+
+  updateLabel(id: string, patch: Partial<OrderLabel>): void {
+    const l = this.labels.find((x) => x.id === id);
+    if (!l) return;
+    Object.assign(l, patch);
+    this.changed();
+  }
+
+  /** The newest open label for a buyer (for "I sent it" messages). */
+  latestLabelFor(userId: string): OrderLabel | undefined {
+    return this.allLabels().find((l) => l.userId === userId);
+  }
+
+  pendingLink(userId: string): PendingLink | undefined {
+    return this.convos.get(userId)?.pendingLink;
+  }
 
   addLabel(l: Omit<OrderLabel, "id" | "createdAt" | "username">): OrderLabel {
     const createdAt = this.now();

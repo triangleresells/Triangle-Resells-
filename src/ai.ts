@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Fulfillment, OrderItem } from "./pricing.js";
-import type { ChatTurn } from "./store.js";
+import type { ChatTurn, ShipTo } from "./store.js";
 
 export interface AgentReply {
   text: string;
@@ -15,12 +15,12 @@ export interface AgentReply {
   interests?: string[];
 }
 
-export type PaymentMethod = "cash" | "cash_app" | "apple_pay";
+export type PaymentMethod = "cash" | "cash_app" | "zelle" | "apple_pay";
 
 /** Order actions the AI can take for the customer it's talking to. Prices always come from the warehouse sheet. */
 export interface OrderTools {
   quote(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): string;
-  /** No Stripe: lock in the order and hand it to Josh to collect cash, Cash App or Apple Pay. */
+  /** Cash, Cash App or Zelle (and Apple Pay when Stripe is off): lock in the order. Stock comes off the sheet, label BOOKED. */
   submitOrder?(
     items: OrderItem[],
     fulfillment: Fulfillment,
@@ -28,7 +28,13 @@ export interface OrderTools {
     fulfillTime: string | undefined,
     deliveryArea: string | undefined,
     payment: PaymentMethod,
-  ): Promise<{ ok: true; total: number; summary: string; freebies: string[]; note?: string } | { ok: false; error: string; fixable?: boolean }>;
+    shipTo?: ShipTo,
+  ): Promise<
+    | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string }
+    | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
+  >;
+  /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
+  paymentSent?(method: string, note: string): Promise<string>;
   /** Stripe payment link. Only when STRIPE_ENABLED=true. */
   checkout?(
     items: OrderItem[],
@@ -137,7 +143,7 @@ export const TOOLS = [
   {
     name: "submit_order",
     description:
-      "Lock in a confirmed order and hand it to Josh to collect payment (cash, Cash App or Apple Pay). Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery) and the payment method are all settled, and after you sent the order summary and said all sales are final. It pauses the bot in this chat so Josh can take over.",
+      "Lock in a confirmed order paid by cash, Cash App or Zelle. Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery), the payment method, and for shipping the full name and address are all settled, and after you sent the order summary and said all sales are final. The items come off the stock sheet, the order goes on Josh's calendar, and Josh is alerted. The chat keeps going.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -146,9 +152,35 @@ export const TOOLS = [
         fulfill_date: { type: "string", description: "YYYY-MM-DD of the pickup, delivery or ship day." },
         fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Blank for shipping." },
         delivery_area: DELIVERY_AREA_SCHEMA,
-        payment: { type: "string", enum: ["cash", "cash_app", "apple_pay"], description: "How they'll pay." },
+        payment: { type: "string", enum: ["cash", "cash_app", "zelle", "apple_pay"], description: "How they'll pay. Card and Apple Pay go through create_checkout_link when it's offered." },
+        ship_to: {
+          type: "object",
+          description: "Shipping only (required for ship): the buyer's full name and address, exactly as they gave it.",
+          properties: {
+            name: { type: "string" },
+            street: { type: "string" },
+            apt: { type: "string", description: "Apt/unit, blank if none." },
+            city: { type: "string" },
+            state: { type: "string", description: "2-letter state, e.g. NC" },
+            zip: { type: "string" },
+          },
+          required: ["name", "street", "city", "state", "zip"],
+        },
       },
       required: ["items", "fulfillment", "fulfill_date", "payment"],
+    },
+  },
+  {
+    name: "payment_sent",
+    description:
+      "Call when the buyer says they sent the money or sends a payment screenshot (Cash App or Zelle). It tells Josh to check his app. It does NOT confirm the payment: only Josh confirms.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        method: { type: "string", enum: ["cash_app", "zelle", "other"] },
+        note: { type: "string", description: "What they said or what the screenshot shows (amount, name, time)." },
+      },
+      required: ["method", "note"],
     },
   },
   {
@@ -235,7 +267,9 @@ const MAX_ROUNDS = 5;
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
-  return TOOLS.filter((t) => (t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : true));
+  return TOOLS.filter((t) =>
+    t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : t.name === "payment_sent" ? !!tools?.paymentSent : true,
+  );
 }
 
 /** Adds a text note to the last customer turn (the API needs user and assistant turns to alternate). */
@@ -303,11 +337,15 @@ export class ClaudeAgent implements ReplyEngine {
           content = "Ordering isn't available right now. Hand off to the team.";
         } else if (block.name === "quote_order") {
           content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
+        } else if (block.name === "payment_sent" && tools.paymentSent) {
+          content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
         } else if (block.name === "submit_order" && tools.submitOrder) {
-          const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment);
+          const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
           if (r.ok) {
-            handoff = { route: "josh", reason: `new order, pays by ${String(input.payment).replace("_", " ")}`, summary: r.summary };
-            content = `Order locked in and sent to Josh: total $${r.total}${r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : ""}.${r.note ? ` ${r.note}` : ""} Write ONE short text: Josh will hit them up right here with the ${String(input.payment).replace("_", " ")} info to lock it in. Don't send the order again.`;
+            const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
+            content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
+          } else if (!r.fixable && r.handoff) {
+            content = `Could not lock it in: ${r.error}. Call handoff_to_team (josh) with the order, and tell the customer Josh will reach out right here.`;
           } else if (r.fixable) {
             content = `Could not lock it in: ${r.error}. Tell the customer what's wrong and offer the closest fix (another open time, an in-stock color or size, shipping or meeting halfway), then try again once they pick.`;
           } else {
@@ -359,8 +397,8 @@ export class ClaudeAgent implements ReplyEngine {
     }
     if (!text) {
       text = handoff
-        ? "Bet, let me get someone from the team to jump in for you real quick."
-        : "Good question, let me get someone from the team to confirm for you.";
+        ? "Got you, someone from the team will jump in here shortly."
+        : "Good question, let me get someone from the team to confirm that for you.";
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
     return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}), ...(interests.length ? { interests } : {}) };

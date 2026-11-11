@@ -326,12 +326,14 @@ describe("pickup spot and no-bulk items (Nov 6)", () => {
   });
 
   it("bulk tiers from the sheet: Valley, hats, BAPE tees and fragrances", () => {
-    const pricing = loadPricing();
+    const base = loadPricing();
+    // BAPE is sold out in the snapshot right now; give it stock so the tiers can be checked.
+    const pricing = { ...base, stock: base.stock!.map((r) => (r.item === "BAPE Tee (B tier)" ? { ...r, qty: 2 } : r.item === "Chrome Hearts Hat" ? { ...r, qty: 10 } : r)) };
     const valley = quoteOrder(pricing, [{ product: "Valley Hoodie", variant: "White/Black", size: "XL", qty: 1 }, { product: "Valley Hoodie", variant: "Black/Burgundy", size: "M", qty: 1 }, { product: "Valley Hoodie", variant: "Black/Burgundy", size: "L", qty: 1 }], "pickup");
     expect(valley.groups[0].unitPrice).toBe(58);
     expect(quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "White/Black", qty: 10 }], "pickup").groups[0].unitPrice).toBe(21);
     expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").total).toBe(35);
-    expect(quoteOrder(pricing, [{ product: "BAPE Tee", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(31);
+    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(31);
     expect(quoteOrder(pricing, [{ product: "YSL Y EDP", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
   });
 });
@@ -358,7 +360,8 @@ describe("warehouse sheet", () => {
     expect(snapshot.text).toContain("Baccarat Rouge (B tier): 1 free with EVERY order");
     expect(snapshot.text).toContain("G-Shock: free with any 5+ piece order");
     expect(snapshot.text).toContain("NOT FOR SALE (if asked, hand off to josh): Rolex, Gallery Dept Jeans");
-    expect(snapshot.text).not.toContain("Essentials");
+    expect(snapshot.text.split("\n\n")[0]).not.toContain("Essentials");
+    expect(snapshot.text).toContain("INCOMING, NOT IN STOCK YET");
     expect(snapshot.text).not.toMatch(/Rolex \| /);
 
     let calls = 0;
@@ -391,7 +394,7 @@ describe("warehouse sheet", () => {
     expect(parseServiceAccount("not json")).toBeUndefined();
     const [h, c, sig] = signedJwt(sa).split(".");
     expect(createVerify("RSA-SHA256").update(`${h}.${c}`).verify(publicKey, Buffer.from(sig, "base64url"))).toBe(true);
-    expect(JSON.parse(Buffer.from(c, "base64url").toString())).toMatchObject({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/spreadsheets.readonly" });
+    expect(JSON.parse(Buffer.from(c, "base64url").toString())).toMatchObject({ iss: sa.client_email, scope: "https://www.googleapis.com/auth/spreadsheets" });
 
     const urls: string[] = [];
     const fetchFn = (async (url: string) => {
@@ -431,7 +434,7 @@ describe("no Stripe: cash, Cash App, Apple Pay", () => {
     expect(offered).toContain("submit_order");
     expect(offered).not.toContain("create_checkout_link");
     expect(result).toMatchObject({ ok: true, total: 130, freebies: ["1 free Baccarat Rouge (B tier)", "1 free G-Shock"] });
-    expect((result as { summary: string }).summary).toContain("pays by cash_app");
+    expect((result as { summary: string }).summary).toContain("pays by cash app");
     expect(alerts[0]).toMatchObject({ route: "josh" });
     expect(store.isPaused("user-1")).toBe(true);
     // Not paid yet, so it's BOOKED until Josh marks the Cash App as received.

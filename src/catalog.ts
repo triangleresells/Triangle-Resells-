@@ -20,6 +20,8 @@ export interface StockRow {
   status: RowStatus;
   rawStatus: string;
   notes: string;
+  /** What Josh paid per piece (optional "Cost" column). Used to log profit in the sales tracker. */
+  cost?: number;
 }
 
 export interface Freebie {
@@ -84,6 +86,7 @@ export function parseStockCsv(csv: Table): StockRow[] {
       status: statusOf(get(r, "Status")),
       rawStatus: get(r, "Status"),
       notes: get(r, "Notes"),
+      ...(get(r, "Cost") ? { cost: num(get(r, "Cost")) } : {}),
     }));
 }
 
@@ -163,6 +166,11 @@ const sameField = (have: string, want: string) => {
 
 const label = (r: Pick<StockRow, "item" | "color" | "size">) => [r.item, r.color, r.size].filter((s) => s && norm(s) !== "one size").join(" ");
 
+/** True if a sheet row is the item/color/size of an order line (same rules quote_order uses). */
+export function rowMatches(r: Pick<StockRow, "item" | "color" | "size">, line: { name: string; variant?: string; size?: string }): boolean {
+  return norm(r.item) === norm(line.name) && sameField(r.color, line.variant ?? "") && sameField(r.size, line.size ?? "");
+}
+
 /** Matches one order line to FOR SALE rows on the stock sheet and checks there's enough. */
 export function matchStock(
   rows: StockRow[],
@@ -179,6 +187,9 @@ export function matchStock(
   const reserved = named.find((r) => r.status === "not_for_sale");
   if (reserved) return { ok: false, problem: `${reserved.item} is NOT FOR SALE. Hand off to josh` };
   const forSale = named.filter((r) => r.status === "for_sale" && r.qty > 0);
+  if (!forSale.length && named.some((r) => norm(r.rawStatus) === "incoming")) {
+    return { ok: false, problem: `${named[0].item} is INCOMING (lands with the restock), not in stock yet. Pitch it from the INCOMING RESTOCK and call save_interest; it can't be ordered yet` };
+  }
   if (!forSale.length) return { ok: false, problem: `${named[0].item} is sold out` };
   const exact = forSale.filter((r) => sameField(r.color, color ?? "") && sameField(r.size, size ?? ""));
   if (!exact.length) {
@@ -209,6 +220,10 @@ export function formatCatalog(rows: StockRow[], tables: Record<string, Record<st
   if (free.length) {
     out.push("", "FREE GIFTS (never sell these, never put them in quote_order; quote_order adds them by itself):");
     for (const f of free) out.push(`- ${f.item}: ${f.minPieces > 1 ? `free with any ${f.minPieces}+ piece order` : "1 free with EVERY order"}`);
+  }
+  const incoming = rows.filter((r) => norm(r.rawStatus) === "incoming");
+  if (incoming.length) {
+    out.push("", "INCOMING, NOT IN STOCK YET (can't be quoted or sold; pitch it and call save_interest, see INCOMING RESTOCK in the knowledge base): " + [...new Set(incoming.map((r) => [r.item, r.color].filter(Boolean).join(" ")))].join(", "));
   }
   const nfs = rows.filter((r) => r.status === "not_for_sale");
   if (nfs.length) out.push("", "NOT FOR SALE (if asked, hand off to josh): " + nfs.map((r) => r.item).join(", "));

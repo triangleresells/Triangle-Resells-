@@ -4,12 +4,13 @@ import type { PricingConfig } from "./pricing.js";
 
 /**
  * Reads the warehouse sheet's BOT STOCK and BOT PRICES tabs with a Google service account.
- * The sheet stays private: it is only shared (Viewer) with the service account's email. Never published to the web.
+ * The sheet stays private: it is only shared (Editor) with the service account's email. Never published to the web.
  */
 
 export const STOCK_TAB = "BOT STOCK";
 export const PRICES_TAB = "BOT PRICES";
-const SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+// Read + write: the bot takes sold items off BOT STOCK and logs sales in the tracker.
+const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const CACHE_MS = 2 * 60 * 1000;
 
 export interface ServiceAccount {
@@ -77,11 +78,33 @@ export class GoogleSheetsReader {
     const res = await this.fetchFn(url, { headers: { authorization: `Bearer ${await this.accessToken()}` } });
     if (!res.ok) {
       const body = (await res.text()).slice(0, 300);
-      const hint = res.status === 403 ? ` (share the sheet with ${this.sa.client_email} as Viewer)` : res.status === 404 ? " (check WAREHOUSE_SHEET_ID)" : "";
+      const hint = res.status === 403 ? ` (share the sheet with ${this.sa.client_email} as Editor)` : res.status === 404 ? " (check WAREHOUSE_SHEET_ID)" : "";
       throw new Error(`Sheets API HTTP ${res.status}${hint}: ${body}`);
     }
     const j = (await res.json()) as { valueRanges?: { values?: string[][] }[] };
     return tabs.map((_, i) => j.valueRanges?.[i]?.values ?? []);
+  }
+
+  /** Reads A1 ranges (like "'Nov 2026'!AD1:AD400") from any spreadsheet the service account can open. */
+  async ranges(ranges: string[], sheetId = this.sheetId): Promise<string[][][]> {
+    const qs = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values:batchGet?${qs}&valueRenderOption=FORMATTED_VALUE`;
+    const res = await this.fetchFn(url, { headers: { authorization: `Bearer ${await this.accessToken()}` } });
+    if (!res.ok) throw new Error(`Sheets API HTTP ${res.status} (share it with ${this.sa.client_email} as Editor): ${(await res.text()).slice(0, 300)}`);
+    const j = (await res.json()) as { valueRanges?: { values?: string[][] }[] };
+    return ranges.map((_, i) => j.valueRanges?.[i]?.values ?? []);
+  }
+
+  /** Writes cells. Values are entered like typing them in (USER_ENTERED). */
+  async write(data: { range: string; values: (string | number)[][] }[], sheetId = this.sheetId): Promise<void> {
+    if (!data.length) return;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values:batchUpdate`;
+    const res = await this.fetchFn(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${await this.accessToken()}`, "content-type": "application/json" },
+      body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+    });
+    if (!res.ok) throw new Error(`Sheets write HTTP ${res.status} (share it with ${this.sa.client_email} as Editor): ${(await res.text()).slice(0, 300)}`);
   }
 }
 
@@ -113,6 +136,11 @@ export class LiveCatalog {
     private reader?: Pick<GoogleSheetsReader, "tabs">,
   ) {
     this.cached = snapshot;
+  }
+
+  /** Read the sheet again on the next get() (after the bot changed stock). */
+  refresh(): void {
+    this.fetchedAt = 0;
   }
 
   async get(): Promise<Catalog> {
