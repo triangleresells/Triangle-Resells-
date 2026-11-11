@@ -33,7 +33,7 @@ export interface ServerOpts {
       done: (id: string) => Promise<boolean>;
       doneAll: () => Promise<number>;
       /** No-show / changed mind: stock goes back on the sheet, label removed. */
-      cancel: (id: string) => Promise<{ ok: boolean; wasLogged?: boolean }>;
+      cancel: (id: string) => Promise<{ ok: boolean; wasLogged?: boolean; restocked?: boolean }>;
     };
   };
 }
@@ -143,7 +143,7 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
       const r = (await admin.labels?.cancel(String(req.body?.id ?? ""))) ?? { ok: false };
       res
         .type("html")
-        .send(page(req.query.key, r.ok ? `Cancelled. Items are back on BOT STOCK.${r.wasLogged ? " It was already in the sales tracker: delete that row by hand." : ""}` : "That order wasn't found."));
+        .send(page(req.query.key, r.ok ? `Cancelled. ${r.restocked === false ? "It was never paid, so BOT STOCK wasn't touched." : "Items are back on BOT STOCK."}${r.wasLogged ? " It was already in the sales tracker: delete that row by hand." : ""}` : "That order wasn't found."));
     });
     app.post("/admin/labels/clear-all", async (req, res) => {
       const n = (await admin.labels?.doneAll()) ?? 0;

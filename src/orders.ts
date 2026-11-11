@@ -31,12 +31,19 @@ export function calendarEventFor(o: PaidOrder, warehouseAddress: string): Calend
     `Paid: $${o.total} via Stripe (session ${o.sessionId})`,
     `Buyer: ${who}${o.buyerEmail ? `, ${o.buyerEmail}` : ""}${o.buyerPhone ? `, ${o.buyerPhone}` : ""}`,
     `Instagram user id: ${o.igUserId} (${o.account})`,
+    o.fulfillment === "ship"
+      ? o.shipAddress
+        ? `SHIP TO (for the label):\n${o.shipAddress.name}\n${[o.shipAddress.street, o.shipAddress.apt].filter(Boolean).join(" ")}\n${o.shipAddress.city}, ${o.shipAddress.state} ${o.shipAddress.zip}\nUSA${o.buyerPhone ? `\nPhone: ${o.buyerPhone}` : ""}`
+        : "SHIP TO: no address came through Stripe. The bot asked the buyer for it in DMs."
+      : "",
     pickup
       ? "Hold these items until pickup. Already paid."
       : delivery
         ? `Deliver to the address in the location field (~${o.deliveryMinutes ?? "?"} min drive). Already paid. Farthest drops go first.`
         : o.buyerLabel ? "10+ pieces: wait for the buyer's label, then ship." : "Ship via UPS before 7pm ET and send tracking.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     title,
     date: o.fulfillDate,
@@ -79,9 +86,13 @@ export function confirmationText(o: PaidOrder, warehouseAddress: string): string
     return `paid ✅ appreciate you! your delivery is set${when ? ` for ${when}` : ""}. I'll message you here when I'm on the way.`;
   }
   if (o.fulfillment === "ship") {
-    return o.buyerLabel
+    const addr = o.shipAddress;
+    const check = addr
+      ? `\n\nshipping to:\n${addr.name}\n${[addr.street, addr.apt].filter(Boolean).join(" ")}\n${addr.city}, ${addr.state} ${addr.zip}\n\nif any of that's off, tell me now before the label gets made`
+      : "\n\nsend me your first and last name, street address (and apt if any), city, state and zip so I can make the label";
+    return (o.buyerLabel
       ? `paid ✅ appreciate you! send your UPS label here and we'll get it shipped${when ? ` ${when}` : ""}.`
-      : `paid ✅ appreciate you! it ships${when ? ` ${when}` : " today or tomorrow"} via UPS, tracking coming once it's out.`;
+      : `paid ✅ appreciate you! it ships${when ? ` ${when}` : " today or tomorrow"} via UPS, tracking coming once it's out.`) + check;
   }
   // Every pickup is in the parking lot, never at the unit. Josh brings the order out.
   const where = warehouseAddress

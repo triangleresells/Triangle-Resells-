@@ -61,6 +61,11 @@ export interface OrderLabel {
   cost?: number;
   /** Already written to the sales tracker. */
   logged?: boolean;
+  /**
+   * false = not taken off BOT STOCK yet (BOOKED, not paid). Stock only comes off once it's paid,
+   * so a cancel before payment never touches the sheet. Missing (older labels, Stripe PAID) = already off.
+   */
+  stockOff?: boolean;
   /** Buyer said they sent the money (Cash App / Zelle). Josh still has to check. */
   saysPaid?: string;
 }

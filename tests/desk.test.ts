@@ -116,15 +116,17 @@ describe("order desk", () => {
       fulfillTime: "3:00 PM",
       freebies: ["1 free Baccarat Rouge"],
     });
-    expect(label).toMatchObject({ label: "BOOKED", cost: 30 });
-    expect(f.rows[2][5]).toBe("3");
+    expect(label).toMatchObject({ label: "BOOKED", cost: 30, stockOff: false });
+    expect(f.rows[2][5]).toBe("5"); // not paid yet: sheet untouched
     expect((cal.mock.calls[0] as any)[0].title).toContain("BOOKED");
     expect(alerts[0].reason).toContain("BOOKED $58");
     expect(await desk.markPaid(label.id)).toBe(true);
+    expect(f.rows[2][5]).toBe("3"); // paid: off the sheet
     expect(await desk.markPaid(label.id)).toBe(false);
+    expect(f.rows[2][5]).toBe("3");
     const logged = f.writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"));
     expect(logged).toHaveLength(1);
-    expect(await desk.cancel(label.id)).toEqual({ ok: true, wasLogged: true });
+    expect(await desk.cancel(label.id)).toEqual({ ok: true, wasLogged: true, restocked: true });
     expect(f.rows[2][5]).toBe("5");
   });
 });
@@ -230,5 +232,39 @@ describe("review fixes", () => {
     expect(store.allLabels().map((l) => l.label)).toEqual(["BOOKED"]);
     expect(store.getLabel(paid.id)).toBeUndefined();
     expect(f.writes.filter((w) => w.sheetId === "T")).toHaveLength(0);
+  });
+});
+
+describe("stock only comes off once it's paid", () => {
+  function deskWith() {
+    const f = fakeSheets();
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "x", stock: new StockKeeper(f.io), sales: new SalesLog(f.io, "T") });
+    const book = () =>
+      desk.booked({ userId: "u1", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }], items: "2x hat", itemsTotal: 58, total: 58, payment: "cash app", fulfillment: "pickup", fulfillDate: "2026-11-13", fulfillTime: "3:00 PM", freebies: [] });
+    return { f, store, desk, book };
+  }
+
+  it("cancel before paying never touches BOT STOCK", async () => {
+    const t = deskWith();
+    const l = await t.book();
+    expect(await t.desk.cancel(l.id)).toMatchObject({ ok: true, restocked: false });
+    expect(t.f.writes.filter((w) => w.range.startsWith("'BOT STOCK'"))).toHaveLength(0);
+    expect(t.f.rows[2][5]).toBe("5");
+  });
+
+  it("cash: Done takes it off and logs it once", async () => {
+    const t = deskWith();
+    const l = await t.book();
+    expect(await t.desk.done(l.id)).toBe(true);
+    expect(t.f.rows[2][5]).toBe("3");
+    expect(t.f.writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"))).toHaveLength(1);
+  });
+
+  it("puts the exact shipping and delivery fee amounts in the tracker notes", async () => {
+    const t = deskWith();
+    await t.desk.stripePaid("u1", [], "1x YSL", 75, "ship", "ship", { shipping: 15, shipTo: { name: "Jay Smith", street: "1 Main St", city: "Atlanta", state: "GA", zip: "30301" } });
+    const notes = t.f.writes.find((w) => w.range.includes("!AA"))!.values[0][0];
+    expect(notes).toContain("$15 shipping");
   });
 });

@@ -334,13 +334,17 @@ export class Bot {
   }
 
   /**
-   * Stock minus what other buyers' open (unexpired) card links hold. Card orders only come off the
-   * sheet once paid, so without this two buyers could each get a link for the last piece.
+   * Stock minus what other buyers' open card links and unpaid BOOKED orders hold. Orders only come off
+   * the sheet once paid, so without this two buyers could each lock in the last piece.
    */
   private withHeld(pricing: PricingConfig, userId?: string): PricingConfig {
     if (!pricing.stock?.length) return pricing;
     const since = this.now().getTime() - HOLD_MINUTES * 60 * 1000;
-    const held = this.d.store.openLinks(since).filter((l) => l.userId !== userId).flatMap((l) => l.link.lines ?? []);
+    const held = [
+      ...this.d.store.openLinks(since).filter((l) => l.userId !== userId).flatMap((l) => l.link.lines ?? []),
+      // Booked but not paid yet: still on the sheet, but promised to that buyer.
+      ...this.d.store.allLabels().filter((l) => l.stockOff === false && l.userId !== userId).flatMap((l) => l.lines ?? []),
+    ];
     if (!held.length) return pricing;
     const stock = pricing.stock.map((r) => ({ ...r }));
     for (const line of held) {

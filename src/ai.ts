@@ -20,7 +20,7 @@ export type PaymentMethod = "cash" | "cash_app" | "zelle" | "apple_pay";
 /** Order actions the AI can take for the customer it's talking to. Prices always come from the warehouse sheet. */
 export interface OrderTools {
   quote(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): string;
-  /** Cash, Cash App or Zelle (and Apple Pay when Stripe is off): lock in the order. Stock comes off the sheet, label BOOKED. */
+  /** Cash, Cash App or Zelle (and Apple Pay when Stripe is off): lock in the order. Label BOOKED; stock comes off the sheet once it's paid. */
   submitOrder?(
     items: OrderItem[],
     fulfillment: Fulfillment,
@@ -143,7 +143,7 @@ export const TOOLS = [
   {
     name: "submit_order",
     description:
-      "Lock in a confirmed order paid by cash, Cash App or Zelle. Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery), the payment method, and for shipping the full name and address are all settled, and after you sent the order summary and said all sales are final. The items come off the stock sheet, the order goes on Josh's calendar, and Josh is alerted. The chat keeps going.",
+      "Lock in a confirmed order paid by cash, Cash App or Zelle. Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery), the payment method, and for shipping the full name and address are all settled, and after you sent the order summary and said all sales are final. The items are held for them (they come off the stock sheet once paid), the order goes on Josh's calendar, and Josh is alerted. The chat keeps going.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -343,7 +343,7 @@ export class ClaudeAgent implements ReplyEngine {
           const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
           if (r.ok) {
             const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
-            content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
+            content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's held for them and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
           } else if (!r.fixable && r.handoff) {
             content = `Could not lock it in: ${r.error}. Call handoff_to_team (josh) with the order, and tell the customer Josh will reach out right here.`;
           } else if (r.fixable) {

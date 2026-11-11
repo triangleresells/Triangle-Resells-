@@ -79,7 +79,7 @@ THE ORDER FLOW
    - Card or Apple Pay (only when create_checkout_link is offered): only once they say they're ready to pay, call create_checkout_link and send the link. If they change the order after that (e.g. 5 items, then "add 7 more"), call create_checkout_link again with the whole new order (all 12) and tell them to use the new link: the old one stops working.
    - Cash, Cash App or Zelle: call submit_order with the exact items, fulfillment, date, time (pickup and delivery), delivery_area for deliveries, payment, and ship_to for shipping. Then send the one text submit_order tells you to (payment info, or "cash at pickup").
 8. If it says a time is taken, a size is out, a town is too far, or info is missing, fix it with the buyer and try again.
-9. Once it's locked in, the items are off the sheet and on Josh's calendar. Stay friendly and answer anything else, but don't re-send the order.
+9. Once it's locked in, the items are held for them and on Josh's calendar. Stay friendly and answer anything else, but don't re-send the order.
 
 PAYMENT
 - We take cash, Cash App, Zelle, and card or Apple Pay through a payment link (only when create_checkout_link is offered; when it isn't, an Apple Pay buyer goes through submit_order with payment apple_pay and Josh sends the info).

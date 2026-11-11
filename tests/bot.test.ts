@@ -830,3 +830,30 @@ describe("one live payment link per buyer", () => {
     expect(loadConfig({ ...base, STRIPE_SECRET_KEY: "sk_live_abc", STRIPE_ALLOW_LIVE: "true" }).stripeEnabled).toBe(true);
   });
 });
+
+describe("unpaid BOOKED orders hold their pieces", () => {
+  it("won't book the last piece for a second buyer while the first hasn't paid", async () => {
+    const pricing = loadPricing();
+    const store = new Store();
+    // Alo Hoodie Gray M: 1 on the sheet, already promised to buyer a.
+    store.addLabel({ userId: "a", label: "BOOKED", summary: "1x Alo", total: 50, payment: "cash app", when: "pickup", lines: [{ name: "Alo Hoodie", variant: "Gray", size: "M", qty: 1 }], stockOff: false });
+    let r: any;
+    const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, tools?: OrderTools) => ((r = await tools!.checkout!([{ product: "Alo Hoodie", variant: "Gray", size: "M", qty: 1 }], "pickup", "2026-11-12", "3:00 PM")), { text: "ok" })) };
+    const { ig } = setup();
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, checkout: { create: vi.fn(async () => ({ id: "cs", url: "https://c", expiresAt: 0 })) }, now: () => new Date("2026-11-05T17:00:00Z") });
+    await bot.handle({ object: "instagram", entry: [{ id: OWN_ID, messaging: [{ sender: { id: "b" }, recipient: { id: OWN_ID }, message: { mid: "bk1", text: "send it" } }] }] });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("paid ship order address", () => {
+  it("reads the address back to the buyer and puts it on the calendar for the label", async () => {
+    const { confirmationText, calendarEventFor } = await import("../src/orders.js");
+    const o = { sessionId: "cs", igUserId: "u1", account: "x", fulfillment: "ship" as const, fulfillDate: "2026-11-12", fulfillTime: "", buyerLabel: false, summary: "1x YSL", total: 75, buyerPhone: "+15550001111", shipAddress: { name: "Jay Smith", street: "1 Main St", apt: "Apt 2", city: "Atlanta", state: "GA", zip: "30301" } };
+    expect(confirmationText(o, "")).toContain("Jay Smith\n1 Main St Apt 2\nAtlanta, GA 30301");
+    const ev = calendarEventFor(o, "");
+    expect(ev.description).toContain("SHIP TO (for the label):\nJay Smith");
+    expect(ev.description).toContain("Phone: +15550001111");
+    expect(confirmationText({ ...o, shipAddress: undefined }, "")).toContain("first and last name");
+  });
+});

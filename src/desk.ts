@@ -244,9 +244,8 @@ export class OrderDesk {
     }
   }
 
-  /** submit_order: cash, Cash App, Zelle (or Apple Pay with no Stripe). Stock comes off now, label BOOKED. */
+  /** submit_order: cash, Cash App, Zelle (or Apple Pay with no Stripe). Label BOOKED; stock stays on the sheet until it's paid. */
   async booked(b: Booking): Promise<OrderLabel> {
-    await this.takeStock(b.lines, -1, b.userId);
     const when = [b.fulfillment, b.fulfillDate, b.fulfillTime, b.deliveryArea && `(${b.deliveryArea})`].filter(Boolean).join(" ");
     const label = this.d.store.addLabel({
       userId: b.userId,
@@ -261,6 +260,7 @@ export class OrderDesk {
       deliveryFee: b.deliveryFee,
       shipping: b.shipping,
       cost: await this.costOf(b.lines),
+      stockOff: false,
     });
     const who = b.username ? `@${b.username}` : "IG buyer";
     const steps: [string, () => Promise<void>][] = [];
@@ -298,7 +298,7 @@ export class OrderDesk {
           route: "josh",
           paused: false,
           reason: `🟡 BOOKED $${b.total} – ${when}, pays by ${b.payment}`,
-          summary: `${b.items}${b.freebies.length ? ` + ${b.freebies.join(", ")}` : ""}${b.shipTo ? `. Ship to: ${shipToText(b.shipTo)}` : ""}. Already taken off BOT STOCK.${b.payment === "cash" ? "" : " Mark it paid on /admin once the money shows up."}`,
+          summary: `${b.items}${b.freebies.length ? ` + ${b.freebies.join(", ")}` : ""}${b.shipTo ? `. Ship to: ${shipToText(b.shipTo)}` : ""}. Stays on BOT STOCK until it's paid.${b.payment === "cash" ? " Hit Done on /admin once you have the cash." : " Mark it paid on /admin once the money shows up."}`,
         }),
     ]);
     for (const [name, run] of steps) await run().catch((err) => console.error(`[desk] ${name} failed:`, err));
@@ -334,19 +334,28 @@ export class OrderDesk {
     return label;
   }
 
-  /** Josh saw the Cash App / Zelle money (or got the cash): PAID + logged. */
+  /** Josh saw the Cash App / Zelle money (or got the cash): stock off, PAID + logged. */
   async markPaid(id: string): Promise<boolean> {
     if (!this.d.store.markLabelPaid(id)) return false;
+    await this.stockOffNow(this.d.store.getLabel(id)!);
     await this.logSale(this.d.store.getLabel(id)!);
     return true;
   }
 
-  /** Order fulfilled: log it if it wasn't yet (cash), then clear the label. */
+  /** Order fulfilled (e.g. cash handed over): stock off and logged if that hadn't happened yet, then clear the label. */
   async done(id: string): Promise<boolean> {
     const l = this.d.store.getLabel(id);
     if (!l) return false;
-    await this.logSale(l);
+    await this.stockOffNow(l);
+    await this.logSale(this.d.store.getLabel(id)!);
     return this.d.store.clearLabel(id);
+  }
+
+  /** Paid: the pieces come off BOT STOCK now (once). */
+  private async stockOffNow(l: OrderLabel): Promise<void> {
+    if (l.stockOff !== false) return;
+    await this.takeStock(l.lines ?? [], -1, l.userId);
+    this.d.store.updateLabel(l.id, { stockOff: true });
   }
 
   /** End of day: clears PAID labels. BOOKED ones stay until Josh marks them paid, done or cancelled one by one. */
@@ -356,18 +365,19 @@ export class OrderDesk {
     return n;
   }
 
-  /** No-show or changed their mind: pieces go back on BOT STOCK, label removed. */
-  async cancel(id: string): Promise<{ ok: boolean; wasLogged?: boolean }> {
+  /** No-show or changed their mind: label removed. Pieces go back on BOT STOCK only if they'd come off (it was paid). */
+  async cancel(id: string): Promise<{ ok: boolean; wasLogged?: boolean; restocked?: boolean }> {
     const l = this.d.store.getLabel(id);
     if (!l) return { ok: false };
-    await this.takeStock(l.lines ?? [], 1, l.userId);
+    const restocked = l.stockOff !== false;
+    if (restocked) await this.takeStock(l.lines ?? [], 1, l.userId);
     this.d.store.clearLabel(id);
-    return { ok: true, wasLogged: !!l.logged };
+    return { ok: true, wasLogged: !!l.logged, restocked };
   }
 
   private async logSale(l: OrderLabel): Promise<void> {
     if (l.logged || !this.d.sales) return;
-    const fee = l.deliveryFee ? ` - $${l.deliveryFee} delivery fee` : "";
+    const fee = `${l.deliveryFee ? ` - $${l.deliveryFee} delivery fee` : ""}${l.shipping ? ` - $${l.shipping} shipping` : ""}`;
     const itemsTotal = l.total - (l.deliveryFee ?? 0) - (l.shipping ?? 0);
     try {
       await this.d.sales.log({
