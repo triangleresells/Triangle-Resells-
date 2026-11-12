@@ -147,6 +147,16 @@ async function main() {
     const real = new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase);
     // Log every tool result so the judge can check prices against what quote_order really returned.
     const agent: ReplyEngine = {
+      reply: (h, inv, t?: OrderTools, sched?) => logSaves(real0(h, inv, t, sched)),
+    };
+    // save_interest and cancel_follow_up come back on the reply, not through OrderTools: log them for the judge too.
+    const logSaves = async (p: ReturnType<ReplyEngine["reply"]>) => {
+      const r = await p;
+      for (const item of r.interests ?? []) tools.push(`save_interest(${JSON.stringify(item)})`);
+      if (r.cancelFollowUp) tools.push("cancel_follow_up()");
+      return r;
+    };
+    const inner: ReplyEngine = {
       reply: (h, inv, t?: OrderTools, sched?) => {
         if (!t) return real.reply(h, inv, t, sched);
         const wrapped: OrderTools = {
@@ -173,6 +183,7 @@ async function main() {
         return real.reply(h, inv, wrapped, sched);
       },
     };
+    const real0 = inner.reply;
     const notify = async (a: { reason: string; route: string; paused?: boolean; summary?: string }) => {
       tools.push(`${a.paused === false ? "alert_team" : "handoff"}(${a.route}): ${a.reason} | ${a.summary ?? ""}`);
     };
