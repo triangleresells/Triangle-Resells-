@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemBlocks, buildSystemPrompt, toApiMessages } from "../src/ai.js";
+import { buildSystemBlocks, buildSystemPrompt, claimsSaved, toApiMessages } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
 import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
@@ -116,4 +116,25 @@ describe("misc", () => {
   it("refuses to start without required secrets", () => {
     expect(() => loadConfig({})).toThrow(/IG_APP_SECRET/);
   });
+});
+
+describe("claimsSaved (bot says they're on the list)", () => {
+  it.each([
+    "I've saved you on the list for an XL and a L.",
+    "I also just saved your Chrome Hearts hoodie request",
+    "Bet, I've got you down for one Black Medium at $100.",
+    "I've saved your interest in a L.",
+    "You're on the restock list now, I'll DM you first when it lands.",
+    "Got you down for 2 in M 🔥",
+    "I'll put you down for the black L.",
+  ])("catches %s", (t) => expect(claimsSaved(t)).toBe(true));
+
+  it.each([
+    "Want me to put you down for one?",
+    "Got you, Jordan. Cash App works.",
+    "Restock is coming soon, I'll DM you first when it lands.",
+    "I have it in XL for $35. Pickup or shipped?",
+    "Should I save you a spot on the list?",
+    "Locked in, Jordan. Send the Cash App payment to $X for $70.",
+  ])("ignores %s", (t) => expect(claimsSaved(t)).toBe(false));
 });

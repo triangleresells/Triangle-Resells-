@@ -307,6 +307,19 @@ export function withNote(messages: Anthropic.MessageParam[], note: string): Anth
   return out;
 }
 
+/**
+ * True when a reply TELLS the customer they're saved / on the list / put down for something ("I've got you down for
+ * a black M", "you're on the list"). Questions ("Want me to put you down for one?") don't count.
+ */
+export function claimsSaved(text: string): boolean {
+  const claim =
+    /\b(i'?ve|i have|i|i'?ll|i will|just)\s+(just\s+)?(saved|save|added|add|put|got|get)\s+(you|your|u)\b[^.!?\n]*?\b(down|list|saved|restock|request|interest|spot)\b|\b(saved|added) (you|your|u)\b|\bgot (you|u) down\b|\byou'?re (now |all )?(on|added to|saved to) (the|my|our) (restock |wait ?)?list\b|\bon the (restock |wait ?)?list for\b/i;
+  return text
+    .split(/(?<=[.!?\n])/)
+    .map((s) => s.trim())
+    .some((s) => !s.endsWith("?") && claim.test(s));
+}
+
 export class ClaudeAgent implements ReplyEngine {
   private client: Anthropic;
 
@@ -424,6 +437,30 @@ export class ClaudeAgent implements ReplyEngine {
       } catch (err) {
         console.error("[ai] retry for an empty reply failed:", err);
       }
+    }
+    if (text && !handoff && interests.length === 0 && claimsSaved(text)) {
+      // The reply tells the buyer they're saved / on the list, but save_interest wasn't called, so Josh would never
+      // see it. Make the save happen (forced tool call) so the promise in the reply is true.
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          system,
+          messages: [
+            ...messages,
+            { role: "assistant", content: text },
+            { role: "user", content: "(Note from the system, not the customer: your reply says they're saved / on the list, but you never called save_interest. Call it now with exactly what they want: brand, item, color, size, how many.)" },
+          ],
+          tools: toolsFor(tools),
+          tool_choice: { type: "tool", name: "save_interest" },
+        });
+        for (const b of res.content) {
+          if (b.type === "tool_use" && b.name === "save_interest" && (b.input as any)?.item) interests.push(String((b.input as any).item));
+        }
+      } catch (err) {
+        console.error("[ai] forced save_interest failed:", err);
+      }
+      if (interests.length === 0) alerts.push({ reason: "Bot told a buyer they're on the list but couldn't save what they want", summary: text.slice(0, 300) });
     }
     if (!text) {
       text = handoff
