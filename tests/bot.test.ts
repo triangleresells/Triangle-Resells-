@@ -75,6 +75,17 @@ const comment = (text: string, id = "c1", from = USER): WebhookPayload => ({
 });
 
 describe("DMs", () => {
+  it("saves a not-in-stock ask to the customer list through alert_team alone, so 'I saved you' is true", async () => {
+    const t = setup({
+      text: "We don't have Hellstar right now. I've saved your request, so I'll DM you first if that changes.",
+      alerts: [{ reason: "asked for item not in stock", summary: "Hellstar hoodie, black, size L" }],
+    });
+    await t.bot.handle(dm("u got hellstar hoodie in L", "m-hs"));
+    expect(t.alerts[0]).toMatchObject({ paused: false });
+    const { matchCustomers } = await import("../src/customers.js");
+    expect(matchCustomers(t.store.allCustomers(), "hellstar L").map((c) => c.userId)).toEqual([USER]);
+  });
+
   it("answers a normal DM with the AI reply", async () => {
     const t = setup();
     await t.bot.handle(dm("yo", "m1"));

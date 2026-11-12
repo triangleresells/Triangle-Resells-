@@ -101,7 +101,7 @@ export const TOOLS = [
   {
     name: "alert_team",
     description:
-      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after. It does NOT save the customer to the restock list: call save_interest for that too.",
+      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after. What you put in summary is also saved to the customer's wants on Josh's customer list, so name the exact item, color and size they asked for.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -353,7 +353,7 @@ export class ClaudeAgent implements ReplyEngine {
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
           content =
-            "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
+            "Josh alerted, and what they asked for is saved on the customer list. Keep helping: offer the closest item we do have and keep closing.";
         } else if (block.name === "save_interest") {
           if (input.item) interests.push(String(input.item));
           content = "Saved to the customer list. Keep helping.";
