@@ -441,7 +441,7 @@ export class Bot {
       const itemsTotal = r.q.lines.reduce((t, l) => t + l.lineTotal, 0);
       const ship: ShipTo | undefined = fulfillment === "ship" && shipTo ? shipTo : undefined;
       if (this.d.desk) {
-        await this.d.desk.booked({
+        const booked = await this.d.desk.booked({
           userId,
           username: this.d.store.customer(userId).username,
           lines,
@@ -459,6 +459,8 @@ export class Bot {
           shipTo: ship,
           freebies: r.q.freebies,
         });
+        // The CRM said no (the piece just sold, or it's not sellable): nothing was booked.
+        if ("refused" in booked) return { ok: false, error: booked.refused, fixable: true };
       } else {
         this.d.store.addLabel({
           userId,

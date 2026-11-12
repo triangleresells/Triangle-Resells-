@@ -1,7 +1,7 @@
 import { rowMatches, type StockRow } from "./catalog.js";
 import type { Notifier } from "./handoff.js";
 import type { CalendarPoster } from "./orders.js";
-import { crmPayment, to24h, type Crm } from "./crm.js";
+import { CrmError, crmPayment, to24h, type Crm, type StockWrite } from "./crm.js";
 import { STOCK_TAB } from "./sheet.js";
 import type { OrderLabel, ShipTo, Store } from "./store.js";
 
@@ -28,6 +28,11 @@ export interface SheetIO {
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** Same key as the CRM's crm_stock_key(): item|color|size, blank size = One Size. */
+export const stockKey = (item?: string | null, color?: string | null, size?: string | null) => {
+  const sz = norm(size ?? "");
+  return `${norm(item ?? "")}|${norm(color ?? "")}|${sz === "one size" || sz === "os" ? "" : sz}`;
+};
 const colLetter = (i: number) => {
   let n = i + 1;
   let out = "";
@@ -47,6 +52,45 @@ export class StockKeeper {
     private io: Pick<SheetIO, "tabs" | "write">,
     private onChange?: () => void,
   ) {}
+
+  /**
+   * Sets exact Qty values on a tab (the CRM's stock sync says what the sheet should show). Rows are matched like the
+   * CRM matches them: item + color + size, and which repeat when the same item, color and size appear twice.
+   */
+  setQty(writes: StockWrite[], tab = STOCK_TAB): Promise<string[]> {
+    const run = this.chain.then(() => this.doSet(writes, tab));
+    this.chain = run.catch(() => {});
+    return run;
+  }
+
+  private async doSet(list: StockWrite[], tab: string): Promise<string[]> {
+    if (!list.length) return [];
+    const [rows] = await this.io.tabs([tab]);
+    const at = rows.findIndex((r) => r.some((c) => norm(c ?? "") === "item") && r.some((c) => norm(c ?? "") === "qty"));
+    if (at < 0) return [`no Item/Qty header on ${tab}`];
+    const head = rows[at].map((c) => norm(c ?? ""));
+    const [ci, cc, cs, cq] = ["item", "color", "size", "qty"].map((n) => head.indexOf(n));
+    const where = new Map<string, number>();
+    const seen = new Map<string, number>();
+    for (let i = at + 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r?.[ci]?.trim()) continue;
+      const k = stockKey(r[ci], r[cc], r[cs]);
+      const n = (seen.get(k) ?? 0) + 1;
+      seen.set(k, n);
+      where.set(`${k}#${n}`, i);
+    }
+    const problems: string[] = [];
+    const writes: { range: string; values: number[][] }[] = [];
+    for (const w of list) {
+      const i = where.get(`${stockKey(w.item, w.color, w.size)}#${w.occurrence}`);
+      if (i === undefined) problems.push(`not found on ${tab}: ${[w.item, w.color, w.size].filter(Boolean).join(" ")}`);
+      else writes.push({ range: `'${tab}'!${colLetter(cq)}${i + 1}`, values: [[w.qty]] });
+    }
+    if (writes.length) await this.io.write(writes);
+    this.onChange?.();
+    return problems;
+  }
 
   adjust(lines: OrderLine[], sign: 1 | -1): Promise<string[]> {
     const run = this.chain.then(() => this.doAdjust(lines, sign));
@@ -237,8 +281,21 @@ export class OrderDesk {
   }
 
   /** submit_order: cash, Cash App, Zelle (or Apple Pay with no Stripe). Stock comes off now, label BOOKED. */
-  async booked(b: Booking): Promise<OrderLabel> {
-    await this.takeStock(b.lines, -1, b.userId);
+  /**
+   * submit_order. With the CRM on, the CRM booking comes first: it reserves the stock, and if the pieces are gone it
+   * refuses and nothing is booked ({refused}). If the CRM can't be reached, stock comes off the sheet here instead and
+   * Josh is told to add the booking by hand.
+   */
+  async booked(b: Booking): Promise<OrderLabel | { refused: string }> {
+    let crmId: string | undefined;
+    let crmFailed: string | undefined;
+    if (this.d.crm) {
+      const r = await this.bookInCrm(b);
+      if (r.refused) return { refused: r.refused };
+      crmId = r.id;
+      crmFailed = r.failed;
+    }
+    if (!crmId) await this.takeStock(b.lines, -1, b.userId);
     const when = [b.fulfillment, b.fulfillDate, b.fulfillTime, b.deliveryArea && `(${b.deliveryArea})`].filter(Boolean).join(" ");
     const label = this.d.store.addLabel({
       userId: b.userId,
@@ -254,6 +311,7 @@ export class OrderDesk {
       shipping: b.shipping,
       deliveryMinutes: b.deliveryMinutes,
       cost: await this.costOf(b.lines),
+      ...(crmId ? { crmId } : {}),
     });
     const who = b.username ? `@${b.username}` : "IG buyer";
     const steps: [string, () => Promise<void>][] = [];
@@ -284,8 +342,20 @@ export class OrderDesk {
         },
       ]);
     }
-    if (this.d.crm) {
-      steps.push(["crm", () => this.sendToCrm(b, label)]);
+    if (crmFailed) {
+      steps.push([
+        "crm alert",
+        () =>
+          this.d.notify({
+            account: this.d.accountName,
+            userId: b.userId,
+            username: b.username,
+            route: "josh",
+            paused: false,
+            reason: "⚠️ Order NOT saved in the CRM: add it by hand",
+            summary: `${b.items}, ${b.fulfillment} ${b.fulfillDate} ${b.fulfillTime ?? ""}, $${b.total} by ${b.payment}. ${crmFailed}. Stock was taken off BOT STOCK directly.`,
+          }),
+      ]);
     }
     steps.push([
       "alert",
@@ -304,11 +374,8 @@ export class OrderDesk {
     return label;
   }
 
-  /**
-   * The booking in the CRM. If the CRM is down or refuses it, nothing is saved there (it's all-or-nothing) and Josh
-   * gets told to add it by hand; the order itself still stands.
-   */
-  private async sendToCrm(b: Booking, label: OrderLabel): Promise<void> {
+  /** The CRM booking (it reserves the stock). {refused}: the CRM said no (e.g. sold out). {failed}: couldn't reach it. */
+  private async bookInCrm(b: Booking): Promise<{ id?: string; refused?: string; failed?: string }> {
     const rows = this.d.stockRows ? await this.d.stockRows().catch(() => [] as StockRow[]) : [];
     try {
       const booking = await this.d.crm!.createBooking({
@@ -330,24 +397,17 @@ export class OrderDesk {
         source_account: this.d.accountName,
         notes: b.freebies.length ? `Free: ${b.freebies.join(", ")}` : null,
       });
-      this.d.store.updateLabel(label.id, { crmId: booking.id });
+      return { id: booking.id };
     } catch (err) {
+      if (err instanceof CrmError && err.status && err.status < 500) return { refused: err.message };
       console.error("[desk] CRM booking failed:", err);
-      await this.d.notify({
-        account: this.d.accountName,
-        userId: b.userId,
-        username: b.username,
-        route: "josh",
-        paused: false,
-        reason: "⚠️ Order NOT saved in the CRM: add it by hand",
-        summary: `${b.items}, ${b.fulfillment} ${b.fulfillDate} ${b.fulfillTime ?? ""}, $${b.total} by ${b.payment}. ${String((err as Error).message ?? err).slice(0, 200)}`,
-      }).catch(() => {});
+      return { failed: String((err as Error).message ?? err).slice(0, 200) };
     }
   }
 
   /**
-   * A booking a team member made in the CRM: the bot takes it on like its own order (stock off BOT STOCK, an order
-   * label linked to the CRM booking, and a calendar event). No alert: the team made it. No CRM write: it came from there.
+   * A booking a team member made in the CRM: the bot takes it on like its own order (an order label linked to the CRM
+   * booking, and a calendar event; the CRM already reserved the stock). No alert: the team made it. No CRM write: it came from there.
    */
   async adopt(a: {
     crmId: string;
@@ -366,7 +426,7 @@ export class OrderDesk {
     deliveryFee?: number;
     shipping?: number;
   }): Promise<OrderLabel> {
-    await this.takeStock(a.lines, -1, a.userId);
+    // No stock change here: the CRM already reserved these pieces when the booking was made.
     const when = [a.fulfillment, a.date, a.time].filter(Boolean).join(" ");
     const label = this.d.store.addLabel({
       userId: a.userId,
@@ -404,12 +464,14 @@ export class OrderDesk {
     return label;
   }
 
-  /** Items edited in the CRM: the old pieces go back on BOT STOCK, the new ones come off, and the label follows. */
+  /** Items edited in the CRM: the label follows (the CRM moved the stock). Orders the CRM doesn't know: the sheet too. */
   async replaceLines(id: string, lines: OrderLine[], summary: string, total: number): Promise<void> {
     const l = this.d.store.getLabel(id);
     if (!l) return;
-    await this.takeStock(l.lines ?? [], 1, l.userId);
-    await this.takeStock(lines, -1, l.userId);
+    if (!l.crmId) {
+      await this.takeStock(l.lines ?? [], 1, l.userId);
+      await this.takeStock(lines, -1, l.userId);
+    }
     this.d.store.updateLabel(id, { lines, summary, total, cost: await this.costOf(lines) });
   }
 
@@ -446,7 +508,8 @@ export class OrderDesk {
   async cancel(id: string): Promise<{ ok: boolean; wasLogged?: boolean }> {
     const l = this.d.store.getLabel(id);
     if (!l) return { ok: false };
-    await this.takeStock(l.lines ?? [], 1, l.userId);
+    // Orders the CRM knows about get their stock back in the CRM (its cancel); only the others go back on the sheet here.
+    if (!l.crmId) await this.takeStock(l.lines ?? [], 1, l.userId);
     this.d.store.clearLabel(id);
     return { ok: true, wasLogged: !!l.logged };
   }

@@ -250,3 +250,109 @@ describe("CRM -> bot (the loop back)", () => {
     expect(contexts.at(-1)).toContain("Sat, Nov 21 1:30 PM, pickup, 2x Chrome Hearts Hat Black");
   });
 });
+
+describe("stock: CRM <-> BOT STOCK <-> bot", () => {
+  /** An in-memory Google Sheet with a BOT STOCK tab laid out like the real one (note row, then headers). */
+  function fakeSheet(hatQty: number) {
+    const tabs: Record<string, string[][]> = {
+      "BOT STOCK": [
+        ["BOT STOCK - read me"],
+        ["Category", "Brand", "Item", "Color", "Size", "Qty", "Price List", "Status", "Notes", "Cost"],
+        ["Hat", "Chrome Hearts", "Chrome Hearts Hat", "Black", "", String(hatQty), "CHROME HEARTS HATS", "FOR SALE", "", "12"],
+      ],
+    };
+    return {
+      tabs,
+      cell: (tab: string, row: number, col: number) => tabs[tab][row - 1][col],
+      io: {
+        tabs: async (names: string[]) => names.map((n) => {
+          if (!tabs[n]) throw new Error(`Unable to parse range: ${n}`);
+          return tabs[n].map((r) => [...r]);
+        }),
+        ranges: async () => [],
+        write: async (data: { range: string; values: (string | number)[][] }[]) => {
+          for (const d of data) {
+            const m = d.range.match(/^'(.+)'!([A-Z]+)(\d+)$/)!;
+            tabs[m[1]][Number(m[3]) - 1][m[2].charCodeAt(0) - 65] = String(d.values[0][0]);
+          }
+        },
+      },
+    };
+  }
+
+  async function stockSetup(opts: { crmDown?: boolean; sheetQty?: number } = {}) {
+    const { StockKeeper } = await import("../../src/desk.js");
+    const { StockSync } = await import("../../src/stocksync.js");
+    const sheet = fakeSheet(opts.sheetQty ?? 20);
+    const api = createApi({ db: t.asService, botApiKey: KEY });
+    const live = crmClient("https://crm.test", KEY, ((i: RequestInfo | URL, init?: RequestInit) => api(new Request(String(i), init))) as typeof fetch);
+    const down = crmClient("https://crm.test", KEY, (async () => { throw new TypeError("fetch failed"); }) as typeof fetch);
+    const keeper = new StockKeeper(sheet.io);
+    const store = new Store(() => NOW.getTime());
+    const alerts: HandoffAlert[] = [];
+    const notify = async (a: HandoffAlert) => void alerts.push(a);
+    const desk = new OrderDesk({ store, notify, accountName: "Triangle Resells", crm: opts.crmDown ? down : live, stock: keeper });
+    const steps: Step[] = [];
+    const results: unknown[] = [];
+    const agent: ReplyEngine = { reply: async (_h, _i, tools) => { const s = steps.shift(); if (s) results.push(await s(tools!)); return { text: "ok" }; } };
+    const ig: InstagramApi = { sendText: async () => "m", sendPrivateReply: async () => "m", replyToComment: async () => {}, getUsername: async () => "TEST_buyer" };
+    const bot = new Bot({ ig, agent, store, notify, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing: loadPricing(), getBusy: async () => [], now: () => NOW, desk, crm: opts.crmDown ? down : live });
+    let n = 0;
+    const dm = (step: Step) => {
+      steps.push(step);
+      return bot.handle({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: `${BUYER}-${++n}` }, recipient: { id: OWN }, message: { mid: `s${n}`, text: "order" } }] }] });
+    };
+    const stockSync = new StockSync({ crm: live, io: sheet.io, keeper });
+    await stockSync.tick(); // first sync: the CRM learns the sheet
+    return { dm, sheet, stockSync, alerts, results };
+  }
+  const SHEET_QTY = (s: ReturnType<typeof fakeSheet>) => Number(s.cell("BOT STOCK", 3, 5));
+
+  it("a DM order reserves in the CRM, the next sync writes the new count on the sheet, and nothing is taken twice", async () => {
+    await t.reset(); // start with no stock: the sheet brings it in
+    const { dm, sheet, stockSync } = await stockSetup();
+    expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(20);
+    await dm((tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(18);
+    expect(SHEET_QTY(sheet)).toBe(20); // not yet: the bot didn't touch the sheet itself
+    expect(await stockSync.tick()).toBe(1);
+    expect(SHEET_QTY(sheet)).toBe(18);
+    await stockSync.tick();
+    expect(SHEET_QTY(sheet)).toBe(18);
+    expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(18);
+  });
+
+  it("a restock typed on the sheet reaches the CRM", async () => {
+    await t.reset();
+    const { sheet, stockSync } = await stockSetup();
+    sheet.tabs["BOT STOCK"][2][5] = "35";
+    await stockSync.tick();
+    expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(35);
+  });
+
+  it("the CRM refuses an order for pieces that are gone, and the AI is told so (nothing booked)", async () => {
+    await t.reset();
+    const { dm, results } = await stockSetup({ sheetQty: 1 });
+    await dm((tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    expect(results[0]).toMatchObject({ ok: false, fixable: true, error: "only 1 left of Chrome Hearts Hat Black (asked for 2)" });
+    expect(await crmBookings()).toEqual([]);
+    expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(1);
+  });
+
+  it("CRM down: the bot takes the stock off the sheet itself (once) and tells Josh", async () => {
+    await t.reset();
+    const { dm, sheet, alerts, results } = await stockSetup({ crmDown: true });
+    await dm((tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    expect(results[0]).toMatchObject({ ok: true });
+    expect(SHEET_QTY(sheet)).toBe(18);
+    expect(alerts.some((a) => a.reason.includes("NOT saved in the CRM") && a.summary!.includes("taken off BOT STOCK directly"))).toBe(true);
+  });
+
+  it("an empty sheet read never wipes the CRM's stock", async () => {
+    await t.reset();
+    const { sheet, stockSync } = await stockSetup();
+    sheet.tabs["BOT STOCK"] = [];
+    await stockSync.tick();
+    expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(20);
+  });
+});

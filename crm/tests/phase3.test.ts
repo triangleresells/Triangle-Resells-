@@ -155,3 +155,18 @@ describe("phase 3: BOT STOCK sync", () => {
     await expect(t.asUser(josh).rpc("stock_sync", { p_rows: [], p_is_test: true })).rejects.toThrow();
   });
 });
+
+describe("the bot and the database match stock rows the same way", () => {
+  it("stockKey (bot) === crm_stock_key (database) for tricky names", async () => {
+    const { stockKey } = await import("../../src/desk.js");
+    const cases: [string, string | null, string | null][] = [
+      ["Chrome Hearts Hat", "Black", null], ["Chrome Hearts Hat", "Black", "One Size"], ["Chrome Hearts Hat", "black", "OS"],
+      ["Spider Hoodie", "Black/Pink", "S"], ["  Valley  Tee ", "White/Orange", " M "], ["Sp5der OG Web Hoodie", "Black/Gold", "XL"],
+      ["Bleu de Chanel EDP", "", ""], ["Amiri Button-Up", "Black & White", "L"],
+    ];
+    for (const [item, color, size] of cases) {
+      const db = (await t.pg.query<{ k: string }>("select crm_stock_key($1, $2, $3) k", [item, color, size])).rows[0].k;
+      expect(stockKey(item, color, size)).toBe(db);
+    }
+  });
+});

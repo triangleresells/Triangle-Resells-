@@ -71,9 +71,42 @@ export interface Crm {
   events(after: number | null): Promise<{ events: CrmEvent[]; latest: number }>;
   /** This Instagram buyer's bookings that aren't finished. */
   openBookings(igUserId: string): Promise<CrmBookingFull[]>;
+  /** Sends what BOT STOCK says; gets back the counts to write on the sheet. */
+  syncStock(rows: CrmStockRow[], isTest: boolean): Promise<{ sheet_edits_applied: number; writes: StockWrite[] }>;
 }
 
-export class CrmError extends Error {}
+/** One BOT STOCK row as the CRM wants it. */
+export interface CrmStockRow {
+  category: string;
+  brand: string;
+  item: string;
+  color: string;
+  size: string;
+  qty: string;
+  price_list: string;
+  status: "for_sale" | "freebie" | "not_for_sale" | "incoming" | "other";
+  notes: string;
+  cost: string;
+}
+
+/** "Set this row's Qty to N" (occurrence: 2 = the second row with the same item, color and size). */
+export interface StockWrite {
+  item: string;
+  color: string | null;
+  size: string | null;
+  occurrence: number;
+  qty: number;
+}
+
+/** status: the CRM's HTTP answer (4xx = it refused, e.g. out of stock); none = couldn't reach it. */
+export class CrmError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+  }
+}
 
 export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch = fetch, timeoutMs = 8000): Crm {
   const base = baseUrl.replace(/\/+$/, "");
@@ -96,7 +129,7 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     } catch {
       /* not JSON */
     }
-    if (!res.ok) throw new CrmError(`CRM said ${res.status}: ${String(data.error ?? text).slice(0, 200)}`);
+    if (!res.ok) throw new CrmError(String(data.error ?? text).slice(0, 200) || `CRM error ${res.status}`, res.status);
     return data as T;
   }
   return {
@@ -104,6 +137,7 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     reschedule: async (id, date, time) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/reschedule`, { date, time: time ?? null })).booking,
     setStatus: async (id, status, reason) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/status`, { status, reason: reason ?? null })).booking,
     events: (after) => call("GET", `/events${after === null ? "" : `?after=${after}`}`),
+    syncStock: (rows, isTest) => call("POST", "/stock/sync", { rows, is_test: isTest }),
     openBookings: async (ig) => (await call<{ bookings: CrmBookingFull[] }>("GET", `/customers/bookings?ig_user_id=${encodeURIComponent(ig)}`)).bookings,
   };
 }

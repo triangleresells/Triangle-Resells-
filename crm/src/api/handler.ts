@@ -70,6 +70,15 @@ export function createApi(deps: ApiDeps) {
         if (!ig) return json(400, { error: "ig_user_id is required" });
         return json(200, { bookings: await deps.db.rpc("open_bookings_for", { p_ig_user_id: ig }) });
       }
+      // Stock: the bot sends what BOT STOCK says and gets back the counts to write on the sheet.
+      if (req.method === "POST" && path === "/stock/sync") {
+        const b = await body(req);
+        if (!Array.isArray(b.rows)) return json(400, { error: "rows must be a list" });
+        return json(200, await deps.db.rpc("stock_sync", { p_rows: b.rows, p_is_test: b.is_test === true, p_actor: actor }));
+      }
+      if (req.method === "GET" && path === "/stock") {
+        return json(200, { stock: await deps.db.rpc("stock_list", { p_is_test: url.searchParams.get("is_test") === "true" }) });
+      }
       // CRM -> bot: booking changes people made since event N (none = just tell me where to start).
       if (req.method === "GET" && path === "/events") {
         const after = url.searchParams.get("after");

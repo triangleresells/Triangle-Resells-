@@ -1,6 +1,7 @@
 import { ClaudeAgent } from "./ai.js";
 import { crmClient } from "./crm.js";
 import { CrmSync } from "./crmsync.js";
+import { StockSync } from "./stocksync.js";
 import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
@@ -47,13 +48,14 @@ const calendar = webhookCalendar(config.calendarWebhookUrl);
 // Triangle CRM: every locked-in order also becomes a CRM booking; reschedules, cancels and "I paid" go there too.
 const crm = config.crmApiUrl && config.crmBotApiKey ? crmClient(config.crmApiUrl, config.crmBotApiKey) : undefined;
 console.log(`[crm] ${crm ? "connected to " + new URL(config.crmApiUrl).host : "off (CRM_API_URL / CRM_BOT_API_KEY not set)"}`);
+const stockKeeper = sheets ? new StockKeeper(sheets, () => catalog.refresh()) : undefined;
 const desk = new OrderDesk({
   store,
   notify,
   crm,
   crmAssignee: config.crmAssignee,
   accountName: config.accountName,
-  stock: sheets ? new StockKeeper(sheets, () => catalog.refresh()) : undefined,
+  stock: stockKeeper,
   sales: sheets ? new SalesLog(sheets, config.trackerSheetId) : undefined,
   calendar,
   stockRows: async () => (await catalog.get()).pricing.stock ?? [],
@@ -87,6 +89,14 @@ const bot = new Bot({
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 // One follow-up DM when a payment link expires unpaid.
 // CRM -> bot: changes the team makes in the CRM (reschedule, cancel, paid, done, new bookings) flow back every 15s.
+if (crm && sheets && stockKeeper) {
+  // Stock: the CRM keeps the live count; BOT STOCK is synced both ways every minute.
+  const stockSync = new StockSync({ crm, io: sheets, keeper: stockKeeper });
+  void stockSync.tick();
+  setInterval(() => void stockSync.tick(), 60 * 1000).unref();
+} else if (crm) {
+  console.log("[stock-sync] off: needs the Google service account (GOOGLE_SERVICE_ACCOUNT_JSON) to read and write BOT STOCK");
+}
 if (crm) {
   const sync = new CrmSync({ crm, store, desk, calendarEdit: calendarEditor(config.calendarWebhookUrl) });
   setInterval(() => void sync.tick(), 15 * 1000).unref();
