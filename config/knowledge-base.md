@@ -5,13 +5,18 @@ ABOUT US
 - Support email: triangleresells@gmail.com
 
 === PART 1: PHYSICAL PRODUCTS ===
-- Everything is brand new, never worn.
+- Everything is brand new, never worn, and comes with its tags.
+- Sizing: Essentials runs a size up (an Essentials XS fits like a small). BAPE, Supreme, Alo and Spider are true to size. Any other fit question: quick sec (see agent instructions).
+- The Supreme hoodies are box logo hoodies.
+- Fragrances are all 100ml and sealed. Only say "sealed" when a buyer asks if it's sealed.
+- Pics, tag photos, measurements, batch codes, "are these real?": quick sec. Josh answers those himself.
+- Packaging when shipped: one clothing piece usually goes in a poly bag; multiple items go in a box.
 - Stock and prices come ONLY from the LIVE STOCK SHEET below (Josh's warehouse sheet, BOT STOCK and BOT PRICES tabs). This knowledge base has no prices or stock on purpose.
 - What we carry right now (only what the sheet lists as FOR SALE): Alo hoodies and sweatpants, Spider hoodies, Valley hoodies and tees, Chrome Hearts tees and hats, BAPE tees, Amiri button-ups, Satoshi tees, Godspeed tees, ERD (Enfant Riches Deprimes) tees, Purple jeans, Gia sets, Lululemon sets, Gucci and Goyard bags, and fragrances (Tom Ford, Bleu de Chanel, Gucci, Creed, Versace, Armani, YSL, Valentino, Prada).
 - Valley is its own brand, not Hellstar. We have no Hellstar right now.
 - Sold out right now: Essentials (all of it), BAPE tees (all of it) and the light gray Alo pants. Essentials and BAPE are coming back in the restock below.
 - Not for sale: the Rolex and the Gallery Dept jeans. Josh handles those personally.
-- Freebies: every order gets 1 free Baccarat Rouge. Orders of 5+ pieces also get a free G-Shock. Neither one is ever sold.
+- Free gifts: none right now. The free Baccarat and free G-Shock deals are over. Never offer either one.
 - Restock dates: only the INCOMING RESTOCK below is confirmed. For anything else say "Restock is coming soon, I'll DM you first when it lands." Never make up a date.
 
 INCOMING RESTOCK (landing Monday Nov 16 and Tuesday Nov 17, 2026)
@@ -92,9 +97,10 @@ HELPING PEOPLE PICK A VENDOR
 - Only wants one category: the matching single vendor
 
 COMMON QUESTIONS
-- "Can you do cheaper?" Prices are firm and already low enough to flip. Offer the bulk tier if they grab more, and remind them every order comes with a free Baccarat.
+- "Can you do cheaper?" Prices are firm and already low enough to flip. Offer the bulk tier if they grab more.
 - "Do you buy clothes?" / "Trades?" No, we only sell.
-- "Are these real / good quality?" Brand new, never worn. Point to the vouches highlight. Never claim more than that.
+- "Are these real?" / "authentic?" / "legit?" Never answer it yourself: quick sec (alert_team, then "alright give me a quick sec bro"). Josh answers it.
+- "Good quality?" Brand new, never worn, with tags. Vouches are in the "vouches" highlight.
 - "Can you hold it?" We don't hold unpaid items. Once Josh confirms payment, we hold it until their pickup day.
 - "Returns / exchanges?" All sales are final.
 - "Where are you?" Raleigh area. The pickup spot is sent after payment.

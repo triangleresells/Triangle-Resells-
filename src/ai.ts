@@ -8,7 +8,8 @@ export interface AgentReply {
   /** Set when the bot made a Stripe link in this reply. The bot makes sure it reaches the customer. */
   checkoutUrl?: string;
   /** Heads-up alerts for the team. Unlike a handoff, the bot keeps selling in the chat. */
-  alerts?: { reason: string; summary: string }[];
+  /** kind "question" = a QUICK SEC question the buyer is waiting on; those always reach Josh, never deduped. */
+  alerts?: { reason: string; summary: string; kind?: "stock" | "question" }[];
   /** The customer said they don't want the order, so don't follow up on the unpaid link. */
   cancelFollowUp?: boolean;
   /** Items this customer wants (saved to the customer list for restock blasts). */
@@ -51,7 +52,7 @@ export interface ReplyEngine {
 
 const ITEMS_SCHEMA = {
   type: "array",
-  description: "Every PAID item in the order, one entry per item + color + size. Never include the free Baccarat or G-Shock: they're added automatically.",
+  description: "Every PAID item in the order, one entry per item + color + size. Never include free gifts: any gift is added automatically.",
   items: {
     type: "object",
     properties: {
@@ -101,14 +102,15 @@ export const TOOLS = [
   {
     name: "alert_team",
     description:
-      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after. It does NOT save the customer to the restock list: call save_interest for that too.",
+      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced, and for QUICK SEC questions you can't answer yourself (are they real, pics, measurements, anything not in the sheet or knowledge base): put their exact question in the summary. Keep selling after. It does NOT save the customer to the restock list: call save_interest for that too.",
     input_schema: {
       type: "object" as const,
       properties: {
-        reason: { type: "string", description: "e.g. 'asked for item not in stock', 'asked for unpriced item'." },
-        summary: { type: "string", description: "Exactly what they asked for: brand, item, size, color, how many." },
+        kind: { type: "string", enum: ["stock", "question"], description: "stock = they want something we don't have or haven't priced. question = a QUICK SEC question they're waiting on Josh to answer." },
+        reason: { type: "string", description: "e.g. 'asked for item not in stock', 'asked for unpriced item', 'asked if it's real'." },
+        summary: { type: "string", description: "Start with exactly what they asked for (brand, item, size, color, how many) or their exact question. Context after that." },
       },
-      required: ["reason", "summary"],
+      required: ["kind", "reason", "summary"],
     },
   },
   {
@@ -325,6 +327,9 @@ export function looksReadyToBook(text: string): boolean {
   return /\ball sales (are )?final\b/i.test(text) || /\b(lock|book)\s+(it|that|this|them|you|u|ur|your order|the order)(\s+in)?\b[^.!?\n]*\?/i.test(text);
 }
 
+/** What the bot says while Josh looks at something (Josh wants it to read like a person, not a bot). */
+export const QUICK_SEC = "alright give me a quick sec bro";
+
 const LOCK_IN_NOTE =
   "(Note from the system, not the customer: your reply sends the order summary or asks to lock it in, but you didn't call submit_order. Rule: once you have item, color, size, qty, pickup/delivery/shipping, the day and time (or the full ship_to address) and the payment method, lock it in IN THAT SAME REPLY. If you have all of that, call submit_order now, then write the DM to send INSTEAD of your last reply: the summary, \"All sales final\", and exactly what submit_order tells you to send. Don't ask permission. If something is truly missing, call nothing and reply with only: MISSING)";
 
@@ -372,9 +377,9 @@ export class ClaudeAgent implements ReplyEngine {
           let content: string;
           if (block.name === "handoff_to_team") {
             handoff = input as AgentReply["handoff"];
-            content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
+            content = "Team alerted and this chat is paused for them. Reply with one short line: \"alright give me a quick sec bro\" (for the Rolex or Gallery Dept: Josh handles that one personally). Don't promise what Josh will do.";
           } else if (block.name === "alert_team") {
-            alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
+            alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? ""), kind: input.kind === "question" ? "question" : "stock" });
             content =
               "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
           } else if (block.name === "save_interest") {
@@ -490,12 +495,10 @@ export class ClaudeAgent implements ReplyEngine {
       } catch (err) {
         console.error("[ai] forced save_interest failed:", err);
       }
-      if (interests.length === 0) alerts.push({ reason: "Bot told a buyer they're on the list but couldn't save what they want", summary: text.slice(0, 300) });
+      if (interests.length === 0) alerts.push({ reason: "Bot told a buyer they're on the list but couldn't save what they want", summary: text.slice(0, 300), kind: "question" });
     }
     if (!text) {
-      text = handoff
-        ? "Got you, someone from the team will jump in here shortly."
-        : "Good question, let me get someone from the team to confirm that for you.";
+      text = QUICK_SEC;
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
     return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}), ...(interests.length ? { interests } : {}) };

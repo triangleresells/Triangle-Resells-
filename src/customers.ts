@@ -49,7 +49,7 @@ ${labelsHtml(labels, key, esc)}
 <h2>Restock blast</h2>
 <form method="post" action="/admin/blast?key=${encodeURIComponent(key)}">
 <label>Who: words from what they wanted (blank = everyone)<input name="search" placeholder="essentials hoodie"></label>
-<label>Message<textarea name="message" rows="3" required placeholder="Essentials hoodies just landed, black in XS and L. Want me to set you up?"></textarea></label>
+<label>Message<textarea name="message" rows="3" required placeholder="hey bro, the Essentials hoodie is in your size now. If you want to purchase let me know and we can get it locked in"></textarea></label>
 <button>Send</button></form>
 <p>Instagram only lets the bot DM people who messaged in the last 24 hours. Everyone else shows up below with a link so you can DM them yourself.</p>
 ${result ? `<h2>Sent by the bot (${result.sent.length})</h2>${list(result.sent)}<h2>DM these yourself (${result.manual.length})</h2>${list(result.manual)}<p>Message: ${esc(result.message)}</p>` : ""}`;

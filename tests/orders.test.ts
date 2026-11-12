@@ -7,6 +7,7 @@ import type { HandoffAlert } from "../src/handoff.js";
 import type { InstagramApi } from "../src/instagram.js";
 import { calendarEventFor, confirmationText, handlePaidOrder, type CalendarEvent } from "../src/orders.js";
 import { loadPricing } from "../src/config.js";
+import { parseStockCsv } from "../src/catalog.js";
 import { quoteOrder, tierPrice, type PricingConfig } from "../src/pricing.js";
 import { Store } from "../src/store.js";
 import { checkoutParams, isValidStripeSignature, paidOrderFromEvent, toForm, type CheckoutApi } from "../src/stripe.js";
@@ -15,6 +16,11 @@ import { checkoutParams, isValidStripeSignature, paidOrderFromEvent, toForm, typ
 const pricing = loadPricing();
 // Same prices with deep stock, for bulk-tier math.
 const deep: PricingConfig = { ...pricing, stock: pricing.stock!.map((r) => (r.status === "for_sale" ? { ...r, qty: 999 } : r)) };
+// The real sheet has no free gifts right now. These sample FREEBIE rows test the gift feature on its own.
+const GIFTS = parseStockCsv(
+  "Category,Brand,Item,Color,Size,Qty,Price List,Status,Notes\nGift,Promo,Promo Gift,,,9,,FREEBIE,1 free with EVERY order\nGift,Promo,Bonus Gift,,,1,,FREEBIE,Free with any 5+ piece order",
+);
+const withGifts: PricingConfig = { ...pricing, stock: [...pricing.stock!, ...GIFTS] };
 
 describe("pricing", () => {
   it("uses the last tier reached for in-between quantities", () => {
@@ -43,21 +49,26 @@ describe("pricing", () => {
     expect(q.shipping).toBe(0);
   });
 
-  it("adds 1 free Baccarat to every order and a free G-Shock at 5+ pieces, never charged", () => {
-    const one = quoteOrder(pricing, [{ product: "Bleu de Chanel EDP", qty: 1 }], "pickup");
-    expect(one).toMatchObject({ total: 60, freebies: ["1 free Baccarat Rouge (B tier)"] });
-    const four = quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 4 }], "pickup");
-    expect(four.freebies).toEqual(["1 free Baccarat Rouge (B tier)"]);
-    const five = quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup");
-    expect(five).toMatchObject({ total: 130, freebies: ["1 free Baccarat Rouge (B tier)", "1 free G-Shock"] });
+  it("adds FREEBIE rows to orders (every order, or 5+ pieces), never charged", () => {
+    const one = quoteOrder(withGifts, [{ product: "Bleu de Chanel EDP", qty: 1 }], "pickup");
+    expect(one).toMatchObject({ total: 60, freebies: ["1 free Promo Gift"] });
+    const four = quoteOrder(withGifts, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 4 }], "pickup");
+    expect(four.freebies).toEqual(["1 free Promo Gift"]);
+    const five = quoteOrder(withGifts, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup");
+    expect(five).toMatchObject({ total: 130, freebies: ["1 free Promo Gift", "1 free Bonus Gift"] });
+  });
+
+  it("gives no free gifts while the sheet has none (Baccarat and G-Shock are gone)", () => {
+    expect(quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup").freebies).toEqual([]);
+    expect(quoteOrder(pricing, [{ product: "Baccarat Rouge", qty: 1 }], "pickup").lines).toHaveLength(0);
   });
 
   it("never sells freebies or NOT FOR SALE rows, and doesn't sell what's not on the sheet", () => {
     const q = quoteOrder(
-      pricing,
+      withGifts,
       [
-        { product: "Baccarat Rouge", qty: 1 },
-        { product: "G-Shock", qty: 1 },
+        { product: "Promo Gift", qty: 1 },
+        { product: "Bonus Gift", qty: 1 },
         { product: "Rolex", qty: 1 },
         { product: "Gallery Dept Jeans", size: "32", qty: 1 },
         { product: "Essentials Hoodie", qty: 1 },

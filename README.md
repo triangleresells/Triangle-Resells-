@@ -60,7 +60,7 @@ Never publish the sheet to the web. The bot reads it with a Google service accou
 Create a Discord channel webhook (Channel settings → Integrations → Webhooks) or a Slack incoming webhook → `HANDOFF_WEBHOOK_URL`. Without it, alerts only show in the server logs.
 
 ### 6b. Payments
-**Right now: no Stripe.** Buyers pay cash, Cash App or Apple Pay. The bot quotes (never its own math), sends the order summary with the free Baccarat, then locks in the order and hands it to Josh to collect payment (the chat pauses so Josh can take over).
+**Right now: no Stripe.** Buyers pay cash, Cash App or Apple Pay. The bot quotes (never its own math), sends the order summary, then locks in the order and hands it to Josh to collect payment (the chat pauses so Josh can take over).
 
 Stripe links (off unless `STRIPE_ENABLED=true`):
 1. Stripe Dashboard → Developers → API keys → **Create restricted key** with **Checkout Sessions: Write** → `STRIPE_SECRET_KEY`.

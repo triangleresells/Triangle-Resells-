@@ -76,7 +76,7 @@ export interface Quote {
   /** Local delivery: area, one-way drive minutes, and fee. */
   delivery?: { area: string; minutes: number; fee: number };
   total: number;
-  /** Gifts added to every order (Baccarat) and 5+ piece orders (G-Shock). Never charged. */
+  /** Gifts from FREEBIE rows on the sheet (none right now), added by themselves. Never charged. */
   freebies: string[];
   /** Items the bot can't sell or price (not in stock, not for sale, no price). */
   problems: string[];

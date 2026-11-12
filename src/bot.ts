@@ -150,6 +150,30 @@ export interface WebhookPayload {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** A second "I paid" in the same chat within this window doesn't alert Josh again. */
 export const PAYMENT_ALERT_WINDOW_MS = 6 * 60 * 60_000;
+/** The same alert (same item / question) in one chat within this window is sent to Josh only once. */
+export const ALERT_REPEAT_WINDOW_MS = 12 * 60 * 60_000;
+
+const FILLER = new Set(["the", "a", "an", "for", "in", "of", "to", "and", "or", "is", "it", "they", "them", "customer", "buyer", "asked", "asks", "wants", "want", "about", "item", "not", "stock", "carried", "we", "do", "dont", "have", "size", "if", "on", "with", "their", "this", "that", "question", "any", "our"]);
+
+/** The words that identify what a stock alert is about ("Nike Tech Fleece L"): the first sentence, no (asides), no filler. */
+export function alertWords(a: { reason: string; summary: string }): Set<string> {
+  const core = a.summary.split(/(?<=[a-z0-9)])[.;]\s|\n/i)[0].replace(/\([^)]*\)/g, " ");
+  const words = core
+    .toLowerCase()
+    .replace(/[^a-z0-9$ ]+/g, " ")
+    .split(/\s+/)
+    .filter((w) => w && !FILLER.has(w));
+  return new Set(words);
+}
+
+/** Two alerts are the same when most of the smaller one's key words are in the other. */
+export function sameAlert(a: Set<string>, b: Set<string>): boolean {
+  const [small, big] = a.size <= b.size ? [a, b] : [b, a];
+  if (small.size === 0) return big.size === 0;
+  let shared = 0;
+  for (const w of small) if (big.has(w)) shared++;
+  return shared / small.size >= 0.7;
+}
 
 export class Bot {
   private chains = new Map<string, Promise<void>>();
@@ -158,6 +182,8 @@ export class Bot {
   private replyAt = new Map<string, number>();
   /** Last "says they paid" alert per chat, so "thanks!" after "sent it" doesn't ping Josh again. */
   private paidAlertAt = new Map<string, number>();
+  /** Alerts already sent per chat (key words + time), so the same heads-up doesn't ping Josh on every turn. */
+  private alertsSent = new Map<string, { words: Set<string>; at: number }[]>();
 
   constructor(private d: BotDeps) {}
 
@@ -260,9 +286,20 @@ export class Bot {
     // Customer list: whatever they asked about or wanted, for restock blasts later.
     for (const item of [...(result.interests ?? []), ...(result.alerts ?? []).map((a) => a.summary)]) this.d.store.addInterest(userId, item);
 
-    if (result.alerts?.length) {
+    // The AI can't see its earlier tool calls, so it re-sends the same alert on later turns. Josh gets each one once.
+    const nowMs = this.now().getTime();
+    const sentBefore = (this.alertsSent.get(userId) ?? []).filter((s) => nowMs - s.at < ALERT_REPEAT_WINDOW_MS);
+    const fresh = (result.alerts ?? []).filter((a) => {
+      if (a.kind === "question") return true; // the buyer is waiting on this one: always send it
+      const words = alertWords(a);
+      if (sentBefore.some((s) => sameAlert(s.words, words))) return false;
+      sentBefore.push({ words, at: nowMs });
+      return true;
+    });
+    this.alertsSent.set(userId, sentBefore);
+    if (fresh.length) {
       const username = await this.d.ig.getUsername(userId);
-      for (const a of result.alerts) {
+      for (const a of fresh) {
         await this.d
           .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, ...a })
           .catch((err) => console.error("[bot] alert failed:", err));

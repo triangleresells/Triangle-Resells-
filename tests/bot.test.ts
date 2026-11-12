@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
-import { Bot, toBubbles, type WebhookPayload } from "../src/bot.js";
+import { alertWords, Bot, sameAlert, toBubbles, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
 import type { InstagramApi } from "../src/instagram.js";
@@ -357,8 +357,7 @@ describe("warehouse sheet", () => {
     const pricing = loadPricing();
     const snapshot = { pricing, text: formatCatalog(pricing.stock!, pricing.tables), source: "snapshot" as const };
     expect(snapshot.text).toContain("Alo Hoodie | Gray | M | 1 | ALO");
-    expect(snapshot.text).toContain("Baccarat Rouge (B tier): 1 free with EVERY order");
-    expect(snapshot.text).toContain("G-Shock: free with any 5+ piece order");
+    expect(snapshot.text).not.toMatch(/Baccarat|G-Shock/);
     expect(snapshot.text).toContain("NOT FOR SALE (if asked, hand off to josh): Rolex, Gallery Dept Jeans");
     expect(snapshot.text.split("\n\n")[0]).not.toContain("Essentials");
     expect(snapshot.text).toContain("INCOMING, NOT IN STOCK YET");
@@ -411,7 +410,7 @@ describe("warehouse sheet", () => {
 describe("no Stripe: cash, Cash App, Apple Pay", () => {
   const NOW = new Date("2026-11-05T19:00:00Z"); // Thu 2 PM ET
   const busy: BusyBlock[] = [];
-  it("locks in the order, hands it to Josh with the freebies, and only offers submit_order", async () => {
+  it("locks in the order, hands it to Josh, and only offers submit_order", async () => {
     const { toolsFor } = await import("../src/ai.js");
     const pricing = loadPricing();
     const alerts: HandoffAlert[] = [];
@@ -433,7 +432,7 @@ describe("no Stripe: cash, Cash App, Apple Pay", () => {
     await bot.handle(dm("5 black ch hats, pickup fri 4, cash app", "m-cash"));
     expect(offered).toContain("submit_order");
     expect(offered).not.toContain("create_checkout_link");
-    expect(result).toMatchObject({ ok: true, total: 130, freebies: ["1 free Baccarat Rouge (B tier)", "1 free G-Shock"] });
+    expect(result).toMatchObject({ ok: true, total: 130, freebies: [] });
     expect((result as { summary: string }).summary).toContain("pays by cash app");
     expect(alerts[0]).toMatchObject({ route: "josh" });
     expect(store.isPaused("user-1")).toBe(true);
@@ -466,7 +465,7 @@ describe("no Stripe: cash, Cash App, Apple Pay", () => {
     expect(store.allLabels()).toHaveLength(1);
   });
 
-  it("nudges a quoted buyer who went quiet once, with the free Baccarat", async () => {
+  it("nudges a quoted buyer who went quiet once, with no gift pitch while there are no freebies", async () => {
     const { quietNudgeText } = await import("../src/bot.js");
     const pricing = loadPricing();
     const now = { t: NOW };
@@ -482,8 +481,8 @@ describe("no Stripe: cash, Cash App, Apple Pay", () => {
     expect(await bot.followUpUnpaid()).toBe(0);
     now.t = new Date(NOW.getTime() + 95 * 60_000);
     expect(await bot.followUpUnpaid()).toBe(1);
-    expect(sent.at(-1)).toBe(quietNudgeText("1x YSL Y EDP", "Baccarat Rouge (B tier)"));
-    expect(sent.at(-1)).toContain("every order comes with a free Baccarat Rouge.");
+    expect(sent.at(-1)).toBe(quietNudgeText("1x YSL Y EDP"));
+    expect(sent.at(-1)).not.toContain("free");
     now.t = new Date(NOW.getTime() + 300 * 60_000);
     expect(await bot.followUpUnpaid()).toBe(0);
   });
@@ -713,5 +712,30 @@ describe("human-like reply timing", () => {
     await t.bot.handle(dm("L please", "m3"));
     expect(Date.now() - again).toBeLessThan(75);
     expect(t.sent).toHaveLength(2);
+  });
+});
+
+describe("repeat alerts", () => {
+  const nike = (summary: string) => ({ reason: "asked for item not carried", summary, kind: "stock" as const });
+
+  it("treats re-worded alerts about the same item as one, and different items as different", () => {
+    const first = alertWords(nike("Asked for black Nike Tech Fleece in size L (saw it on story). Not on stock sheet."));
+    expect(sameAlert(first, alertWords(nike("Customer wants Nike Tech Fleece, Black, size L, 1 piece. Asked about restock.")))).toBe(true);
+    expect(sameAlert(first, alertWords(nike("Asked for light gray Alo Sweatpants in L (sold out).")))).toBe(false);
+  });
+
+  it("pings Josh once per item per chat, but always sends questions the buyer is waiting on", async () => {
+    const { bot, agent, alerts } = setup();
+    const reply = vi.mocked(agent.reply);
+    reply.mockResolvedValueOnce({ text: "We don't carry that.", alerts: [nike("Nike Tech Fleece, black, L. Not on sheet.")] });
+    reply.mockResolvedValueOnce({ text: "Got you.", alerts: [nike("Customer wants Nike Tech Fleece Black L, 1 piece. Saw it on story.")] });
+    reply.mockResolvedValueOnce({ text: "alright give me a quick sec bro", alerts: [{ reason: "asked if it's real", summary: "Is the Nike Tech Fleece L real?", kind: "question" }] });
+    reply.mockResolvedValueOnce({ text: "alright give me a quick sec bro", alerts: [{ reason: "asked for pics", summary: "Pics of the Nike Tech Fleece L tag?", kind: "question" }] });
+    for (const [i, t] of ["nike tech L?", "black", "is it real", "pics of tag?"].entries()) await bot.handle(dm(t, `m-alert-${i}`));
+    expect(alerts.map((a) => a.summary)).toEqual([
+      "Nike Tech Fleece, black, L. Not on sheet.",
+      "Is the Nike Tech Fleece L real?",
+      "Pics of the Nike Tech Fleece L tag?",
+    ]);
   });
 });
