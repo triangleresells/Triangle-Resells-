@@ -267,10 +267,11 @@ const MAX_ROUNDS = 5;
 /**
  * Current models think before answering and that thinking counts toward max_tokens. At 500 the thinking used
  * the whole budget, so replies came back empty or cut off mid tool call and the chat got handed to the team.
- * DM length is set by the instructions (and splitMessage), not by this cap. Low effort keeps the thinking short.
+ * DM length is set by the instructions (and splitMessage), not by this cap. Medium effort (the model's default)
+ * followed the rules better than low in the retest, and the reply delay hides the extra second or two.
  */
 const MAX_TOKENS = 4000;
-const EFFORT = { effort: "low" } as const;
+const EFFORT = { effort: "medium" } as const;
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
