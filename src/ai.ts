@@ -202,6 +202,17 @@ export const TOOLS = [
 ];
 
 export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): string {
+  return systemBlocks(instructions, knowledgeBase, inventory, now, schedule)
+    .map((b) => b.text)
+    .join("\n\n");
+}
+
+/**
+ * The system prompt in two blocks. The first (instructions, knowledge base, stock sheet) only changes when the
+ * sheet does, so it's cached: cheaper, and cached reads don't eat the per-minute rate limit. The second holds what
+ * changes every request (pickup schedule, current time).
+ */
+export function systemBlocks(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): Anthropic.TextBlockParam[] {
   const today = now.toLocaleString("en-US", {
     weekday: "long",
     year: "numeric",
@@ -218,12 +229,17 @@ export function buildSystemPrompt(instructions: string, knowledgeBase: string, i
         inventory,
     );
   }
+  const stable = parts.join("\n\n");
+  parts.length = 0;
   if (schedule) parts.push("PICKUP SCHEDULE (live from Josh's calendar)\n" + schedule);
   parts.push(`TODAY\n${today} (North Carolina time). Use this to turn "today", "tomorrow" or "next Thursday" into a date.`);
   parts.push(
     "FORMAT\nYou are writing an Instagram DM. Plain text only: no markdown, no bullet lists, no asterisks. Keep it short.",
   );
-  return parts.join("\n\n");
+  return [
+    { type: "text", text: stable, cache_control: { type: "ephemeral" } },
+    { type: "text", text: parts.join("\n\n") },
+  ];
 }
 
 /** Only the most recent customer screenshots are sent to the AI, to keep replies fast and cheap. */
@@ -264,6 +280,27 @@ export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
 }
 
 const MAX_ROUNDS = 5;
+/**
+ * Room for the model's thinking plus a short DM or tool call. Haiku 5.5 thinks before answering, and the old
+ * 500 ran out mid-tool-call, which threw away the turn and sent "let me get someone from the team" instead.
+ * Only tokens actually used are billed; the DM itself stays short because the instructions say so.
+ */
+const MAX_TOKENS = 16000;
+
+const FINAL_RE = /all\s+sales\s+(are\s+)?final/i;
+
+/**
+ * Josh's rule, enforced in code: nothing gets locked in (submit_order or a payment link) until the buyer has
+ * seen the full order summary with a $ total and "all sales final" in one of our last 2 messages, and answered it.
+ * Returns what to tell the AI instead, or undefined when it's OK to lock in.
+ */
+export function lockInBlocker(history: ChatTurn[]): string | undefined {
+  const lastUser = history.map((t) => t.role).lastIndexOf("user");
+  const before = history.slice(0, lastUser).filter((t) => t.role === "assistant" && !t.text.startsWith("[Team member replied]"));
+  const recent = before.slice(-2);
+  if (lastUser >= 0 && recent.some((t) => FINAL_RE.test(t.text) && /\$\s?\d/.test(t.text))) return undefined;
+  return "NOT locked in yet. First send the full ORDER SUMMARY in one text: every item with color/size and price, the free gift, any shipping or delivery fee, the TOTAL, pickup/delivery/ship and the day (and time), how they're paying, and the words \"all sales are final\". Ask them to confirm. Only call this again after they say yes.";
+}
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
@@ -291,11 +328,12 @@ export class ClaudeAgent implements ReplyEngine {
     private instructions: string,
     private knowledgeBase: string,
   ) {
-    this.client = new Anthropic({ apiKey });
+    // Rate limits (429) and overloads are retried with backoff instead of dropping the customer's reply.
+    this.client = new Anthropic({ apiKey, maxRetries: 4 });
   }
 
   async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
-    const system = buildSystemPrompt(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
+    const system = systemBlocks(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
@@ -308,7 +346,7 @@ export class ClaudeAgent implements ReplyEngine {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const res = await this.client.messages.create({
         model: this.model,
-        max_tokens: 500,
+        max_tokens: MAX_TOKENS,
         system,
         messages,
         tools: toolsFor(tools),
@@ -316,6 +354,11 @@ export class ClaudeAgent implements ReplyEngine {
 
       const texts: string[] = [];
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      if (res.stop_reason === "max_tokens") {
+        // Cut off: tool inputs may be incomplete (e.g. quote_order with no items), so run nothing from it.
+        console.error(`[ai] reply hit max_tokens (${res.usage.output_tokens} tokens); not running its tool calls`);
+        break;
+      }
       for (const block of res.content) {
         if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
         if (block.type !== "tool_use") continue;
@@ -339,6 +382,8 @@ export class ClaudeAgent implements ReplyEngine {
           content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
         } else if (block.name === "payment_sent" && tools.paymentSent) {
           content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
+        } else if ((block.name === "submit_order" || block.name === "create_checkout_link") && lockInBlocker(history)) {
+          content = lockInBlocker(history)!;
         } else if (block.name === "submit_order" && tools.submitOrder) {
           const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
           if (r.ok) {
@@ -381,7 +426,7 @@ export class ClaudeAgent implements ReplyEngine {
       try {
         const res = await this.client.messages.create({
           model: this.model,
-          max_tokens: 400,
+          max_tokens: MAX_TOKENS,
           system,
           messages: withNote(
             messages,

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
+import { lockInBlocker, withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
 import { Bot, toBubbles, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
@@ -855,5 +855,21 @@ describe("paid ship order address", () => {
     expect(ev.description).toContain("SHIP TO (for the label):\nJay Smith");
     expect(ev.description).toContain("Phone: +15550001111");
     expect(confirmationText({ ...o, shipAddress: undefined }, "")).toContain("first and last name");
+  });
+});
+
+describe("no lock-in before the summary + all sales final", () => {
+  const summary = "2x Chrome Hearts Hat Black $29 each, free Baccarat Rouge, pickup Fri 3:00 PM, Zelle. TOTAL $58. All sales are final, good?";
+  it("blocks when the buyer never saw the summary", () => {
+    expect(lockInBlocker([{ role: "user", text: "2 black hats, zelle, pickup fri 3" }])).toContain("NOT locked in");
+    expect(lockInBlocker([{ role: "user", text: "hats" }, { role: "assistant", text: "all sales are final" }, { role: "user", text: "ok" }])).toContain("NOT locked in"); // no $ total
+  });
+  it("allows it once they answered the summary", () => {
+    expect(lockInBlocker([{ role: "user", text: "2 hats" }, { role: "assistant", text: summary }, { role: "user", text: "yes" }])).toBeUndefined();
+    expect(lockInBlocker([{ role: "assistant", text: summary }, { role: "user", text: "4pm ok?" }, { role: "assistant", text: "yep 4 works" }, { role: "user", text: "bet" }])).toBeUndefined();
+  });
+  it("blocks if the summary is old (more than 2 of our messages ago)", () => {
+    const h = [{ role: "assistant", text: summary }, { role: "user", text: "a" }, { role: "assistant", text: "x" }, { role: "user", text: "b" }, { role: "assistant", text: "y" }, { role: "user", text: "add a hoodie" }] as const;
+    expect(lockInBlocker([...h])).toContain("NOT locked in");
   });
 });
