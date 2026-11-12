@@ -1,0 +1,21 @@
+{
+  "name": "triangle-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Triangle Resells CRM v1: Supabase database + API for the team and the AI DM bot",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
