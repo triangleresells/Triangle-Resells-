@@ -445,6 +445,10 @@ export class Bot {
     };
     tools.paymentSent = async (method, note) => {
       const label = this.d.store.latestLabelFor(userId);
+      if (label?.saysPaid) {
+        // Already flagged: don't alert Josh again for follow-up texts about the same payment.
+        return "Josh already knows about this payment and is checking. Don't call payment_sent again for it. Tell them it's with Josh and he'll confirm once it shows. Never say it's received.";
+      }
       if (label) this.d.store.updateLabel(label.id, { saysPaid: `${method.replace("_", " ")}: ${note}`.slice(0, 200) });
       const username = await this.d.ig.getUsername(userId).catch(() => undefined);
       await this.d

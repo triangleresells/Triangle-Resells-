@@ -861,8 +861,8 @@ describe("paid ship order address", () => {
 describe("no lock-in before the summary + all sales final", () => {
   const summary = "2x Chrome Hearts Hat Black $29 each, free Baccarat Rouge, pickup Fri 3:00 PM, Zelle. TOTAL $58. All sales are final, good?";
   it("blocks when the buyer never saw the summary", () => {
-    expect(lockInBlocker([{ role: "user", text: "2 black hats, zelle, pickup fri 3" }])).toContain("NOT locked in");
-    expect(lockInBlocker([{ role: "user", text: "hats" }, { role: "assistant", text: "all sales are final" }, { role: "user", text: "ok" }])).toContain("NOT locked in"); // no $ total
+    expect(lockInBlocker([{ role: "user", text: "2 black hats, zelle, pickup fri 3" }])).toContain("was NOT run");
+    expect(lockInBlocker([{ role: "user", text: "hats" }, { role: "assistant", text: "all sales are final" }, { role: "user", text: "ok" }])).toContain("was NOT run"); // no $ total
   });
   it("allows it once they answered the summary", () => {
     expect(lockInBlocker([{ role: "user", text: "2 hats" }, { role: "assistant", text: summary }, { role: "user", text: "yes" }])).toBeUndefined();
@@ -870,7 +870,7 @@ describe("no lock-in before the summary + all sales final", () => {
   });
   it("blocks if the summary is old (more than 2 of our messages ago)", () => {
     const h = [{ role: "assistant", text: summary }, { role: "user", text: "a" }, { role: "assistant", text: "x" }, { role: "user", text: "b" }, { role: "assistant", text: "y" }, { role: "user", text: "add a hoodie" }] as const;
-    expect(lockInBlocker([...h])).toContain("NOT locked in");
+    expect(lockInBlocker([...h])).toContain("was NOT run");
   });
 });
 
@@ -903,5 +903,21 @@ describe("AI retest fixes", () => {
   it("'I paid' with no order locked in tells the AI to hand off to Josh", async () => {
     const tools = await toolsFor().get();
     expect(await tools.paymentSent!("cash_app", "sent $65 for the jacket")).toContain("handoff_to_team with route josh");
+  });
+});
+
+describe("payment_sent only alerts Josh once per payment", () => {
+  it("a second 'I sent it' for the same order doesn't re-alert", async () => {
+    const store = new Store();
+    store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x hat", total: 29, payment: "cash app", when: "pickup", lines: [], stockOff: false });
+    let tools!: OrderTools;
+    const alerts: HandoffAlert[] = [];
+    const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, t?: OrderTools) => ((tools = t!), { text: "ok" })) };
+    const { ig } = setup();
+    const bot = new Bot({ ig, agent, store, notify: async (a) => void alerts.push(a), getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing: loadPricing() });
+    await bot.handle({ object: "instagram", entry: [{ id: OWN_ID, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN_ID }, message: { mid: "ps1", text: "sent" } }] }] });
+    await tools.paymentSent!("cash_app", "sent");
+    expect(await tools.paymentSent!("cash_app", "did you get it?")).toContain("already knows");
+    expect(alerts.filter((a) => a.reason.includes("Says they paid"))).toHaveLength(1);
   });
 });

@@ -301,7 +301,7 @@ export function lockInBlocker(history: ChatTurn[]): string | undefined {
   const before = history.slice(0, lastUser).filter((t) => t.role === "assistant" && !t.text.startsWith("[Team member replied]"));
   const recent = before.slice(-2);
   if (lastUser >= 0 && recent.some((t) => FINAL_RE.test(t.text) && /\$\s?\d/.test(t.text))) return undefined;
-  return "NOT locked in yet. First send the full ORDER SUMMARY in one text: every item with color/size and price, the free gift, any shipping or delivery fee, the TOTAL, pickup/delivery/ship and the day (and time), how they're paying, and the words \"all sales are final\". Ask them to confirm. Only call this again after they say yes.";
+  return "This call was NOT run. Anything locked in earlier in this chat is still locked in, and payment info sent earlier is still correct: never tell the buyer otherwise. To lock in a NEW or CHANGED order, first send the full ORDER SUMMARY in one text: every item with color/size and price, the free gift, any shipping or delivery fee, the TOTAL, pickup/delivery/ship and the day (and time), how they're paying, and the words \"all sales are final\". Ask them to confirm. Only call this again after they say yes.";
 }
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
@@ -391,7 +391,8 @@ export class ClaudeAgent implements ReplyEngine {
         let content: string;
         if (block.name === "handoff_to_team") {
           handoff = input as AgentReply["handoff"];
-          content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
+          content =
+            "Team alerted. Write one short message telling the customer someone will jump in shortly. Don't say what they'll do, confirm or decide (no \"Josh will confirm the discount\").";
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
           content =
