@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { lockInBlocker, stripFiller, withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
+import { lintReply, lockInBlocker, stripFiller, withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
 import { Bot, toBubbles, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
@@ -919,5 +919,44 @@ describe("payment_sent only alerts Josh once per payment", () => {
     await tools.paymentSent!("cash_app", "sent");
     expect(await tools.paymentSent!("cash_app", "did you get it?")).toContain("already knows");
     expect(alerts.filter((a) => a.reason.includes("Says they paid"))).toHaveLength(1);
+  });
+});
+
+describe("reply check (lintReply): real lines the AI retest failed", () => {
+  const bad = [
+    "We have it in M for $60. Want that one?",
+    "It's $35 and comes with a free Baccarat. Want to grab it?",
+    "Want to go ahead? If so, what's the full name and address it's going to?",
+    "Would that work, and are you looking at pickup or shipping?",
+    "Would $60 cash work for you?",
+    "Do you want to add the second one?",
+    "Pickup or shipped? And what day works for you?",
+    "Would the Black/Pink S work for you?",
+  ];
+  for (const line of bad) it(`flags: ${line}`, () => expect(lintReply(line).length).toBeGreaterThan(0));
+
+  const good = [
+    "That one's $60 and comes with a free Baccarat. Pickup or shipped?",
+    "Sounds good, gray M. What day works for pickup?",
+    "I've got Essentials coming in Friday, $60. Want me to put you down for one?",
+    "Got you.\n\nWhat size do you need?",
+    "No problem, I'm here if you change your mind.",
+  ];
+  for (const line of good) it(`leaves alone: ${line.replace(/\n/g, " ")}`, () => expect(lintReply(line)).toEqual([]));
+
+  it("only allows 'I saved you' when a saving tool ran this turn", () => {
+    expect(lintReply("I've saved you for a black L.")).toHaveLength(1);
+    expect(lintReply("You're on the list for the black L.")).toHaveLength(1);
+    expect(lintReply("I've saved you for a black L.", new Set(["save_interest"]))).toEqual([]);
+    expect(lintReply("I let Josh know.", new Set(["alert_team"]))).toEqual([]);
+  });
+});
+
+describe("quiet-buyer nudge", () => {
+  it("ends with the next step, not 'want me to lock it in?'", async () => {
+    const { quietNudgeText } = await import("../src/bot.js");
+    const t = quietNudgeText("1x Spider Hoodie White/Black XS", "Baccarat Rouge (B tier)");
+    expect(t).not.toMatch(/want/i);
+    expect(lintReply(t)).toEqual([]);
   });
 });

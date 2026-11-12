@@ -314,6 +314,33 @@ export function toolsFor(tools?: OrderTools) {
 const THANKS_RE = /^(?:(hey|hi|yo|hello)\s*[,!.]?\s*)?(?:thanks|thank you)(?: so much)? for (?:reaching out|messaging|the message|your message|hitting (?:us|me) up)[!.,]*\s*/i;
 const QUESTION_RE = /^(?:(hey|hi|yo|hello)\s*[,!.]?\s*)?(?:good|great) question[!.,]*\s*/i;
 
+/** Ends a text with a "do you want it?" question instead of the next step. ("Want me to put you down for one?" on a restock is allowed.) */
+const WANT_RE =
+  /\b(?:want (?:it|that|this|them|those|one|that one|this one|both|all \w+|to (?:grab|go ahead|do|get|add)[^?]*|me to lock it in)|would (?:that|this|it|those|the [^?]{1,40}|\$\d[^?]*) work(?: for you)?|do you (?:want|still want)|would you like|you want (?:it|that|this|one|them))\b[^?]*\?\s*$/i;
+/** "I've saved / flagged / told Josh..." said in this reply. Only true if a tool that does that ran this turn. */
+const CLAIM_RE =
+  /\b(?:i(?:'ve| have| just)? ?(?:saved|added|flagged|noted|logged|put you (?:down|on)|got you (?:down|on (?:the|my) list)|let josh know|told josh|passed (?:it|this) (?:on|to josh)|sent (?:it|this) to josh)|you(?:'re| are) (?:saved|on (?:the|my|our) list|down for))\b/i;
+
+/**
+ * Josh's rules that code can check: one question per text, no "want it?" endings, and no claiming
+ * an action (saved you, told Josh) unless a tool that does it ran in this reply. Returns the problems found.
+ */
+export function lintReply(text: string, ranTools: Set<string> = new Set()): string[] {
+  const problems: string[] = [];
+  const bubbles = text.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+  for (const b of bubbles) {
+    const q = (b.match(/\?/g) ?? []).length;
+    if (q > 1) problems.push(`One text asks ${q} questions ("${b.slice(0, 80)}"). Keep ONE question per text: the next step only.`);
+    if (WANT_RE.test(b) && !/put you down for/i.test(b)) {
+      problems.push(`A text ends by asking if they want it ("${b.slice(-70)}"). Assume the close: ask the next step instead (size, pickup or shipped, day/time, payment).`);
+    }
+  }
+  const saved = ["alert_team", "save_interest", "handoff_to_team", "payment_sent"].some((t) => ranTools.has(t));
+  const claim = text.match(CLAIM_RE);
+  if (claim && !saved) problems.push(`It says "${claim[0]}", but no tool that does that ran in this reply. Don't claim it: either drop the line, or say what you can do.`);
+  return problems;
+}
+
 /** Drops the customer-service openers Josh banned ("Thanks for reaching out.", "Good question."), keeping a "Hey!". */
 export function stripFiller(text: string): string {
   let out = text;
@@ -365,6 +392,7 @@ export class ClaudeAgent implements ReplyEngine {
     let cancelFollowUp = false;
     const interests: string[] = [];
     const alerts: NonNullable<AgentReply["alerts"]> = [];
+    const ran = new Set<string>();
     let finalTexts: string[] = [];
     const allTexts: string[] = [];
 
@@ -388,6 +416,7 @@ export class ClaudeAgent implements ReplyEngine {
         if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
         if (block.type !== "tool_use") continue;
         const input = block.input as any;
+        ran.add(block.name);
         let content: string;
         if (block.name === "handoff_to_team") {
           handoff = input as AgentReply["handoff"];
@@ -471,6 +500,30 @@ export class ClaudeAgent implements ReplyEngine {
       }
     }
     text = stripFiller(text);
+    const problems = text ? lintReply(text, ran) : [];
+    if (problems.length) {
+      // One targeted rewrite. The buyer only ever sees the better of the two versions.
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          system,
+          messages: withNote(
+            messages,
+            `(Note from the system, not the customer: this is the DM you were about to send:\n"""\n${text}\n"""\nFix ONLY these problems, keep everything else (prices, facts, links) the same, and reply with just the fixed DM:\n- ${problems.join("\n- ")})`,
+          ),
+          tools: toolsFor(tools),
+          tool_choice: { type: "none" },
+        });
+        const fixed = stripFiller(res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim());
+        if (fixed && (!checkoutUrl || fixed.includes(checkoutUrl) || !text.includes(checkoutUrl)) && lintReply(fixed, ran).length < problems.length) {
+          console.log(`[ai] rewrote a reply to fix: ${problems.map((p) => p.split(".")[0]).join(" | ")}`);
+          text = fixed;
+        }
+      } catch (err) {
+        console.error("[ai] rewrite failed, sending the original:", err);
+      }
+    }
     if (!text) {
       text = handoff
         ? "Got you, someone from the team will jump in here shortly."

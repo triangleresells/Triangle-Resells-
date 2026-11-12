@@ -92,7 +92,7 @@ export function giftName(item: string): string {
 export function quietNudgeText(summary: string, gift?: string): string {
   const order = summary.length > 100 ? `${summary.slice(0, 97)}...` : summary;
   const hook = gift ? ` Just so you know, every order comes with a free ${giftName(gift)}.` : "";
-  return `Hey, still got you on the ${order}.${hook} Want me to lock it in?`;
+  return `Hey, still got you on the ${order}.${hook} Pickup or shipped?`;
 }
 
 /** Sent once when a payment link expires unpaid. If they answer, the AI sends a fresh link. */
