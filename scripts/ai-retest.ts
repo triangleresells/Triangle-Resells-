@@ -17,7 +17,7 @@ import { Bot } from "../src/bot.js";
 import { formatCatalog } from "../src/catalog.js";
 import { loadConfig } from "../src/config.js";
 import type { InstagramApi } from "../src/instagram.js";
-import type { BusyBlock } from "../src/schedule.js";
+import { scheduleText, type BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
 
 // $ per million tokens (input, output). Cache reads 0.1x input, cache writes 1.25x input.
@@ -66,7 +66,7 @@ interface Scenario {
 }
 
 const SCENARIOS: Scenario[] = [
-  { id: "zelle_pickup_screenshot", persona: "wants 2 black Chrome Hearts hats, pickup tomorrow at 5pm, pays Zelle. After getting the Zelle info, says 'sent it, here's the screenshot'", photo: true, expect: "Quotes from quote_order with the free Baccarat, says all sales final, submit_order with zelle and pickup, sends the exact Zelle info from submit_order ($ total to 919-480-7349 (TEST)) and asks for a screenshot. On the screenshot: calls payment_sent and says Josh will confirm. NEVER says paid/received/confirmed." },
+  { id: "zelle_pickup_screenshot", persona: "wants 2 black Chrome Hearts hats, pickup tomorrow at 5pm, pays Zelle. After getting the Zelle info, says 'sent it, here's the screenshot'", photo: true, expect: "Quotes from quote_order with the free Baccarat, says all sales final, submit_order with zelle and pickup, sends the exact Zelle info from submit_order ($ total to 919-480-7349) and asks for a screenshot. On the screenshot: calls payment_sent and says Josh will confirm. NEVER says paid/received/confirmed." },
   { id: "ship_full_address", persona: "lives in Atlanta GA, wants 1 YSL Y EDP shipped, pays Cash App; gives name and street first, then city/state/zip only when asked", expect: "Quotes $60 + $10 shipping via quote_order. Collects full name, street, city, state and zip before submit_order (ship_to filled). Sends the exact Cash App info from submit_order. Never offers cash for shipping." },
   { id: "cash_no_ride", persona: "in Garner, wants 1 Spider hoodie, wants to pay cash, says they don't have a car and asks if it can be dropped off", expect: "Offers pickup first. When they say no ride + cash, does NOT book a cash delivery: hands off to josh. Clean voice, one question at a time." },
   { id: "cash_pickup", persona: "wants 1 Bleu de Chanel EDP, pickup Saturday 2pm, cash", expect: "submit_order with cash + pickup. Says cash at pickup and that Josh sends the pickup spot. Never gives an address or a payment handle." },
@@ -161,6 +161,7 @@ async function main() {
       reply: (h, inv, t?: OrderTools, sched?) => {
         if (!t) return real.reply(h, inv, t, sched);
         const wrapped: OrderTools = {
+          ...t,
           quote: (items, f, area) => {
             const r = t.quote(items, f, area);
             tools.push(`quote_order(${JSON.stringify(items)}, ${f}${area ? `, ${area}` : ""}) -> ${r}`);
@@ -194,7 +195,7 @@ async function main() {
       accountName: config.accountName, keywords: config.keywords, publicCommentReplies: [], humanPauseHours: 12,
       pricing: config.pricing, getBusy: async () => busy, now: () => new Date(clock.t),
       fetchImage: async () => ({ mediaType: "image/png", data: photo }),
-      payInfo: { zelle: "919-480-7349 (TEST)", cashApp: "$TestCashtag" },
+      payInfo: { zelle: "919-480-7349", cashApp: "$triangleresells" },
     });
 
     const quietRule = sc.quiet
@@ -237,7 +238,7 @@ async function main() {
       messages: [
         {
           role: "user",
-          content: `RULES:\n${config.agentInstructions}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
+          content: `RULES:\n${config.agentInstructions}\n\nKNOWLEDGE BASE THE BOT SAW (facts here are NOT invented):\n${config.knowledgeBase}\n\nPICKUP SCHEDULE RULES THE BOT SAW:\n${scheduleText(busy, new Date(clock.t))}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\nNOTES: alert_team also saves the item on the customer's list for restock texts (it counts as save_interest). A "note" inside a submit_order result (like the ship date after 7pm) is tool output, not invented.\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
         },
       ],
     } as Anthropic.MessageCreateParamsNonStreaming);
