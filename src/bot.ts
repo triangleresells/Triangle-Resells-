@@ -12,6 +12,7 @@ import { HOLD_MINUTES } from "./stripe.js";
 import type { OrderDesk } from "./desk.js";
 import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
+import { to24h, type Crm } from "./crm.js";
 
 export interface BotDeps {
   ig: InstagramApi;
@@ -44,7 +45,9 @@ export interface BotDeps {
   /** Taken times from Josh's calendar. Without it every time from 10 AM to 10 PM is open. */
   getBusy?: () => Promise<BusyBlock[]>;
   /** Stock off the sheet, calendar, alerts and the sales tracker for locked-in orders. Without it orders only get a label. */
-  desk?: Pick<OrderDesk, "booked" | "stripePaid">;
+  desk?: Pick<OrderDesk, "booked" | "stripePaid"> & Partial<Pick<OrderDesk, "cancel">>;
+  /** The Triangle CRM (reschedules, cancels and "I paid" go there too). Bookings are created by the desk. */
+  crm?: Crm;
   /** What the bot sends buyers to pay. Unset = Josh sends it himself. */
   payInfo?: { zelle?: string; cashApp?: string };
   /** Clock, for tests. */
@@ -430,7 +433,7 @@ export class Bot {
       const when = r.fulfillTime ? `${r.fulfillDate} ${r.fulfillTime}` : r.fulfillDate;
       const pay = payment.replace("_", " ");
       const summary = `${describeQuote(r.q)}; ${fulfillment} ${when}${r.q.delivery ? ` (${r.q.delivery.area})` : ""}; pays by ${pay}`;
-      const lines = r.q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty }));
+      const lines = r.q.lines.map((l) => ({ name: l.name, variant: l.variant, size: l.size, qty: l.qty, unitPrice: l.unitPrice }));
       const itemsTotal = r.q.lines.reduce((t, l) => t + l.lineTotal, 0);
       const ship: ShipTo | undefined = fulfillment === "ship" && shipTo ? shipTo : undefined;
       if (this.d.desk) {
@@ -492,7 +495,62 @@ export class Bot {
           summary: `${note}${label ? `. Order: ${label.summary}` : ""}. Screenshots can be faked: only Mark paid on /admin once the money is actually in.`,
         })
         .catch((err) => console.error("[bot] payment alert failed:", err));
+      // CRM: the bot's "paid" on Zelle / Cash App becomes "Paid - needs check" there (only a person confirms).
+      if (label?.crmId && this.d.crm) {
+        await this.d.crm.setStatus(label.crmId, "paid").catch((err) => console.error("[bot] CRM paid status failed:", err));
+      }
       return "Josh was told to check his app. Tell the buyer: got it, Josh will confirm as soon as it shows on his end. Never say the payment is confirmed or received.";
+    };
+    tools.rescheduleOrder = async (date, time) => {
+      const label = this.d.store.latestLabelFor(userId);
+      if (!label) return "This buyer has no locked-in order to move. If they want a new order, go through submit_order.";
+      if (label.fulfillment === "ship") return "Shipped orders go out the day they're paid (before 7pm ET) or the next day; there's no day to move. Tell them that.";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Could not move it: the date must be YYYY-MM-DD. Ask which day.";
+      const now = this.now();
+      const busy = await this.busy();
+      const problem =
+        label.fulfillment === "delivery"
+          ? deliveryProblem(date, time, label.deliveryMinutes ?? 30, busy, now)
+          : pickupProblem(date, time, busy, now);
+      if (problem) return `Could not move it: ${problem}. Offer the closest open times and try again once they pick.`;
+      const area = label.when.match(/\(([^)]+)\)\s*$/)?.[1];
+      const when = [label.fulfillment ?? "pickup", date, time, area && `(${area})`].filter(Boolean).join(" ");
+      const before = label.when;
+      this.d.store.updateLabel(label.id, { when });
+      let crmNote = "";
+      if (label.crmId && this.d.crm) {
+        await this.d.crm.reschedule(label.crmId, date, to24h(time)).catch((err) => {
+          console.error("[bot] CRM reschedule failed:", err);
+          crmNote = " (NOT updated in the CRM: move it there by hand)";
+        });
+      }
+      const username = await this.d.ig.getUsername(userId).catch(() => undefined);
+      await this.d
+        .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, reason: `🔁 Rescheduled: ${when}${crmNote}`, summary: `${label.summary}. Was: ${before}. Move the calendar event too.` })
+        .catch((err) => console.error("[bot] reschedule alert failed:", err));
+      return `Moved to ${when}. Tell the buyer the new day and time in one short text. Don't resend the order summary or payment info.`;
+    };
+    tools.cancelOrder = async (reason) => {
+      const label = this.d.store.latestLabelFor(userId);
+      if (!label) return "This buyer has no locked-in order to cancel. Say no problem and leave the door open.";
+      if (label.label === "PAID" || label.saysPaid) {
+        return "This order is already paid (or they said they sent the money): don't cancel it. All sales are final; call handoff_to_team (josh) with what they want.";
+      }
+      if (this.d.desk?.cancel) await this.d.desk.cancel(label.id);
+      else this.d.store.clearLabel(label.id);
+      this.d.store.clearPendingLink(userId);
+      let crmNote = "";
+      if (label.crmId && this.d.crm) {
+        await this.d.crm.setStatus(label.crmId, "cancelled", reason).catch((err) => {
+          console.error("[bot] CRM cancel failed:", err);
+          crmNote = " (NOT cancelled in the CRM: do it by hand)";
+        });
+      }
+      const username = await this.d.ig.getUsername(userId).catch(() => undefined);
+      await this.d
+        .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, reason: `❌ Cancelled: ${label.summary}${crmNote}`, summary: `${reason}. Was ${label.when}, $${label.total}. Stock went back on BOT STOCK. Delete the calendar event.` })
+        .catch((err) => console.error("[bot] cancel alert failed:", err));
+      return "Cancelled, and the pieces are back in stock. Tell them no problem in one short text and leave the door open. Don't call cancel_follow_up too.";
     };
     if (!this.d.checkout) return tools;
     tools.checkout = async (items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea) => {

@@ -54,6 +54,8 @@ export interface OrderLabel {
   fulfillment?: "pickup" | "delivery" | "ship";
   shipTo?: ShipTo;
   deliveryFee?: number;
+  /** One-way drive minutes for a local delivery (reschedules re-check the delivery window). */
+  deliveryMinutes?: number;
   shipping?: number;
   /** What Josh paid for the items, if the sheet has costs. */
   cost?: number;
@@ -61,6 +63,8 @@ export interface OrderLabel {
   logged?: boolean;
   /** Buyer said they sent the money (Cash App / Zelle). Josh still has to check. */
   saysPaid?: string;
+  /** The matching booking in the Triangle CRM. */
+  crmId?: string;
 }
 
 export interface ShipTo {

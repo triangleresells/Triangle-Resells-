@@ -53,6 +53,11 @@ export interface Config {
   humanReplyDelay: boolean;
   /** Password for the /admin customer list page. Blank = page off. */
   adminKey: string;
+  /** Triangle CRM (crm/ on Netlify). Both blank = off. */
+  crmApiUrl: string;
+  crmBotApiKey: string;
+  /** Who CRM bookings from the bot are assigned to. */
+  crmAssignee: string;
   pricing: PricingConfig;
   port: number;
   agentInstructions: string;
@@ -147,6 +152,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
     stateFile: env.STATE_FILE?.trim() || "",
     adminKey: optional(env.ADMIN_KEY),
+    crmApiUrl: optional(env.CRM_API_URL),
+    crmBotApiKey: optional(env.CRM_BOT_API_KEY),
+    crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",
     humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",
     takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,
     quietNudgeMinutes: env.QUIET_NUDGE_MINUTES?.trim() ? Math.max(0, Number(env.QUIET_NUDGE_MINUTES) || 0) : 90,

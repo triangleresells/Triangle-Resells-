@@ -126,3 +126,19 @@ describe("phase 2: public config for the screens", () => {
     expect(await r.json()).toEqual({ supabaseUrl: "https://x.supabase.co", anonKey: "anon-public" });
   });
 });
+
+describe("Supabase connection", () => {
+  it("sends a new-style secret key only as apikey, and a legacy key as apikey + Bearer", async () => {
+    const { supabaseDb } = await import("../src/api/db.js");
+    const seen: Record<string, string>[] = [];
+    const fake = (async (_u: unknown, init?: RequestInit) => {
+      seen.push(init!.headers as Record<string, string>);
+      return new Response("null", { status: 200 });
+    }) as typeof fetch;
+    await supabaseDb("https://x.supabase.co", "sb_secret_abc", fake).rpc("find_customer", {});
+    await supabaseDb("https://x.supabase.co", "eyJhbGciOiJIUzI1NiJ9.legacy", fake).rpc("find_customer", {});
+    expect(seen[0]).toMatchObject({ apikey: "sb_secret_abc" });
+    expect(seen[0]).not.toHaveProperty("Authorization");
+    expect(seen[1]).toMatchObject({ apikey: "eyJhbGciOiJIUzI1NiJ9.legacy", Authorization: "Bearer eyJhbGciOiJIUzI1NiJ9.legacy" });
+  });
+});

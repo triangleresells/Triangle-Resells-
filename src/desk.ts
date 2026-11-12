@@ -1,6 +1,7 @@
 import { rowMatches, type StockRow } from "./catalog.js";
 import type { Notifier } from "./handoff.js";
 import type { CalendarPoster } from "./orders.js";
+import { crmPayment, to24h, type Crm } from "./crm.js";
 import { STOCK_TAB } from "./sheet.js";
 import type { OrderLabel, ShipTo, Store } from "./store.js";
 
@@ -16,6 +17,8 @@ export interface OrderLine {
   variant?: string;
   size?: string;
   qty: number;
+  /** Per-piece price the buyer pays (from quote_order), for the CRM. */
+  unitPrice?: number;
 }
 
 export interface SheetIO {
@@ -185,6 +188,10 @@ export interface DeskDeps {
   calendar?: CalendarPoster;
   /** Current sheet rows, for costs. */
   stockRows?: () => Promise<StockRow[]>;
+  /** The Triangle CRM: every booked order also becomes a CRM booking (logged there as "Bot"). */
+  crm?: Crm;
+  /** Who the CRM booking is assigned to (default Chema). */
+  crmAssignee?: string;
   now?: () => Date;
 }
 
@@ -245,6 +252,7 @@ export class OrderDesk {
       shipTo: b.shipTo,
       deliveryFee: b.deliveryFee,
       shipping: b.shipping,
+      deliveryMinutes: b.deliveryMinutes,
       cost: await this.costOf(b.lines),
     });
     const who = b.username ? `@${b.username}` : "IG buyer";
@@ -273,6 +281,9 @@ export class OrderDesk {
           }),
       ]);
     }
+    if (this.d.crm) {
+      steps.push(["crm", () => this.sendToCrm(b, label)]);
+    }
     steps.push([
       "alert",
       () =>
@@ -288,6 +299,47 @@ export class OrderDesk {
     ]);
     for (const [name, run] of steps) await run().catch((err) => console.error(`[desk] ${name} failed:`, err));
     return label;
+  }
+
+  /**
+   * The booking in the CRM. If the CRM is down or refuses it, nothing is saved there (it's all-or-nothing) and Josh
+   * gets told to add it by hand; the order itself still stands.
+   */
+  private async sendToCrm(b: Booking, label: OrderLabel): Promise<void> {
+    const rows = this.d.stockRows ? await this.d.stockRows().catch(() => [] as StockRow[]) : [];
+    try {
+      const booking = await this.d.crm!.createBooking({
+        date: b.fulfillDate,
+        time: b.fulfillment === "ship" ? null : to24h(b.fulfillTime),
+        customer: { ig_user_id: b.userId, ig_handle: b.username ?? null, name: b.shipTo?.name ?? null },
+        items: b.lines.map((l) => {
+          const r = rows.find((x) => rowMatches(x, l));
+          return { brand: r?.brand || undefined, item: l.name, color: l.variant, size: l.size || r?.size || "One Size", qty: l.qty, unit_price: l.unitPrice, unit_cost: r?.cost };
+        }),
+        payment_method: crmPayment(b.payment),
+        fulfillment: b.fulfillment,
+        sale_price: b.itemsTotal,
+        delivery_fee: b.fulfillment === "delivery" ? (b.deliveryFee ?? 0) : 0,
+        shipping_fee: b.fulfillment === "ship" ? (b.shipping ?? 0) : 0,
+        location: b.fulfillment === "ship" ? shipToText(b.shipTo) : b.fulfillment === "delivery" ? (b.deliveryArea ?? null) : "Warehouse",
+        assignee: this.d.crmAssignee ?? "Chema",
+        source: "instagram",
+        source_account: this.d.accountName,
+        notes: b.freebies.length ? `Free: ${b.freebies.join(", ")}` : null,
+      });
+      this.d.store.updateLabel(label.id, { crmId: booking.id });
+    } catch (err) {
+      console.error("[desk] CRM booking failed:", err);
+      await this.d.notify({
+        account: this.d.accountName,
+        userId: b.userId,
+        username: b.username,
+        route: "josh",
+        paused: false,
+        reason: "⚠️ Order NOT saved in the CRM: add it by hand",
+        summary: `${b.items}, ${b.fulfillment} ${b.fulfillDate} ${b.fulfillTime ?? ""}, $${b.total} by ${b.payment}. ${String((err as Error).message ?? err).slice(0, 200)}`,
+      }).catch(() => {});
+    }
   }
 
   /** Stripe said it's paid: stock off, PAID label, logged as a sale. (Calendar + alert happen in handlePaidOrder.) */

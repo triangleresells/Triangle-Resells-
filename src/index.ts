@@ -1,4 +1,5 @@
 import { ClaudeAgent } from "./ai.js";
+import { crmClient } from "./crm.js";
 import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
@@ -42,9 +43,14 @@ const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 const notify = webhookNotifier(config.handoffWebhookUrl);
 const calendar = webhookCalendar(config.calendarWebhookUrl);
 // Locked-in orders: stock off BOT STOCK, on the calendar, Josh alerted, sales tracker once paid.
+// Triangle CRM: every locked-in order also becomes a CRM booking; reschedules, cancels and "I paid" go there too.
+const crm = config.crmApiUrl && config.crmBotApiKey ? crmClient(config.crmApiUrl, config.crmBotApiKey) : undefined;
+console.log(`[crm] ${crm ? "connected to " + new URL(config.crmApiUrl).host : "off (CRM_API_URL / CRM_BOT_API_KEY not set)"}`);
 const desk = new OrderDesk({
   store,
   notify,
+  crm,
+  crmAssignee: config.crmAssignee,
   accountName: config.accountName,
   stock: sheets ? new StockKeeper(sheets, () => catalog.refresh()) : undefined,
   sales: sheets ? new SalesLog(sheets, config.trackerSheetId) : undefined,
@@ -52,6 +58,7 @@ const desk = new OrderDesk({
   stockRows: async () => (await catalog.get()).pricing.stock ?? [],
 });
 const bot = new Bot({
+  crm,
   ig: new InstagramClient(config.igAccessToken, config.igApiVersion),
   agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
   store,

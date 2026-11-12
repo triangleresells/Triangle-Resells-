@@ -61,6 +61,13 @@ services:
         value: Ample Storage, 1260 Partin Rd, Raleigh, NC 27610
       - key: CALENDAR_WEBHOOK_URL
         sync: false
+      # Triangle CRM: every locked-in order also becomes a CRM booking. Blank = off.
+      - key: CRM_API_URL
+        sync: false
+      - key: CRM_BOT_API_KEY
+        sync: false
+      - key: CRM_ASSIGNEE
+        value: Chema
       - key: ACCOUNT_NAME
         value: Triangle Resells
       - key: VENDOR_SITE_URL

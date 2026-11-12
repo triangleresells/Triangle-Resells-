@@ -36,6 +36,10 @@ export interface OrderTools {
   >;
   /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
   paymentSent?(method: string, note: string): Promise<string>;
+  /** Move this buyer's locked-in order to another day / time. Returns what to tell the AI. */
+  rescheduleOrder?(date: string, time: string | undefined): Promise<string>;
+  /** Cancel this buyer's locked-in, unpaid order (stock goes back). Returns what to tell the AI. */
+  cancelOrder?(reason: string): Promise<string>;
   /** Stripe payment link. Only when STRIPE_ENABLED=true. */
   checkout?(
     items: OrderItem[],
@@ -173,6 +177,29 @@ export const TOOLS = [
     },
   },
   {
+    name: "reschedule_order",
+    description:
+      "Move the buyer's locked-in order (from submit_order) to another day and time when they ask to. Pickups and deliveries only, and only open times from the PICKUP SCHEDULE. Never for a new order.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        date: { type: "string", description: "New day, YYYY-MM-DD." },
+        time: { type: "string", description: "New time like 3:00 PM." },
+      },
+      required: ["date", "time"],
+    },
+  },
+  {
+    name: "cancel_order",
+    description:
+      "Cancel the buyer's locked-in order when they clearly say they don't want it anymore and haven't paid. The pieces go back in stock. If they already paid (or said they sent it), don't cancel: hand off to josh.",
+    input_schema: {
+      type: "object" as const,
+      properties: { reason: { type: "string", description: "Why, in a few words (their words)." } },
+      required: ["reason"],
+    },
+  },
+  {
     name: "payment_sent",
     description:
       "Call when the buyer says they sent the money or sends a payment screenshot (Cash App or Zelle). It tells Josh to check his app. It does NOT confirm the payment: only Josh confirms.",
@@ -295,7 +322,7 @@ const EFFORT = { effort: "low" } as const;
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
   return TOOLS.filter((t) =>
-    t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : t.name === "payment_sent" ? !!tools?.paymentSent : true,
+    t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : t.name === "payment_sent" ? !!tools?.paymentSent : t.name === "reschedule_order" ? !!tools?.rescheduleOrder : t.name === "cancel_order" ? !!tools?.cancelOrder : true,
   );
 }
 
@@ -392,6 +419,10 @@ export class ClaudeAgent implements ReplyEngine {
             content = "Ordering isn't available right now. Hand off to the team.";
           } else if (block.name === "quote_order") {
             content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
+          } else if (block.name === "reschedule_order" && tools.rescheduleOrder) {
+            content = await tools.rescheduleOrder(String(input.date ?? ""), input.time ? String(input.time) : undefined);
+          } else if (block.name === "cancel_order" && tools.cancelOrder) {
+            content = await tools.cancelOrder(String(input.reason ?? ""));
           } else if (block.name === "payment_sent" && tools.paymentSent) {
             content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
           } else if (block.name === "submit_order" && tools.submitOrder) {

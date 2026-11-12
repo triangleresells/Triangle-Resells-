@@ -37,9 +37,10 @@ export function supabaseDb(url: string, serviceRoleKey: string, fetchFn: typeof 
       if (!/^[a-z_][a-z0-9_]*$/.test(fn)) throw new DbError(`bad function name`, 400);
       const res = await fetchFn(`${base}/rest/v1/rpc/${fn}`, {
         method: "POST",
+        // New-style secret keys (sb_secret_...) go in `apikey` only; legacy service_role JWTs also as the Bearer token.
         headers: {
           apikey: serviceRoleKey,
-          Authorization: `Bearer ${serviceRoleKey}`,
+          ...(serviceRoleKey.startsWith("sb_") ? {} : { Authorization: `Bearer ${serviceRoleKey}` }),
           "Content-Type": "application/json",
         },
         body: JSON.stringify(args),
