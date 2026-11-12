@@ -101,7 +101,7 @@ export const TOOLS = [
   {
     name: "alert_team",
     description:
-      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after.",
+      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after. It does NOT save the customer to the restock list: call save_interest for that too.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -267,11 +267,11 @@ const MAX_ROUNDS = 5;
 /**
  * Current models think before answering and that thinking counts toward max_tokens. At 500 the thinking used
  * the whole budget, so replies came back empty or cut off mid tool call and the chat got handed to the team.
- * DM length is set by the instructions (and splitMessage), not by this cap. Medium effort (the model's default)
- * followed the rules better than low in the retest, and the reply delay hides the extra second or two.
+ * DM length is set by the instructions (and splitMessage), not by this cap. Low effort keeps the thinking short;
+ * medium (the model's default) did worse in the real-AI retest (32% vs 44%, more invented details).
  */
 const MAX_TOKENS = 4000;
-const EFFORT = { effort: "medium" } as const;
+const EFFORT = { effort: "low" } as const;
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
@@ -335,7 +335,8 @@ export class ClaudeAgent implements ReplyEngine {
           content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
-          content = "Josh alerted. Keep helping: offer the closest item we do have and keep closing.";
+          content =
+            "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
         } else if (block.name === "save_interest") {
           if (input.item) interests.push(String(input.item));
           content = "Saved to the customer list. Keep helping.";
