@@ -124,3 +124,35 @@ describe("phase 5: old sales import", () => {
     expect(top.map((c) => [c.ig_handle ?? c.name, c.total_spent])).toEqual([["old_buyer", 110], ["Marcus", 60]]);
   });
 });
+
+describe("delete all TEST data (after the end-to-end tests)", () => {
+  it("removes every test row and leaves real bookings, customers, stock and history exactly as they were", async () => {
+    await t.seedStock([{ brand: "Essentials", item: "Essentials Hoodie", color: "Black", size: "M", qty: 10, cost: 25 }], false);
+    const josh = await t.login("Josh");
+    // Real data.
+    const real = await t.asUser(josh).rpc<{ id: string }>("create_booking", { p: { date: "2026-11-14", payment_method: "cash", fulfillment: "pickup",
+      customer: { ig_handle: "real_buyer" }, items: [{ item: "Essentials Hoodie", color: "Black", size: "M", qty: 2, unit_price: 60 }] } });
+    await t.asUser(josh).rpc("add_video_ideas", { p_day: "2026-11-14", p_ideas: [{ account: "resells", hook: "Real hook" }] });
+    const realLog = Number((await t.pg.query<{ n: string }>("select count(*) n from activity_log where not is_test")).rows[0].n);
+    // TEST data everywhere.
+    const tb = await t.asUser(josh).rpc<{ id: string }>("create_booking", { p: booking() });
+    await t.asUser(josh).rpc("reschedule_booking", { p_id: tb.id, p_date: "2026-11-15", p_time: "12:00" });
+    await t.asUser(josh).rpc("create_restock", { p: { name: "TEST restock", is_test: true, items: [{ item: "Essentials Hoodie", color: "Black", size: "M", qty_expected: 5 }] } });
+    await t.asUser(josh).rpc("add_video_ideas", { p_day: "2026-11-14", p_ideas: [{ account: "sales", hook: "TEST hook" }], p_is_test: true });
+
+    const r = await t.asService.rpc("delete_test_data", { p_actor: "System" });
+    expect(r).toMatchObject({ bookings: 1, restocks: 1, video_ideas: 1, customers: 1 });
+    for (const table of ["bookings", "booking_items", "customers", "restocks", "video_ideas", "activity_log", "bot_events", "team_notifications", "stock_moves", "stock_items"]) {
+      const left = Number((await t.pg.query<{ n: string }>(`select count(*) n from ${table} where ${table === "booking_items" ? "is_test" : "is_test"}`)).rows[0].n);
+      expect(left, table).toBe(0);
+    }
+    // Real things untouched.
+    expect((await t.pg.query<{ id: string; status: string }>("select id, status from bookings")).rows).toEqual([{ id: real.id, status: "booked" }]);
+    expect(await t.qty("Essentials Hoodie", "Black", "M", false)).toBe(8);
+    expect((await t.pg.query("select * from video_ideas")).rows).toHaveLength(1);
+    expect((await t.pg.query("select * from customers where ig_handle = 'real_buyer'")).rows).toHaveLength(1);
+    expect(Number((await t.pg.query<{ n: string }>("select count(*) n from activity_log where not is_test")).rows[0].n)).toBe(realLog);
+    // Only the bot's server key can run it.
+    await expect(t.asUser(josh).rpc("delete_test_data", {})).rejects.toThrow();
+  });
+});

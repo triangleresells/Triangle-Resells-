@@ -6,7 +6,8 @@
   "description": "Triangle Resells CRM v1: Supabase database + API for the team and the AI DM bot",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "bundle-sql": "tsx scripts/bundle-sql.ts"
   },
   "engines": {
     "node": ">=20"

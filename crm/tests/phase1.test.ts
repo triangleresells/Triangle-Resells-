@@ -142,3 +142,30 @@ describe("Supabase connection", () => {
     expect(seen[1]).toMatchObject({ apikey: "eyJhbGciOiJIUzI1NiJ9.legacy", Authorization: "Bearer eyJhbGciOiJIUzI1NiJ9.legacy" });
   });
 });
+
+describe("one-paste setup (supabase/setup.sql)", () => {
+  it("is up to date with the migrations, and builds the same database from scratch (twice, safely)", async () => {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const { PGlite } = await import("@electric-sql/pglite");
+    const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "supabase");
+    const setup = readFileSync(path.join(root, "setup.sql"), "utf8");
+    for (const f of readdirSync(path.join(root, "migrations")).filter((x) => x.endsWith(".sql"))) {
+      expect(setup, `${f} is missing from setup.sql: run npm run bundle-sql`).toContain(readFileSync(path.join(root, "migrations", f), "utf8").replace(/\r\n/g, "\n").trim());
+    }
+    const pg = new PGlite();
+    await pg.exec(`create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls; create schema auth;
+      create table auth.users (id uuid primary key default gen_random_uuid(), email text unique);
+      create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
+      create function auth.role() returns text language sql stable as $$ select null::text $$;`);
+    await pg.exec(setup);
+    await pg.exec(setup); // pasting it again must not break anything
+    const tables = (await pg.query<{ n: string }>("select count(*) n from information_schema.tables where table_schema = 'public'")).rows[0].n;
+    // team_members, customers, activity_log, bookings, booking_items, bot_events, stock_items, stock_moves, restocks,
+    // restock_items, bot_notes, team_notifications, video_ideas
+    expect(Number(tables)).toBe(13);
+    expect((await pg.query<{ name: string }>("select name from team_members order by name")).rows.map((r) => r.name)).toEqual(["Chema", "Diego", "Josh"]);
+    await pg.close();
+  });
+});
