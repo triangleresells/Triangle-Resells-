@@ -328,3 +328,23 @@ describe("FREEBIES_ENABLED switch", () => {
     expect(loadConfig({ ...base, FREEBIES_ENABLED: "pending" }).pricing.freebiesEnabled).toBe(false);
   });
 });
+
+describe("Google Calendar: move and delete the bot's events", () => {
+  it("reads the event id back from the updated script, and none from the old one", async () => {
+    const { webhookCalendar } = await import("../src/orders.js");
+    const ev = { title: "t", date: "2026-11-14", time: "3:00 PM", durationMinutes: 30, timeZone: "America/New_York", location: "", description: "" };
+    const answer = (body: string) => (async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+    expect(await webhookCalendar("https://script", answer('{"ok":true,"id":"abc123@google.com"}'))(ev)).toBe("abc123@google.com");
+    expect(await webhookCalendar("https://script", answer("ok"))(ev)).toBeUndefined();
+  });
+
+  it("asks the script to move or delete by id, and says false when it can't", async () => {
+    const { calendarEditor } = await import("../src/orders.js");
+    const sent: unknown[] = [];
+    const fake = (ok: boolean) => (async (_u: unknown, init?: RequestInit) => (sent.push(JSON.parse(String(init!.body))), new Response(JSON.stringify(ok ? { ok: true } : { ok: false, error: "event not found" })))) as unknown as typeof fetch;
+    expect(await calendarEditor("https://script", fake(true))!.move("abc", "2026-11-20", "11:00 AM", 30)).toBe(true);
+    expect(await calendarEditor("https://script", fake(false))!.remove("gone")).toBe(false);
+    expect(sent).toEqual([{ action: "move", id: "abc", date: "2026-11-20", time: "11:00 AM", durationMinutes: 30 }, { action: "delete", id: "gone" }]);
+    expect(calendarEditor("")).toBeUndefined();
+  });
+});

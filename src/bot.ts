@@ -13,6 +13,7 @@ import type { OrderDesk } from "./desk.js";
 import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
 import { to24h, type Crm } from "./crm.js";
+import type { CalendarEditor } from "./orders.js";
 
 export interface BotDeps {
   ig: InstagramApi;
@@ -48,6 +49,8 @@ export interface BotDeps {
   desk?: Pick<OrderDesk, "booked" | "stripePaid"> & Partial<Pick<OrderDesk, "cancel">>;
   /** The Triangle CRM (reschedules, cancels and "I paid" go there too). Bookings are created by the desk. */
   crm?: Crm;
+  /** Moves / deletes the Google Calendar events the bot made (reschedule / cancel). */
+  calendarEdit?: CalendarEditor;
   /** What the bot sends buyers to pay. Unset = Josh sends it himself. */
   payInfo?: { zelle?: string; cashApp?: string };
   /** Clock, for tests. */
@@ -524,9 +527,11 @@ export class Bot {
           crmNote = " (NOT updated in the CRM: move it there by hand)";
         });
       }
+      // Google Calendar: move the event the bot made. Older events (made before the calendar script update) have no id.
+      const calMoved = !!(label.calendarId && this.d.calendarEdit && (await this.d.calendarEdit.move(label.calendarId, date, time ?? "", 30)));
       const username = await this.d.ig.getUsername(userId).catch(() => undefined);
       await this.d
-        .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, reason: `🔁 Rescheduled: ${when}${crmNote}`, summary: `${label.summary}. Was: ${before}. Move the calendar event too.` })
+        .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, reason: `🔁 Rescheduled: ${when}${crmNote}`, summary: `${label.summary}. Was: ${before}. ${calMoved ? "Calendar event moved." : "Move the calendar event by hand (the bot couldn't)."}` })
         .catch((err) => console.error("[bot] reschedule alert failed:", err));
       return `Moved to ${when}. Tell the buyer the new day and time in one short text. Don't resend the order summary or payment info.`;
     };
@@ -546,9 +551,11 @@ export class Bot {
           crmNote = " (NOT cancelled in the CRM: do it by hand)";
         });
       }
+      // Deleting the event also frees that time for other buyers.
+      const calDeleted = !!(label.calendarId && this.d.calendarEdit && (await this.d.calendarEdit.remove(label.calendarId)));
       const username = await this.d.ig.getUsername(userId).catch(() => undefined);
       await this.d
-        .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, reason: `❌ Cancelled: ${label.summary}${crmNote}`, summary: `${reason}. Was ${label.when}, $${label.total}. Stock went back on BOT STOCK. Delete the calendar event.` })
+        .notify({ account: this.d.accountName, userId, username, route: "josh", paused: false, reason: `❌ Cancelled: ${label.summary}${crmNote}`, summary: `${reason}. Was ${label.when}, $${label.total}. Stock went back on BOT STOCK. ${calDeleted ? "Calendar event deleted." : "Delete the calendar event by hand (the bot couldn't)."}` })
         .catch((err) => console.error("[bot] cancel alert failed:", err));
       return "Cancelled, and the pieces are back in stock. Tell them no problem in one short text and leave the door open. Don't call cancel_follow_up too.";
     };

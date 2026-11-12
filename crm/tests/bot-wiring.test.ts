@@ -29,7 +29,7 @@ beforeEach(async () => {
 
 type Step = (tools: OrderTools) => Promise<unknown>;
 
-function setup(opts: { crmDown?: boolean } = {}) {
+function setup(opts: { crmDown?: boolean; oldScript?: boolean } = {}) {
   const api = createApi({ db: t.asService, botApiKey: KEY });
   const fetchToCrm = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (opts.crmDown) throw new TypeError("fetch failed");
@@ -39,7 +39,18 @@ function setup(opts: { crmDown?: boolean } = {}) {
   const store = new Store(() => NOW.getTime());
   const alerts: HandoffAlert[] = [];
   const notify = async (a: HandoffAlert) => void alerts.push(a);
-  const desk = new OrderDesk({ store, notify, accountName: "Triangle Resells", crm, crmAssignee: "Chema" });
+  // Google Calendar (the updated script): each event gets an id; moves and deletes are recorded.
+  const cal = { made: [] as { id: string; date: string; time: string }[], moved: [] as unknown[][], deleted: [] as string[] };
+  const calendar = async (e: { date: string; time: string }) => {
+    const id = `evt${cal.made.length + 1}@google.com`;
+    cal.made.push({ id, date: e.date, time: e.time });
+    return opts.oldScript ? undefined : id;
+  };
+  const calendarEdit = {
+    move: async (...a: unknown[]) => (cal.moved.push(a), true),
+    remove: async (id: string) => (cal.deleted.push(id), true),
+  };
+  const desk = new OrderDesk({ store, notify, accountName: "Triangle Resells", crm, crmAssignee: "Chema", calendar });
   const steps: Step[] = [];
   const results: unknown[] = [];
   const agent: ReplyEngine = {
@@ -52,7 +63,7 @@ function setup(opts: { crmDown?: boolean } = {}) {
   const ig: InstagramApi = { sendText: async () => "m", sendPrivateReply: async () => "m", replyToComment: async () => {}, getUsername: async () => "TEST_buyer" };
   const bot = new Bot({
     ig, agent, store, notify, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [],
-    humanPauseHours: 12, pricing: loadPricing(), getBusy: async () => [], now: () => NOW, desk, crm,
+    humanPauseHours: 12, pricing: loadPricing(), getBusy: async () => [], now: () => NOW, desk, crm, calendarEdit,
     payInfo: { zelle: "919-480-7349", cashApp: "$triangleresells" },
   });
   let n = 0;
@@ -61,7 +72,7 @@ function setup(opts: { crmDown?: boolean } = {}) {
     const p: WebhookPayload = { object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: BUYER }, recipient: { id: OWN }, message: { mid: `m${++n}`, text } }] }] };
     return bot.handle(p);
   };
-  return { dm, store, alerts, results };
+  return { dm, store, alerts, results, cal };
 }
 
 const crmBookings = () => t.asService.rpc<Record<string, any>[]>("bookings_between", { p_from: "2026-11-01", p_to: "2026-11-30", p_include_test: true });
@@ -130,5 +141,28 @@ describe("DM bot -> CRM", () => {
     expect(alerts.some((a) => a.reason.includes("NOT saved in the CRM") && a.summary!.includes("CRM unreachable"))).toBe(true);
     expect(await crmBookings()).toEqual([]);
     expect(await crmLog()).toEqual([]);
+  });
+});
+
+describe("DM bot -> Google Calendar", () => {
+  it("moves the calendar event on a reschedule and deletes it on a cancel", async () => {
+    const { dm, store, alerts, cal } = setup();
+    await dm("hats sat 4", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    expect(cal.made).toEqual([{ id: "evt1@google.com", date: "2026-11-14", time: "4:00 PM" }]);
+    expect(store.latestLabelFor(BUYER)!.calendarId).toBe("evt1@google.com");
+    await dm("friday 11 instead", (tl) => tl.rescheduleOrder!("2026-11-20", "11:00 AM"));
+    expect(cal.moved).toEqual([["evt1@google.com", "2026-11-20", "11:00 AM", 30]]);
+    expect(alerts.find((a) => a.reason.startsWith("🔁"))!.summary).toContain("Calendar event moved.");
+    await dm("nvm cancel", (tl) => tl.cancelOrder!("TEST"));
+    expect(cal.deleted).toEqual(["evt1@google.com"]);
+    expect(alerts.find((a) => a.reason.startsWith("❌"))!.summary).toContain("Calendar event deleted.");
+  });
+
+  it("events from the old script (no id) are left alone and Josh is told to move them by hand", async () => {
+    const { dm, alerts, cal } = setup({ oldScript: true });
+    await dm("hats sat 4", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    await dm("friday 11 instead", (tl) => tl.rescheduleOrder!("2026-11-20", "11:00 AM"));
+    expect(cal.moved).toEqual([]);
+    expect(alerts.find((a) => a.reason.startsWith("🔁"))!.summary).toContain("Move the calendar event by hand");
   });
 });

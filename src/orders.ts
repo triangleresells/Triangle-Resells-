@@ -13,7 +13,14 @@ export interface CalendarEvent {
   description: string;
 }
 
-export type CalendarPoster = (event: CalendarEvent) => Promise<void>;
+/** Creates the event; returns its id when the calendar script sends one back (needed to move or delete it later). */
+export type CalendarPoster = (event: CalendarEvent) => Promise<string | void>;
+
+/** Moves (reschedule) or deletes (cancel) an event the bot created. Both return false if it didn't work. */
+export interface CalendarEditor {
+  move(id: string, date: string, time: string, durationMinutes: number): Promise<boolean>;
+  remove(id: string): Promise<boolean>;
+}
 
 export function calendarEventFor(o: PaidOrder, warehouseAddress: string): CalendarEvent {
   const who = o.buyerName || "IG buyer";
@@ -61,7 +68,37 @@ export function webhookCalendar(url: string, fetchFn: typeof fetch = fetch): Cal
       body: JSON.stringify(event),
       redirect: "follow",
     });
-    if (!res.ok) console.error(`[calendar] webhook failed: HTTP ${res.status}`);
+    if (!res.ok) {
+      console.error(`[calendar] webhook failed: HTTP ${res.status}`);
+      return;
+    }
+    // The updated script answers {ok, id}; the old one answers "ok" (no id: the event can't be moved later).
+    const body = await res.text();
+    try {
+      const id = JSON.parse(body)?.id;
+      return typeof id === "string" && id ? id : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+export function calendarEditor(url: string, fetchFn: typeof fetch = fetch): CalendarEditor | undefined {
+  if (!url) return undefined;
+  const post = async (body: Record<string, unknown>): Promise<boolean> => {
+    try {
+      const res = await fetchFn(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), redirect: "follow" });
+      const r = JSON.parse(await res.text());
+      if (!r?.ok) console.error(`[calendar] ${body.action} failed: ${r?.error ?? "no ok"}`);
+      return !!r?.ok;
+    } catch (err) {
+      console.error(`[calendar] ${body.action} failed:`, err);
+      return false;
+    }
+  };
+  return {
+    move: (id, date, time, durationMinutes) => post({ action: "move", id, date, time, durationMinutes }),
+    remove: (id) => post({ action: "delete", id }),
   };
 }
 
@@ -100,7 +137,7 @@ function formatDate(iso: string): string {
 export async function handlePaidOrder(o: PaidOrder, d: OrderHandlerDeps): Promise<void> {
   const steps: [string, () => Promise<void>][] = [
     ["dm", () => d.sendDm(o.igUserId, confirmationText(o, d.warehouseAddress))],
-    ["calendar", () => d.calendar(calendarEventFor(o, d.warehouseAddress))],
+    ["calendar", async () => void (await d.calendar(calendarEventFor(o, d.warehouseAddress)))],
     [
       "team alert",
       () =>

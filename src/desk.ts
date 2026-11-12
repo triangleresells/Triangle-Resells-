@@ -261,8 +261,8 @@ export class OrderDesk {
       const kind = b.fulfillment === "pickup" ? "🔺 PICKUP" : b.fulfillment === "delivery" ? `🚗 DELIVERY ${b.deliveryMinutes ?? "?"}min ${b.deliveryArea ?? ""}`.trim() : "📦 SHIP";
       steps.push([
         "calendar",
-        () =>
-          this.d.calendar!({
+        async () => {
+          const id = await this.d.calendar!({
             title: `🟡 BOOKED ${kind}: ${who} – $${b.total} (${b.payment})`,
             date: b.fulfillDate,
             time: b.fulfillment === "ship" ? "" : (b.fulfillTime ?? ""),
@@ -278,7 +278,10 @@ export class OrderDesk {
             ]
               .filter(Boolean)
               .join("\n"),
-          }),
+          });
+          // Kept so a reschedule can move this event and a cancel can delete it.
+          if (id) this.d.store.updateLabel(label.id, { calendarId: id });
+        },
       ]);
     }
     if (this.d.crm) {

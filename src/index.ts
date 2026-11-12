@@ -8,7 +8,7 @@ import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
 import { webhookNotifier } from "./handoff.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
-import { handlePaidOrder, webhookCalendar } from "./orders.js";
+import { handlePaidOrder, calendarEditor, webhookCalendar } from "./orders.js";
 import { FileSaver } from "./persist.js";
 import { BusyCalendar } from "./schedule.js";
 import { Store } from "./store.js";
@@ -59,6 +59,7 @@ const desk = new OrderDesk({
 });
 const bot = new Bot({
   crm,
+  calendarEdit: calendarEditor(config.calendarWebhookUrl),
   ig: new InstagramClient(config.igAccessToken, config.igApiVersion),
   agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
   store,
