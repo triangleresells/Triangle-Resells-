@@ -17,7 +17,7 @@ import { Bot } from "../src/bot.js";
 import { formatCatalog } from "../src/catalog.js";
 import { loadConfig } from "../src/config.js";
 import type { InstagramApi } from "../src/instagram.js";
-import type { BusyBlock } from "../src/schedule.js";
+import { scheduleText, type BusyBlock } from "../src/schedule.js";
 import { Store } from "../src/store.js";
 
 // $ per million tokens (input, output). Cache reads 0.1x input, cache writes 1.25x input.
@@ -238,7 +238,7 @@ async function main() {
       messages: [
         {
           role: "user",
-          content: `RULES:\n${config.agentInstructions}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
+          content: `RULES:\n${config.agentInstructions}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\nPICKUP SCHEDULE THE BOT SAW (pickup hours and open times may come from here):\n${scheduleText(busy, new Date(clock.t))}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message. alert_team also saves what the buyer asked for to the customer list (same as save_interest), so after an alert_team call it is TRUE that they're saved / on the list.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
         },
       ],
     } as Anthropic.MessageCreateParamsNonStreaming);
