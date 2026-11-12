@@ -15,6 +15,8 @@ export interface ApiDeps {
   log?: (line: string) => void;
 }
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
@@ -62,6 +64,41 @@ export function createApi(deps: ApiDeps) {
       if (req.method === "POST" && path === "/customers") {
         const c = await deps.db.rpc("upsert_customer", { p: await body(req), p_actor: actor });
         return json(200, { customer: c });
+      }
+
+      // Bookings: the bot books, edits, reschedules, changes status and cancels, all logged as "Bot".
+      if (path === "/bookings" && req.method === "POST") {
+        return json(200, { booking: await deps.db.rpc("create_booking", { p: await body(req), p_actor: actor }) });
+      }
+      if (path === "/bookings" && req.method === "GET") {
+        const from = url.searchParams.get("from");
+        const to = url.searchParams.get("to") ?? from;
+        if (!from || !DATE.test(from) || !to || !DATE.test(to)) return json(400, { error: "from and to must be dates like 2026-11-20" });
+        const rows = await deps.db.rpc("bookings_between", { p_from: from, p_to: to, p_include_test: url.searchParams.get("include_test") === "true" });
+        return json(200, { bookings: rows });
+      }
+      const one = path.match(/^\/bookings\/([0-9a-f-]{36})(?:\/(reschedule|status|cancel))?$/);
+      if (one) {
+        const [, id, verb] = one;
+        if (!verb && req.method === "GET") return json(200, { booking: await deps.db.rpc("get_booking", { p_id: id }) });
+        if (!verb && req.method === "PATCH") {
+          return json(200, { booking: await deps.db.rpc("update_booking", { p_id: id, p: await body(req), p_actor: actor }) });
+        }
+        if (req.method === "POST" && verb) {
+          const b = await body(req);
+          if (verb === "reschedule") {
+            if (typeof b.date !== "string" || !DATE.test(b.date)) return json(400, { error: "date must look like 2026-11-20" });
+            const time = typeof b.time === "string" ? b.time : null;
+            return json(200, { booking: await deps.db.rpc("reschedule_booking", { p_id: id, p_date: b.date, p_time: time, p_actor: actor }) });
+          }
+          if (verb === "status") {
+            if (typeof b.status !== "string") return json(400, { error: "status is required" });
+            const reason = typeof b.reason === "string" ? b.reason : null;
+            return json(200, { booking: await deps.db.rpc("set_booking_status", { p_id: id, p_status: b.status, p_reason: reason, p_actor: actor }) });
+          }
+          const reason = typeof b.reason === "string" ? b.reason : null;
+          return json(200, { booking: await deps.db.rpc("cancel_booking", { p_id: id, p_reason: reason, p_actor: actor }) });
+        }
       }
 
       // Activity log: review and undo anything.
