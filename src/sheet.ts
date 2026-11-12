@@ -1,5 +1,5 @@
 import { createSign } from "node:crypto";
-import { formatCatalog, parsePricesCsv, parseStockCsv, type Table } from "./catalog.js";
+import { applyFreebieSwitch, formatCatalog, parsePricesCsv, parseStockCsv, type Table } from "./catalog.js";
 import type { PricingConfig } from "./pricing.js";
 
 /**
@@ -116,7 +116,7 @@ export interface Catalog {
 }
 
 export function catalogFrom(base: PricingConfig, stockCsv: Table, pricesCsv: Table, source: Catalog["source"]): Catalog {
-  const stock = parseStockCsv(stockCsv);
+  const stock = applyFreebieSwitch(parseStockCsv(stockCsv), base.freebiesEnabled);
   const parsed = parsePricesCsv(pricesCsv);
   const tables = Object.keys(parsed).length ? parsed : base.tables;
   const pricing: PricingConfig = { ...base, tables, stock };

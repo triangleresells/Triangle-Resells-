@@ -9,6 +9,8 @@ export interface PricingConfig {
   stock?: StockRow[];
   shipping: { flat: number; buyerLabelAtPieces: number };
   delivery?: DeliveryConfig;
+  /** FREEBIES_ENABLED=true. Off: FREEBIE rows on the sheet are ignored everywhere (no gifts quoted or pitched). */
+  freebiesEnabled?: boolean;
 }
 
 export interface DeliveryConfig {

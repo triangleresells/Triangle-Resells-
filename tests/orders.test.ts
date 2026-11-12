@@ -301,3 +301,30 @@ describe("screenshots", () => {
     expect(await downloadImage("https://x", fake)).toBeUndefined();
   });
 });
+
+describe("FREEBIES_ENABLED switch", () => {
+  // The live sheet as it was: Baccarat and G-Shock still marked FREEBIE.
+  const oldSheet = [
+    ["Category", "Brand", "Item", "Color", "Size", "Qty", "Price List", "Status", "Notes"],
+    ["Hat", "Chrome Hearts", "Chrome Hearts Hat", "Black", "", "10", "CHROME HEARTS HATS", "FOR SALE", ""],
+    ["Fragrance", "Baccarat", "Baccarat Rouge (B tier)", "", "", "9", "", "FREEBIE", "1 free with EVERY order"],
+    ["Watch", "Casio", "G-Shock", "Black", "", "1", "", "FREEBIE", "Free with any 5+ piece order"],
+  ];
+
+  it("ignores FREEBIE rows on the live sheet unless FREEBIES_ENABLED=true", async () => {
+    const { catalogFrom } = await import("../src/sheet.js");
+    const off = catalogFrom({ ...pricing, freebiesEnabled: false }, oldSheet, [], "sheet");
+    expect(off.text).not.toMatch(/Baccarat|G-Shock/);
+    expect(quoteOrder(off.pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup").freebies).toEqual([]);
+    const on = catalogFrom({ ...pricing, freebiesEnabled: true }, oldSheet, [], "sheet");
+    expect(quoteOrder(on.pricing, [{ product: "Chrome Hearts Hat", variant: "Black", qty: 5 }], "pickup").freebies).toHaveLength(2);
+  });
+
+  it("is off unless FREEBIES_ENABLED is exactly true", async () => {
+    const { loadConfig } = await import("../src/config.js");
+    const base = { IG_APP_SECRET: "x", IG_ACCESS_TOKEN: "x", IG_VERIFY_TOKEN: "x", ANTHROPIC_API_KEY: "x" };
+    expect(loadConfig(base).pricing.freebiesEnabled).toBe(false);
+    expect(loadConfig({ ...base, FREEBIES_ENABLED: "TRUE" }).pricing.freebiesEnabled).toBe(true);
+    expect(loadConfig({ ...base, FREEBIES_ENABLED: "pending" }).pricing.freebiesEnabled).toBe(false);
+  });
+});

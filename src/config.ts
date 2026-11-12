@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { parseStockCsv } from "./catalog.js";
+import { applyFreebieSwitch, parseStockCsv } from "./catalog.js";
 import type { PricingConfig } from "./pricing.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,6 +59,11 @@ export interface Config {
   knowledgeBase: string;
   keywords: KeywordRule[];
   publicCommentReplies: string[];
+}
+
+/** Free gifts only when FREEBIES_ENABLED=true; otherwise FREEBIE rows are dropped from the snapshot (the live sheet too, in catalogFrom). */
+function withFreebieSwitch(p: PricingConfig, enabled: boolean): PricingConfig {
+  return { ...p, freebiesEnabled: enabled, stock: applyFreebieSwitch(p.stock ?? [], enabled) };
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -146,7 +151,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,
     quietNudgeMinutes: env.QUIET_NUDGE_MINUTES?.trim() ? Math.max(0, Number(env.QUIET_NUDGE_MINUTES) || 0) : 90,
     botEnabled: /^(true|on|yes|1)$/i.test(env.BOT_ENABLED?.trim() ?? ""),
-    pricing: loadPricing(),
+    pricing: withFreebieSwitch(loadPricing(), env.FREEBIES_ENABLED?.trim().toLowerCase() === "true"),
     port: Number(env.PORT) || 3000,
     agentInstructions: fill(readConfigFile("agent-instructions.md")),
     knowledgeBase: fill(readConfigFile("knowledge-base.md")),

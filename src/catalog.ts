@@ -121,6 +121,11 @@ export function findTable(tables: Record<string, Record<string, number>>, list: 
   return key ? tables[key] : undefined;
 }
 
+/** FREEBIES_ENABLED off: drop FREEBIE rows, so no quote, stock list or nudge offers a gift (whatever the sheet says). */
+export function applyFreebieSwitch(rows: StockRow[], enabled: boolean | undefined): StockRow[] {
+  return enabled ? rows : rows.filter((r) => r.status !== "freebie");
+}
+
 /** Freebies come from rows marked FREEBIE. A note like "5+ piece order" sets the minimum; otherwise every order. */
 export function freebiesOf(rows: StockRow[]): Freebie[] {
   return rows

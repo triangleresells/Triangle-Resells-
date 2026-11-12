@@ -76,6 +76,9 @@ services:
       # While Josh has a chat, a buyer message with no reply from him for this many minutes brings the bot back. 0 = never.
       - key: TAKEOVER_MINUTES
         value: "5"
+      # Free gifts from FREEBIE rows on BOT STOCK. false = ignored, whatever the sheet says (Baccarat/G-Shock deals are over).
+      - key: FREEBIES_ENABLED
+        value: "false"
       # Wait ~42-58s before answering a cold DM (8-18s mid-conversation) so it doesn't answer like a bot.
       - key: HUMAN_REPLY_DELAY
         value: "true"
