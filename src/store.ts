@@ -336,6 +336,15 @@ export class Store {
     return ids.length;
   }
 
+  /** The bot is back on in this chat. */
+  unpause(userId: string): void {
+    const c = this.convos.get(userId);
+    if (c && c.pausedUntil) {
+      c.pausedUntil = 0;
+      this.changed();
+    }
+  }
+
   isPaused(userId: string): boolean {
     return (this.convos.get(userId)?.pausedUntil ?? 0) > this.now();
   }

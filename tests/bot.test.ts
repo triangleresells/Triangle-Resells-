@@ -739,3 +739,56 @@ describe("repeat alerts", () => {
     ]);
   });
 });
+
+describe("bot takes the chat back when Josh goes quiet", () => {
+  function chat(takeoverMinutes?: number) {
+    const clock = { t: new Date("2026-11-12T18:00:00Z").getTime() };
+    const sent: string[] = [];
+    const ig: InstagramApi = { sendText: vi.fn(async (_to, t) => (sent.push(t), `mid-${sent.length}`)), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer123") };
+    let n = 0;
+    const agent: ReplyEngine = { reply: vi.fn(async () => ({ text: `bot reply ${++n}` })) };
+    const store = new Store(() => clock.t);
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 12, now: () => new Date(clock.t), takeoverMinutes });
+    const wait = (min: number) => (clock.t += min * 60_000);
+    return { bot, store, sent, wait };
+  }
+
+  it("DM, bot answers, Josh jumps in, buyer answers, Josh is quiet 5 min: the bot answers", async () => {
+    const { bot, store, sent, wait } = chat();
+    await bot.handle(dm("weird question", "t1"));
+    expect(sent).toEqual(["bot reply 1"]);
+    await bot.handle(echo("yo it's Josh, I got you", "t2"));
+    expect(store.isPaused(USER)).toBe(true);
+    wait(1);
+    await bot.handle(dm("ok cool, so what about the hoodie", "t3"));
+    expect(sent).toHaveLength(1); // Josh has the chat
+    wait(4);
+    expect(await bot.takeOverStalled()).toBe(0); // only 4 minutes
+    wait(1);
+    expect(await bot.takeOverStalled()).toBe(1);
+    expect(sent.at(-1)).toBe("bot reply 2");
+    expect(store.isPaused(USER)).toBe(false);
+    await bot.handle(dm("bet", "t4"));
+    expect(sent.at(-1)).toBe("bot reply 3"); // back to normal
+  });
+
+  it("stays out when Josh answers within 5 minutes", async () => {
+    const { bot, sent, wait } = chat();
+    await bot.handle(echo("Josh here", "u1"));
+    await bot.handle(dm("question for josh", "u2"));
+    wait(3);
+    await bot.handle(echo("answered it", "u3"));
+    wait(10);
+    expect(await bot.takeOverStalled()).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("TAKEOVER_MINUTES=0 never takes over", async () => {
+    const { bot, sent, wait } = chat(0);
+    await bot.handle(echo("Josh here", "v1"));
+    await bot.handle(dm("hello?", "v2"));
+    wait(60);
+    expect(await bot.takeOverStalled()).toBe(0);
+    expect(sent).toHaveLength(0);
+  });
+});

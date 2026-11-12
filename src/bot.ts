@@ -35,6 +35,8 @@ export interface BotDeps {
   getCatalog?: () => Promise<{ pricing: PricingConfig; text: string }>;
   /** A buyer who got a quote and then went quiet gets ONE nudge after this many minutes (default 90). 0 = off. */
   quietNudgeMinutes?: number;
+  /** Josh has the chat but a buyer's message sits unanswered this long: the bot steps back in. 0 = never. Default 5. */
+  takeoverMinutes?: number;
   /** Stripe. Without it the bot quotes but hands off to the team to take payment. */
   checkout?: CheckoutApi;
   /** Downloads a DM picture so the AI can see it. Defaults to a plain fetch. */
@@ -531,6 +533,30 @@ export class Bot {
 
   private async busy(): Promise<BusyBlock[]> {
     return this.d.getBusy ? this.d.getBusy().catch(() => []) : [];
+  }
+
+  /**
+   * Josh has a chat (he typed in the inbox, or the bot handed off), but the buyer's latest message has gone
+   * unanswered for takeoverMinutes: the bot takes the chat back and answers. If Josh replies first, his message is the
+   * last one and the bot stays out. Call this every 30 seconds.
+   */
+  async takeOverStalled(): Promise<number> {
+    if (!this.isOn()) return 0;
+    const minutes = this.d.takeoverMinutes ?? 5;
+    if (minutes <= 0) return 0;
+    const now = this.now().getTime();
+    let taken = 0;
+    for (const userId of this.d.store.pausedChats()) {
+      const last = this.d.store.history(userId).at(-1);
+      if (last?.role !== "user") continue;
+      const at = this.d.store.customer(userId).lastMessageAt;
+      if (!at || now - at < minutes * 60_000) continue;
+      this.d.store.unpause(userId);
+      console.log(`[bot] no reply from the team in ${minutes} min: bot is back in the chat with ${userId}`);
+      await this.inOrder(userId, () => this.replyTo(userId, last.text)).catch((err) => console.error("[bot] takeover reply failed:", err));
+      taken++;
+    }
+    return taken;
   }
 
   /**

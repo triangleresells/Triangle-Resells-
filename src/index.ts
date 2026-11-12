@@ -70,12 +70,15 @@ const bot = new Bot({
   getBusy: () => busyCalendar.get(),
   enabled: () => config.botEnabled,
   quietNudgeMinutes: config.quietNudgeMinutes,
+  takeoverMinutes: config.takeoverMinutes,
   desk,
   payInfo: { zelle: config.payZelle, cashApp: config.payCashApp },
 });
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 // One follow-up DM when a payment link expires unpaid.
+// Josh went quiet on a chat he had: after TAKEOVER_MINUTES the bot answers the waiting buyer.
+setInterval(() => void bot.takeOverStalled().catch((err) => console.error("[bot] takeover failed:", err)), 30 * 1000).unref();
 setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();
 
 createServer(bot, {
