@@ -39,10 +39,38 @@ export interface CrmBooking {
   status: string;
 }
 
+/** A booking as the CRM returns it in full (customer and items included). */
+export interface CrmBookingFull extends CrmBooking {
+  payment_method: string;
+  fulfillment: "pickup" | "delivery" | "ship";
+  sale_price: number;
+  delivery_fee: number;
+  shipping_fee: number;
+  location: string | null;
+  assignee: string | null;
+  is_test: boolean;
+  customer: { id: string; ig_user_id: string | null; ig_handle: string | null; name: string | null } | null;
+  items: { brand: string | null; item: string; color: string | null; size: string; qty: number; unit_price: number | null }[];
+}
+
+/** One change a person made in the CRM (the bot's own changes never show up here). */
+export interface CrmEvent {
+  id: number;
+  kind: "created" | "updated" | "deleted";
+  actor: string;
+  booking: CrmBookingFull;
+  previous: { date: string; time: string | null; status: string } | null;
+  is_test: boolean;
+}
+
 export interface Crm {
   createBooking(b: CrmBookingInput): Promise<CrmBooking>;
   reschedule(id: string, date: string, time?: string | null): Promise<CrmBooking>;
   setStatus(id: string, status: "paid" | "done" | "cancelled" | "no_show", reason?: string): Promise<CrmBooking>;
+  /** Changes people made after event `after` (null = none yet, just where to start). */
+  events(after: number | null): Promise<{ events: CrmEvent[]; latest: number }>;
+  /** This Instagram buyer's bookings that aren't finished. */
+  openBookings(igUserId: string): Promise<CrmBookingFull[]>;
 }
 
 export class CrmError extends Error {}
@@ -75,6 +103,8 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     createBooking: async (b) => (await call<{ booking: CrmBooking }>("POST", "/bookings", b)).booking,
     reschedule: async (id, date, time) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/reschedule`, { date, time: time ?? null })).booking,
     setStatus: async (id, status, reason) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/status`, { status, reason: reason ?? null })).booking,
+    events: (after) => call("GET", `/events${after === null ? "" : `?after=${after}`}`),
+    openBookings: async (ig) => (await call<{ bookings: CrmBookingFull[] }>("GET", `/customers/bookings?ig_user_id=${encodeURIComponent(ig)}`)).bookings,
   };
 }
 

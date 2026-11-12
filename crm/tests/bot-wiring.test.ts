@@ -7,6 +7,7 @@ import type { OrderTools, ReplyEngine } from "../../src/ai.js";
 import { Bot, type WebhookPayload } from "../../src/bot.js";
 import { loadPricing } from "../../src/config.js";
 import { crmClient } from "../../src/crm.js";
+import { CrmSync } from "../../src/crmsync.js";
 import { OrderDesk } from "../../src/desk.js";
 import type { HandoffAlert } from "../../src/handoff.js";
 import type { InstagramApi } from "../../src/instagram.js";
@@ -53,8 +54,10 @@ function setup(opts: { crmDown?: boolean; oldScript?: boolean } = {}) {
   const desk = new OrderDesk({ store, notify, accountName: "Triangle Resells", crm, crmAssignee: "Chema", calendar });
   const steps: Step[] = [];
   const results: unknown[] = [];
+  const contexts: string[] = [];
   const agent: ReplyEngine = {
-    reply: async (_h, _i, tools) => {
+    reply: async (_h, _i, tools, schedule) => {
+      contexts.push(schedule ?? "");
       const step = steps.shift();
       if (step) results.push(await step(tools!));
       return { text: "ok" };
@@ -72,7 +75,8 @@ function setup(opts: { crmDown?: boolean; oldScript?: boolean } = {}) {
     const p: WebhookPayload = { object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: BUYER }, recipient: { id: OWN }, message: { mid: `m${++n}`, text } }] }] };
     return bot.handle(p);
   };
-  return { dm, store, alerts, results, cal };
+  const sync = new CrmSync({ crm, store, desk, calendarEdit, includeTest: true });
+  return { dm, store, alerts, results, cal, sync, contexts };
 }
 
 const crmBookings = () => t.asService.rpc<Record<string, any>[]>("bookings_between", { p_from: "2026-11-01", p_to: "2026-11-30", p_include_test: true });
@@ -164,5 +168,81 @@ describe("DM bot -> Google Calendar", () => {
     await dm("friday 11 instead", (tl) => tl.rescheduleOrder!("2026-11-20", "11:00 AM"));
     expect(cal.moved).toEqual([]);
     expect(alerts.find((a) => a.reason.startsWith("🔁"))!.summary).toContain("Move the calendar event by hand");
+  });
+});
+
+describe("CRM -> bot (the loop back)", () => {
+  const bookingId = async () => (await crmBookings())[0].id as string;
+
+  it("starts from now on the first sync, and the bot's own changes never come back to it", async () => {
+    const { dm, sync, store } = setup();
+    await dm("hats", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    expect(await sync.tick()).toBe(0); // first run: sets the starting point
+    await dm("move to fri 11", (tl) => tl.rescheduleOrder!("2026-11-20", "11:00 AM"));
+    expect(await sync.tick()).toBe(0); // the bot's own reschedule isn't echoed back
+    expect(store.crmCursor()).toBe(0);
+  });
+
+  it("a team member reschedules in the CRM -> the bot's order and calendar event move", async () => {
+    const { dm, sync, store, cal } = setup();
+    await sync.tick();
+    await dm("hats", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    const chema = await t.login("Chema");
+    await t.asUser(chema).rpc("reschedule_booking", { p_id: await bookingId(), p_date: "2026-11-21", p_time: "13:30" });
+    expect(await sync.tick()).toBe(1);
+    expect(store.latestLabelFor(BUYER)!.when).toBe("pickup 2026-11-21 1:30 PM");
+    expect(cal.moved).toEqual([["evt1@google.com", "2026-11-21", "1:30 PM", 30]]);
+  });
+
+  it("a team member cancels in the CRM -> the bot closes the order and deletes the calendar event", async () => {
+    const { dm, sync, store, cal } = setup();
+    await sync.tick();
+    await dm("hats", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    const josh = await t.login("Josh");
+    await t.asUser(josh).rpc("cancel_booking", { p_id: await bookingId(), p_reason: "TEST buyer called" });
+    await sync.tick();
+    expect(store.latestLabelFor(BUYER)).toBeUndefined();
+    expect(cal.deleted).toEqual(["evt1@google.com"]);
+  });
+
+  it("a team member confirms Paid, then Done -> the bot's order follows", async () => {
+    const { dm, sync, store } = setup();
+    await sync.tick();
+    await dm("hats", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "zelle"));
+    const josh = await t.login("Josh");
+    await t.asUser(josh).rpc("set_booking_status", { p_id: await bookingId(), p_status: "paid" });
+    await sync.tick();
+    expect(store.latestLabelFor(BUYER)!.label).toBe("PAID");
+    await t.asUser(josh).rpc("set_booking_status", { p_id: await bookingId(), p_status: "done" });
+    await sync.tick();
+    expect(store.latestLabelFor(BUYER)).toBeUndefined();
+  });
+
+  it("a team member adds a booking for an IG buyer -> the bot takes it on, and the buyer can reschedule it in the DMs", async () => {
+    const { dm, sync, store, cal, results } = setup();
+    await sync.tick();
+    const diego = await t.login("Diego");
+    await t.asUser(diego).rpc("create_booking", { p: {
+      date: "2026-11-15", time: "15:00", payment_method: "cash", fulfillment: "pickup", source: "text", is_test: true,
+      customer: { ig_user_id: BUYER, ig_handle: "TEST_buyer" }, items: [{ item: "Chrome Hearts Hat", color: "Black", size: "One Size", qty: 1, unit_price: 35 }],
+    } });
+    await sync.tick();
+    const label = store.latestLabelFor(BUYER)!;
+    expect(label).toMatchObject({ label: "BOOKED", when: "pickup 2026-11-15 3:00 PM", summary: "1x Chrome Hearts Hat Black", total: 35, calendarId: "evt1@google.com" });
+    expect(cal.made[0]).toMatchObject({ date: "2026-11-15", time: "3:00 PM" });
+    await dm("can i do 5 instead", (tl) => tl.rescheduleOrder!("2026-11-15", "5:00 PM"));
+    expect(results.at(-1)).toMatch(/^Moved to pickup 2026-11-15 5:00 PM/);
+    expect((await crmBookings())[0]).toMatchObject({ time: "17:00:00" });
+  });
+
+  it("the AI sees the buyer's current CRM bookings before it answers", async () => {
+    const { dm, sync, contexts } = setup();
+    await sync.tick();
+    await dm("hats", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    const chema = await t.login("Chema");
+    await t.asUser(chema).rpc("reschedule_booking", { p_id: await bookingId(), p_date: "2026-11-21", p_time: "13:30" });
+    await dm("wait when is my pickup again", async () => null);
+    expect(contexts.at(-1)).toContain("THIS BUYER'S BOOKINGS IN THE CRM");
+    expect(contexts.at(-1)).toContain("Sat, Nov 21 1:30 PM, pickup, 2x Chrome Hearts Hat Black");
   });
 });

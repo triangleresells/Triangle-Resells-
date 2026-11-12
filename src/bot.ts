@@ -13,6 +13,7 @@ import type { OrderDesk } from "./desk.js";
 import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
 import { to24h, type Crm } from "./crm.js";
+import { crmContextText } from "./crmsync.js";
 import type { CalendarEditor } from "./orders.js";
 
 export interface BotDeps {
@@ -282,8 +283,8 @@ export class Bot {
 
     // "typing..." while the AI writes, like a person. Best effort.
     void this.d.ig.typingOn?.(userId).catch(() => {});
-    const [catalog, busy] = await Promise.all([this.catalog(), this.busy()]);
-    const schedule = scheduleText(busy, this.now());
+    const [catalog, busy, crmNote] = await Promise.all([this.catalog(), this.busy(), this.crmContext(userId)]);
+    const schedule = scheduleText(busy, this.now()) + crmNote;
     const started = Date.now();
     const result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
     console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
@@ -594,6 +595,17 @@ export class Bot {
 
   private now(): Date {
     return this.d.now?.() ?? new Date();
+  }
+
+  /** The buyer's open CRM bookings for the AI (the CRM wins over the chat). Gives up after 3s: a slow CRM never holds a reply. */
+  private async crmContext(userId: string): Promise<string> {
+    if (!this.d.crm) return "";
+    const timeout = new Promise<string>((r) => setTimeout(() => r(""), 3000).unref?.());
+    const lookup = this.d.crm.openBookings(userId).then(crmContextText).catch((err) => {
+      console.error("[bot] CRM lookup failed:", (err as Error).message ?? err);
+      return "";
+    });
+    return Promise.race([lookup, timeout]);
   }
 
   private async busy(): Promise<BusyBlock[]> {

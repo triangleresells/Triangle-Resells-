@@ -1,5 +1,6 @@
 import { ClaudeAgent } from "./ai.js";
 import { crmClient } from "./crm.js";
+import { CrmSync } from "./crmsync.js";
 import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
@@ -85,6 +86,11 @@ const bot = new Bot({
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 // One follow-up DM when a payment link expires unpaid.
+// CRM -> bot: changes the team makes in the CRM (reschedule, cancel, paid, done, new bookings) flow back every 15s.
+if (crm) {
+  const sync = new CrmSync({ crm, store, desk, calendarEdit: calendarEditor(config.calendarWebhookUrl) });
+  setInterval(() => void sync.tick(), 15 * 1000).unref();
+}
 // Josh went quiet on a chat he had: after TAKEOVER_MINUTES the bot answers the waiting buyer.
 setInterval(() => void bot.takeOverStalled().catch((err) => console.error("[bot] takeover failed:", err)), 30 * 1000).unref();
 setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();

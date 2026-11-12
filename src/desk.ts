@@ -345,6 +345,74 @@ export class OrderDesk {
     }
   }
 
+  /**
+   * A booking a team member made in the CRM: the bot takes it on like its own order (stock off BOT STOCK, an order
+   * label linked to the CRM booking, and a calendar event). No alert: the team made it. No CRM write: it came from there.
+   */
+  async adopt(a: {
+    crmId: string;
+    userId: string;
+    username?: string;
+    lines: OrderLine[];
+    summary: string;
+    total: number;
+    payment: string;
+    paid: boolean;
+    fulfillment: "pickup" | "delivery" | "ship";
+    date: string;
+    /** "3:00 PM", or undefined for shipped / no time. */
+    time?: string;
+    location?: string;
+    deliveryFee?: number;
+    shipping?: number;
+  }): Promise<OrderLabel> {
+    await this.takeStock(a.lines, -1, a.userId);
+    const when = [a.fulfillment, a.date, a.time].filter(Boolean).join(" ");
+    const label = this.d.store.addLabel({
+      userId: a.userId,
+      label: a.paid ? "PAID" : "BOOKED",
+      summary: a.summary,
+      total: a.total,
+      payment: a.payment,
+      when,
+      lines: a.lines,
+      fulfillment: a.fulfillment,
+      deliveryFee: a.deliveryFee,
+      shipping: a.shipping,
+      cost: await this.costOf(a.lines),
+      crmId: a.crmId,
+    });
+    if (a.username && !label.username) this.d.store.updateLabel(label.id, { username: a.username });
+    if (this.d.calendar) {
+      const kind = a.fulfillment === "pickup" ? "🔺 PICKUP" : a.fulfillment === "delivery" ? "🚗 DELIVERY" : "📦 SHIP";
+      const who = a.username ? `@${a.username}` : "buyer";
+      try {
+        const id = await this.d.calendar({
+          title: `${a.paid ? "🟢 PAID" : "🟡 BOOKED"} ${kind}: ${who} – $${a.total} (${a.payment})`,
+          date: a.date,
+          time: a.fulfillment === "ship" ? "" : (a.time ?? ""),
+          durationMinutes: 30,
+          timeZone: "America/New_York",
+          location: a.location ?? (a.fulfillment === "pickup" ? "Warehouse" : ""),
+          description: `Items: ${a.summary}\nTotal: $${a.total} by ${a.payment}\nAdded in the CRM.`,
+        });
+        if (id) this.d.store.updateLabel(label.id, { calendarId: id });
+      } catch (err) {
+        console.error("[desk] calendar for a CRM booking failed:", err);
+      }
+    }
+    return label;
+  }
+
+  /** Items edited in the CRM: the old pieces go back on BOT STOCK, the new ones come off, and the label follows. */
+  async replaceLines(id: string, lines: OrderLine[], summary: string, total: number): Promise<void> {
+    const l = this.d.store.getLabel(id);
+    if (!l) return;
+    await this.takeStock(l.lines ?? [], 1, l.userId);
+    await this.takeStock(lines, -1, l.userId);
+    this.d.store.updateLabel(id, { lines, summary, total, cost: await this.costOf(lines) });
+  }
+
   /** Stripe said it's paid: stock off, PAID label, logged as a sale. (Calendar + alert happen in handlePaidOrder.) */
   async stripePaid(userId: string, lines: OrderLine[], summary: string, total: number, when: string, fulfillment: "pickup" | "delivery" | "ship" = "pickup"): Promise<OrderLabel> {
     await this.takeStock(lines, -1, userId);

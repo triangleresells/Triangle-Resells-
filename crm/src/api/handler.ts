@@ -65,6 +65,18 @@ export function createApi(deps: ApiDeps) {
         });
         return c ? json(200, { customer: c }) : json(404, { error: "no such customer" });
       }
+      if (req.method === "GET" && path === "/customers/bookings") {
+        const ig = url.searchParams.get("ig_user_id");
+        if (!ig) return json(400, { error: "ig_user_id is required" });
+        return json(200, { bookings: await deps.db.rpc("open_bookings_for", { p_ig_user_id: ig }) });
+      }
+      // CRM -> bot: booking changes people made since event N (none = just tell me where to start).
+      if (req.method === "GET" && path === "/events") {
+        const after = url.searchParams.get("after");
+        if (after !== null && !/^\d+$/.test(after)) return json(400, { error: "after must be a number" });
+        const limit = Number(url.searchParams.get("limit") ?? 100) || 100;
+        return json(200, await deps.db.rpc("bot_events_after", { p_after: after === null ? null : Number(after), p_limit: limit }));
+      }
       if (req.method === "POST" && path === "/customers") {
         const c = await deps.db.rpc("upsert_customer", { p: await body(req), p_actor: actor });
         return json(200, { customer: c });

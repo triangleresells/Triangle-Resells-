@@ -96,6 +96,8 @@ export interface StoreSnapshot {
   convos: { userId: string; turns: ChatTurn[]; pausedUntil: number; lastActivity: number; pendingLink?: PendingLink }[];
   customers: Customer[];
   labels?: OrderLabel[];
+  /** Last CRM change the bot applied (CRM -> bot sync). */
+  crmCursor?: number;
 }
 
 const MAX_TURNS = 20;
@@ -113,6 +115,8 @@ export class Store {
   private botMessageIds = new Set<string>();
   private customers = new Map<string, Customer>();
   private labels: OrderLabel[] = [];
+  /** Last CRM change applied by the bot. undefined = never synced (start from the newest). */
+  private cursor: number | undefined;
   /** Called after anything worth saving changes (the file saver listens here). */
   onChange?: () => void;
 
@@ -207,11 +211,23 @@ export class Store {
       })),
       customers: this.allCustomers(),
       labels: this.labels,
+      ...(this.cursor !== undefined ? { crmCursor: this.cursor } : {}),
     };
+  }
+
+  crmCursor(): number | undefined {
+    return this.cursor;
+  }
+
+  setCrmCursor(n: number): void {
+    if (n === this.cursor) return;
+    this.cursor = n;
+    this.changed();
   }
 
   restore(snap: StoreSnapshot | undefined): void {
     if (!snap || snap.version !== 1) return;
+    if (typeof snap.crmCursor === "number") this.cursor = snap.crmCursor;
     for (const c of snap.convos ?? []) {
       this.convos.set(c.userId, { turns: c.turns ?? [], pausedUntil: c.pausedUntil ?? 0, lastActivity: c.lastActivity ?? this.now(), recentBotTexts: [], lastBotAt: 0, pendingLink: c.pendingLink });
     }
