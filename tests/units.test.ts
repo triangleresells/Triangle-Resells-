@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, toApiMessages } from "../src/ai.js";
+import { buildSystemPrompt, normalizeHandoff, pickHandoff, toApiMessages } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
 import { formatInventoryCsv, InventorySheet } from "../src/inventory.js";
@@ -107,5 +107,24 @@ describe("misc", () => {
 
   it("refuses to start without required secrets", () => {
     expect(() => loadConfig({})).toThrow(/IG_APP_SECRET/);
+  });
+});
+
+describe("handoff tool input", () => {
+  it("fills missing fields from a truncated tool call", () => {
+    expect(normalizeHandoff({ route: "team" })).toEqual({
+      route: "team",
+      reason: "handoff requested",
+      summary: "No summary given. Check the chat.",
+    });
+    expect(normalizeHandoff({ route: "nope", reason: " refund " }).route).toBe("team");
+  });
+
+  it("keeps the josh route when the model calls the tool twice", () => {
+    const josh = normalizeHandoff({ route: "josh", reason: "refund", summary: "stained hoodie" });
+    const team = normalizeHandoff({ route: "team", reason: "upset", summary: "x" });
+    expect(pickHandoff(josh, team)).toBe(josh);
+    expect(pickHandoff(team, josh)).toBe(josh);
+    expect(pickHandoff(undefined, team)).toBe(team);
   });
 });

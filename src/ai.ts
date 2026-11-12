@@ -61,6 +61,27 @@ export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
   return out;
 }
 
+/** Fill gaps in the tool input so the team alert never says "undefined". */
+export function normalizeHandoff(input: unknown): NonNullable<AgentReply["handoff"]> {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return {
+    route: i.route === "josh" ? "josh" : "team",
+    reason: str(i.reason) || "handoff requested",
+    summary: str(i.summary) || str(i.reason) || "No summary given. Check the chat.",
+  };
+}
+
+/** If the model calls the tool more than once, keep the Josh route; otherwise keep the first call. */
+export function pickHandoff(
+  current: AgentReply["handoff"],
+  next: NonNullable<AgentReply["handoff"]>,
+): NonNullable<AgentReply["handoff"]> {
+  if (!current) return next;
+  if (current.route !== "josh" && next.route === "josh") return next;
+  return current;
+}
+
 export class ClaudeAgent implements ReplyEngine {
   private client: Anthropic;
 
@@ -83,7 +104,9 @@ export class ClaudeAgent implements ReplyEngine {
     for (let round = 0; round < 2; round++) {
       const res = await this.client.messages.create({
         model: this.model,
-        max_tokens: 400,
+        // The model may think before answering, and thinking counts against this budget.
+        // 400 used to truncate replies and handoff tool calls mid-JSON. Brevity comes from the prompt.
+        max_tokens: 2000,
         system,
         messages,
         tools: [HANDOFF_TOOL],
@@ -93,7 +116,7 @@ export class ClaudeAgent implements ReplyEngine {
       for (const block of res.content) {
         if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
         if (block.type === "tool_use" && block.name === HANDOFF_TOOL.name) {
-          handoff = block.input as AgentReply["handoff"];
+          handoff = pickHandoff(handoff, normalizeHandoff(block.input));
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
