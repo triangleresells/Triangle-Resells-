@@ -202,6 +202,29 @@ export const TOOLS = [
 ];
 
 export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): string {
+  return buildSystemBlocks(instructions, knowledgeBase, inventory, now, schedule).map((b) => b.text).join("\n\n");
+}
+
+/**
+ * The system prompt as two blocks. The first (instructions, knowledge base, stock sheet) only changes when the
+ * config or the sheet does, so it's cached and later calls read it at a tenth of the price. The second holds
+ * what changes all the time (pickup schedule, the current time), after the cache breakpoint.
+ */
+export function buildSystemBlocks(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): Anthropic.TextBlockParam[] {
+  const head = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
+  if (inventory) {
+    head.push(
+      "LIVE STOCK SHEET (updated by the team; if it disagrees with the knowledge base on stock or restock dates, trust this sheet)\n" +
+        inventory,
+    );
+  }
+  return [
+    { type: "text", text: head.join("\n\n"), cache_control: { type: "ephemeral" } },
+    { type: "text", text: systemTail(now, schedule) },
+  ];
+}
+
+function systemTail(now: Date, schedule: string): string {
   const today = now.toLocaleString("en-US", {
     weekday: "long",
     year: "numeric",
@@ -211,13 +234,7 @@ export function buildSystemPrompt(instructions: string, knowledgeBase: string, i
     minute: "2-digit",
     timeZone: "America/New_York",
   });
-  const parts = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
-  if (inventory) {
-    parts.push(
-      "LIVE STOCK SHEET (updated by the team; if it disagrees with the knowledge base on stock or restock dates, trust this sheet)\n" +
-        inventory,
-    );
-  }
+  const parts: string[] = [];
   if (schedule) parts.push("PICKUP SCHEDULE (live from Josh's calendar)\n" + schedule);
   parts.push(`TODAY\n${today} (North Carolina time). Use this to turn "today", "tomorrow" or "next Thursday" into a date.`);
   parts.push(
@@ -303,7 +320,7 @@ export class ClaudeAgent implements ReplyEngine {
   }
 
   async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
-    const system = buildSystemPrompt(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
+    const system = buildSystemBlocks(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
