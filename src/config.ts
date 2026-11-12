@@ -58,6 +58,10 @@ export interface Config {
   crmBotApiKey: string;
   /** Who CRM bookings from the bot are assigned to. */
   crmAssignee: string;
+  /** Team assistant (chat in the CRM): Supabase project URL + PUBLIC anon key, and the CRM's web address. All three = on. */
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+  crmWebOrigin: string;
   pricing: PricingConfig;
   port: number;
   agentInstructions: string;
@@ -154,6 +158,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminKey: optional(env.ADMIN_KEY),
     crmApiUrl: optional(env.CRM_API_URL),
     crmBotApiKey: optional(env.CRM_BOT_API_KEY),
+    supabaseUrl: optional(env.SUPABASE_URL),
+    supabaseAnonKey: optional(env.SUPABASE_ANON_KEY),
+    crmWebOrigin: optional(env.CRM_WEB_ORIGIN).replace(/\/+$/, ""),
     crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",
     humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",
     takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,

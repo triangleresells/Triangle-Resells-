@@ -17,6 +17,14 @@ export interface ServerOpts {
   onPaidOrder?: (order: PaidOrder) => Promise<void>;
   /** Extra details for /health (Render's health check). Never include secrets. */
   health?: () => Promise<Record<string, unknown>>;
+  /**
+   * The team assistant (the chat inside the CRM). The CRM page sends the person's login token; the assistant acts as them.
+   * origin: the CRM's web address (only that site may call it). Off unless set.
+   */
+  assistant?: {
+    origin: string;
+    handle: (accessToken: string, body: unknown) => Promise<{ status: number; body: unknown }>;
+  };
   /** Josh's customer list page. Off unless ADMIN_KEY is set. */
   admin?: {
     key: string;
@@ -47,6 +55,34 @@ function keyOk(given: unknown, key: string): boolean {
 
 export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
   const app = express();
+
+  // Team assistant: its own (bigger) body limit for screenshots, registered before the 1mb parser below.
+  if (opts.assistant) {
+    const a = opts.assistant;
+    app.use("/team", (req, res, next) => {
+      if (req.headers.origin === a.origin) {
+        res.setHeader("Access-Control-Allow-Origin", a.origin);
+        res.setHeader("Vary", "Origin");
+        res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        res.setHeader("Access-Control-Max-Age", "600");
+      }
+      if (req.method === "OPTIONS") return res.sendStatus(req.headers.origin === a.origin ? 204 : 403);
+      next();
+    });
+    app.post("/team/assistant", express.json({ limit: "10mb" }), async (req, res) => {
+      const auth = req.headers.authorization ?? "";
+      const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      if (!token) return res.status(401).json({ error: "log in first" });
+      try {
+        const out = await a.handle(token, req.body);
+        res.status(out.status).json(out.body);
+      } catch (err) {
+        console.error("[assistant] failed:", (err as Error).message ?? err);
+        res.status(500).json({ error: "The assistant hit an error. Try again." });
+      }
+    });
+  }
 
   app.use(
     express.json({

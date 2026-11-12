@@ -88,7 +88,7 @@ export async function testDb(): Promise<TestDb> {
   return {
     pg,
     async reset() {
-      await pg.exec(`truncate activity_log, bot_events, booking_items, bookings, restock_items, restocks, stock_moves, stock_items, customers restart identity cascade; update team_members set user_id = null, email = null; delete from auth.users;`);
+      await pg.exec(`truncate activity_log, bot_notes, bot_events, booking_items, bookings, restock_items, restocks, stock_moves, stock_items, customers restart identity cascade; update team_members set user_id = null, email = null; delete from auth.users;`);
     },
     asService: dbFor(pg, "service_role", null),
     asUser: (userId) => dbFor(pg, "authenticated", userId),

@@ -607,6 +607,25 @@ export class Bot {
   }
 
   /** The buyer's open CRM bookings for the AI (the CRM wins over the chat). Gives up after 3s: a slow CRM never holds a reply. */
+  private notesCache: { at: number; text: string } | undefined;
+
+  /** The team's notes for the bot (from the CRM assistant), refreshed at most once a minute. */
+  private async teamNotes(): Promise<string> {
+    if (!this.d.crm) return "";
+    if (this.notesCache && Date.now() - this.notesCache.at < 60_000) return this.notesCache.text;
+    try {
+      const notes = await this.d.crm.notes();
+      const text = notes.length
+        ? `\n\nTEAM NOTES (from Josh, Chema and Diego, newest first; these are newer than the knowledge base and win when they disagree):\n${notes.map((n) => `- ${n.note}`).join("\n")}`
+        : "";
+      this.notesCache = { at: Date.now(), text };
+      return text;
+    } catch (err) {
+      console.error("[bot] CRM notes failed:", (err as Error).message ?? err);
+      return this.notesCache?.text ?? "";
+    }
+  }
+
   private async crmContext(userId: string): Promise<string> {
     if (!this.d.crm) return "";
     const timeout = new Promise<string>((r) => setTimeout(() => r(""), 3000).unref?.());
@@ -614,7 +633,9 @@ export class Bot {
       console.error("[bot] CRM lookup failed:", (err as Error).message ?? err);
       return "";
     });
-    return Promise.race([lookup, timeout]);
+    const notes = Promise.race([this.teamNotes(), new Promise<string>((r) => setTimeout(() => r(this.notesCache?.text ?? ""), 3000).unref?.())]);
+    const [buyer, team] = await Promise.all([Promise.race([lookup, timeout]), notes]);
+    return team + buyer;
   }
 
   /**

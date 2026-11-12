@@ -1,7 +1,7 @@
 /**
  * Netlify Function: https://<crm-site>/api/* -> the CRM API (src/api/handler.ts).
  * Env (Netlify site settings, never committed): SUPABASE_URL, SUPABASE_ANON_KEY (public), SUPABASE_SERVICE_ROLE_KEY,
- * CRM_BOT_API_KEY.
+ * CRM_BOT_API_KEY, BOT_ASSISTANT_URL (the bot's address, for the assistant chat; public).
  */
 import { supabaseDb } from "../../src/api/db.js";
 import { createApi } from "../../src/api/handler.js";
@@ -11,7 +11,7 @@ const anonKey = process.env.SUPABASE_ANON_KEY ?? "";
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const botKey = process.env.CRM_BOT_API_KEY ?? "";
 
-const handle = createApi({ db: supabaseDb(url, serviceKey), botApiKey: botKey, publicConfig: { supabaseUrl: url, anonKey } });
+const handle = createApi({ db: supabaseDb(url, serviceKey), botApiKey: botKey, publicConfig: { supabaseUrl: url, anonKey, assistantUrl: process.env.BOT_ASSISTANT_URL ?? "" } });
 
 export default async (req: Request) => {
   if (!url || !serviceKey || !botKey || !anonKey) {

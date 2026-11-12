@@ -72,6 +72,8 @@ export interface Crm {
   events(after: number | null): Promise<{ events: CrmEvent[]; latest: number }>;
   /** This Instagram buyer's bookings that aren't finished. */
   openBookings(igUserId: string): Promise<CrmBookingFull[]>;
+  /** What the team told the DM bot (active notes, newest first). */
+  notes(): Promise<{ note: string; created_by: string; created_at: string }[]>;
   /** A new DM conversation with this buyer started. */
   recordDm(igUserId: string, igHandle?: string): Promise<void>;
   /** The buyer's history (orders, total spent) and their open bookings. */
@@ -167,6 +169,7 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     reschedule: async (id, date, time) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/reschedule`, { date, time: time ?? null })).booking,
     setStatus: async (id, status, reason) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/status`, { status, reason: reason ?? null })).booking,
     events: (after) => call("GET", `/events${after === null ? "" : `?after=${after}`}`),
+    notes: async () => (await call<{ notes: { note: string; created_by: string; created_at: string }[] }>("GET", "/notes")).notes,
     recordDm: async (ig, handle) => void (await call("POST", "/customers/dm", { ig_user_id: ig, ig_handle: handle ?? null })),
     buyerContext: (ig) => call("GET", `/customers/context?ig_user_id=${encodeURIComponent(ig)}`),
     syncStock: (rows, isTest) => call("POST", "/stock/sync", { rows, is_test: isTest }),

@@ -12,7 +12,7 @@ export interface ApiDeps {
   db: Db;
   botApiKey: string;
   /** Served at /api/config for the screens. Public values only. */
-  publicConfig?: { supabaseUrl: string; anonKey: string };
+  publicConfig?: { supabaseUrl: string; anonKey: string; assistantUrl?: string };
   /** Where errors go (default console.error). Never given keys or request bodies. */
   log?: (line: string) => void;
 }
@@ -82,6 +82,10 @@ export function createApi(deps: ApiDeps) {
         const ig = url.searchParams.get("ig_user_id");
         if (!ig) return json(400, { error: "ig_user_id is required" });
         return json(200, { bookings: await deps.db.rpc("open_bookings_for", { p_ig_user_id: ig }) });
+      }
+      // What the team told the DM bot (active notes, newest first).
+      if (req.method === "GET" && path === "/notes") {
+        return json(200, { notes: await deps.db.rpc("bot_notes_active", {}) });
       }
       // Stock: the bot sends what BOT STOCK says and gets back the counts to write on the sheet.
       if (req.method === "POST" && path === "/stock/sync") {

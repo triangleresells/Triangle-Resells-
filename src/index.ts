@@ -1,5 +1,8 @@
 import { ClaudeAgent } from "./ai.js";
 import { crmClient } from "./crm.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { supabaseUserDb, TeamAssistant } from "./team/assistant.js";
+import { assistantHandler } from "./team/handler.js";
 import { CrmSync } from "./crmsync.js";
 import { StockSync } from "./stocksync.js";
 import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
@@ -117,6 +120,17 @@ createServer(bot, {
     const c = await catalog.get();
     return { botEnabled: config.botEnabled, stock: c.source, forSaleRows: (c.pricing.stock ?? []).filter((r) => r.status === "for_sale" && r.qty > 0).length };
   },
+  // Team assistant: the chat inside the CRM. Acts as the logged-in person through their Supabase login.
+  assistant:
+    config.supabaseUrl && config.supabaseAnonKey && config.crmWebOrigin
+      ? {
+          origin: config.crmWebOrigin,
+          handle: assistantHandler({
+            assistant: new TeamAssistant(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel),
+            dbFor: (token) => supabaseUserDb(config.supabaseUrl, config.supabaseAnonKey, token),
+          }),
+        }
+      : undefined,
   admin: {
     key: config.adminKey,
     customers: () => store.allCustomers(),

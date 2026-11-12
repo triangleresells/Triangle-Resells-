@@ -68,6 +68,13 @@ services:
         sync: false
       - key: CRM_ASSIGNEE
         value: Chema
+      # Team assistant (chat in the CRM). Supabase URL + PUBLIC anon key, and the CRM site address. All three = on.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: CRM_WEB_ORIGIN
+        sync: false
       - key: ACCOUNT_NAME
         value: Triangle Resells
       - key: VENDOR_SITE_URL

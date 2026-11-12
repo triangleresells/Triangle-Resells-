@@ -22,6 +22,8 @@ const state = {
   customers: { sort: "top_spenders", search: "", list: [], open: null },
   cash: { day: L.isoDate(new Date()), report: null },
   stock: { rows: [], restocks: [], search: "", editing: null },
+  chat: { messages: [], pending: [], draft: "", busy: false },
+  assistantUrl: "",
 };
 
 function banner(msg, ok = false) {
@@ -88,6 +90,7 @@ function reloadSoon() {
 // ---------- render ----------
 const TABS = [
   { key: "calendar", label: "Calendar" },
+  { key: "assistant", label: "Assistant" },
   { key: "money", label: "Money" },
   { key: "stock", label: "Stock" },
   { key: "customers", label: "Customers" },
@@ -105,6 +108,7 @@ function render() {
   if (state.tab === "customers") return renderCustomers();
   if (state.tab === "cash") return renderCash();
   if (state.tab === "stock") return renderStock();
+  if (state.tab === "assistant") return renderAssistant();
   $("main").innerHTML = tabsHtml() + `<div class="layout">
     <section class="panel" aria-labelledby="calH">
       <div class="spread" style="margin-bottom:8px">
@@ -604,6 +608,116 @@ function renderStock() {
   }));
 }
 
+// ---------- Assistant: chat with the team assistant (it acts as you) ----------
+const CHAT_KEY = "triangle-assistant-chat";
+
+function loadChat() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CHAT_KEY) ?? "[]");
+    if (Array.isArray(saved)) state.chat.messages = saved;
+  } catch {
+    /* private mode or blocked storage: start fresh */
+  }
+}
+function saveChat() {
+  try {
+    // Pictures aren't kept (too big); the text of the conversation is.
+    sessionStorage.setItem(CHAT_KEY, JSON.stringify(state.chat.messages.map(({ images, ...m }) => ({ ...m, hadImages: m.hadImages || !!images?.length }))));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Shrinks a photo to at most 1600px and JPEG, so screenshots upload fast. Returns {mediaType, data(base64)}. */
+async function shrinkImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale);
+    c.height = Math.round(img.height * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    const data = c.toDataURL("image/jpeg", 0.85).split(",")[1];
+    return { mediaType: "image/jpeg", data };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function renderAssistant() {
+  const ch = state.chat;
+  if (!state.assistantUrl) {
+    $("main").innerHTML = tabsHtml() + `<section class="panel"><p class="empty">The assistant isn't switched on yet (it needs the bot's address in the CRM settings).</p></section>`;
+    return;
+  }
+  $("main").innerHTML = tabsHtml() + `<section class="panel chat">
+    <div class="msgs" id="msgs" aria-live="polite">
+      ${ch.messages.length ? "" : `<div class="empty">Ask or tell me anything, ${esc(state.me)}. For example:<br>"Sold 2 black Essentials hoodies M to @jay, $120 cash"<br>"What's booked tomorrow?"<br>"How much did Diego bring in this week?"<br>Send a screenshot of an incoming restock to log it.<br>"Tell the bot the BAPE restock moved to Tuesday"</div>`}
+      ${ch.messages.map((m) => `<div class="msg ${m.role}">
+        ${m.images?.length ? m.images.map((i) => `<img src="data:${i.mediaType};base64,${i.data}" alt="Picture you sent">`).join("") : m.hadImages ? `<span class="muted small">(picture)</span>` : ""}
+        ${m.text ? `<div class="bubble">${esc(m.text).replace(/\n/g, "<br>")}</div>` : ""}
+        ${m.changes?.length ? `<ul class="changes">${m.changes.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+      </div>`).join("")}
+      ${ch.busy ? `<div class="msg assistant"><div class="bubble muted">Working on it…</div></div>` : ""}
+    </div>
+    <form id="chatF" class="chatbar">
+      ${ch.pending.length ? `<div class="thumbs">${ch.pending.map((i, n) => `<span class="thumb"><img src="data:${i.mediaType};base64,${i.data}" alt="Picture to send"><button type="button" class="link danger" data-unpick="${n}" aria-label="Remove picture">✕</button></span>`).join("")}</div>` : ""}
+      <div class="row">
+        <label class="btn small" for="pick" title="Add a screenshot">📎<span class="sr">Add a picture</span></label>
+        <input id="pick" type="file" accept="image/*" multiple hidden>
+        <textarea id="say" rows="1" placeholder="Message the assistant" ${ch.busy ? "disabled" : ""}></textarea>
+        <button class="btn gold small" ${ch.busy ? "disabled" : ""}>Send</button>
+      </div>
+      ${ch.messages.length ? `<button type="button" class="link small" id="newChat">New chat</button>` : ""}
+    </form>
+  </section>`;
+  const msgs = $("msgs");
+  msgs.scrollTop = msgs.scrollHeight;
+  const say = $("say");
+  say.value = ch.draft;
+  say.oninput = () => { ch.draft = say.value; say.style.height = "auto"; say.style.height = Math.min(say.scrollHeight, 160) + "px"; };
+  say.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chatF").requestSubmit(); } };
+  if (!ch.busy) say.focus();
+  $("pick").onchange = async (e) => {
+    const files = [...e.target.files].slice(0, 4 - ch.pending.length);
+    try { for (const f of files) ch.pending.push(await shrinkImage(f)); } catch { banner("Couldn't read that picture."); }
+    renderAssistant();
+  };
+  document.querySelectorAll("[data-unpick]").forEach((b) => (b.onclick = () => { ch.pending.splice(Number(b.dataset.unpick), 1); renderAssistant(); }));
+  $("newChat")?.addEventListener("click", () => { ch.messages = []; saveChat(); renderAssistant(); });
+  $("chatF").onsubmit = async (e) => {
+    e.preventDefault();
+    const text = ch.draft.trim();
+    if ((!text && !ch.pending.length) || ch.busy) return;
+    ch.messages.push({ role: "user", text, ...(ch.pending.length ? { images: ch.pending } : {}) });
+    ch.pending = [];
+    ch.draft = "";
+    ch.busy = true;
+    saveChat();
+    renderAssistant();
+    try {
+      const { data } = await state.sb.auth.getSession();
+      const res = await fetch(`${state.assistantUrl}/team/assistant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token ?? ""}` },
+        // Only the last 20 messages, and pictures only on the newest one (older ones were already read).
+        body: JSON.stringify({ messages: ch.messages.slice(-20).map((m, i, all) => ({ role: m.role, text: m.text || "", ...(i === all.length - 1 && m.images ? { images: m.images } : {}) })) }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error ?? `error ${res.status}`);
+      ch.messages.push({ role: "assistant", text: out.reply, changes: out.changes });
+      // Whatever it changed shows up on the other tabs too.
+      if (out.changes?.length) state.bookings = {};
+    } catch (err) {
+      ch.messages.push({ role: "assistant", text: "Didn't go through: " + err.message });
+    }
+    ch.busy = false;
+    saveChat();
+    renderAssistant();
+  };
+}
+
 // ---------- start ----------
 async function start() {
   let cfg;
@@ -615,6 +729,8 @@ async function start() {
     return;
   }
   state.sb = createClient(cfg.supabaseUrl, cfg.anonKey);
+  state.assistantUrl = (cfg.assistantUrl ?? "").replace(/\/+$/, "");
+  loadChat();
   state.sb.channel("bookings").on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, reloadSoon)
     .on("postgres_changes", { event: "*", schema: "public", table: "booking_items" }, reloadSoon).subscribe();
   // Tabs: Calendar / Money / Customers / Cash.
