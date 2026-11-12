@@ -437,6 +437,12 @@ export class Bot {
       }
       return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note, payText: payTextFor(payment, r.q.total, this.d.payInfo) };
     };
+    tools.isBooked = (items, fulfillment, deliveryArea) => {
+      const q = quoteOrder(this.withHeld(pricing, userId), items, fulfillment, deliveryArea);
+      if (!q.lines.length) return false;
+      const list = itemList(q);
+      return this.d.store.allLabels().some((l) => l.userId === userId && l.summary === list && l.fulfillment === fulfillment);
+    };
     tools.paymentSent = async (method, note) => {
       const label = this.d.store.latestLabelFor(userId);
       if (label) this.d.store.updateLabel(label.id, { saysPaid: `${method.replace("_", " ")}: ${note}`.slice(0, 200) });
@@ -452,6 +458,9 @@ export class Bot {
           summary: `${note}${label ? `. Order: ${label.summary}` : ""}. Screenshots can be faked: only Mark paid on /admin once the money is actually in.`,
         })
         .catch((err) => console.error("[bot] payment alert failed:", err));
+      if (!label) {
+        return "Josh was told, but NO order is locked in for this buyer, so there's nothing to match the money to. Call handoff_to_team with route josh (what they say they paid, how much, for what). Tell them Josh will check it and reach out right here. Don't say the order is set, don't confirm pickup, never say the payment is received.";
+      }
       return "Josh was told to check his app. Tell the buyer: got it, Josh will confirm as soon as it shows on his end. Never say the payment is confirmed or received.";
     };
     if (!this.d.checkout) return tools;

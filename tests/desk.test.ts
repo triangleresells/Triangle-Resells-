@@ -171,7 +171,9 @@ describe("bot payment rules", () => {
 
   it("'I sent it' alerts Josh to check, flags the order, and never confirms", async () => {
     const r = await run((t) => t.paymentSent!("zelle", "screenshot shows $58 to Josh"));
-    expect(r.out).toContain("Never say the payment is confirmed");
+    // No order booked in this chat: Josh is alerted and the AI must hand off, never confirm.
+    expect(r.out).toMatch(/never say the payment is (confirmed|received)/i);
+    expect(r.out).toContain("handoff_to_team with route josh");
     expect(r.alerts[0].reason).toContain("CHECK YOUR APP");
   });
 

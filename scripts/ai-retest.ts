@@ -205,7 +205,7 @@ async function main() {
     const convo: Anthropic.MessageParam[] = [{ role: "user", content: "Start the conversation with your first DM." }];
     let wentQuiet = false;
     for (let turn = 0; turn < 9; turn++) {
-      const c = await client.messages.create({ model: customerModel, max_tokens: 150, system: customerSystem, messages: convo });
+      const c = await client.messages.create({ model: customerModel, max_tokens: 16000, system: customerSystem, messages: convo });
       const msg = c.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
       if (!msg || msg === "END") break;
       const before = transcript.length;
@@ -230,7 +230,7 @@ async function main() {
 
     const judge = await client.messages.create({
       model: judgeModel,
-      max_tokens: 2000,
+      max_tokens: 16000,
       output_config: { effort: "low" },
       system:
         "You grade a DM sales bot strictly against its rules and the scenario's expected behavior. Judge only what the BOT wrote and did, not the customer. Reply with JSON only: {\"pass\": boolean, \"violations\": [string], \"notes\": string}. Each violation is a short label then a colon then specifics, e.g. \"invented: said $50 for 2 hats\". Only fail for real rule breaks, not style nitpicks.",

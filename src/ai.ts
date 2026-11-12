@@ -33,6 +33,8 @@ export interface OrderTools {
     | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string }
     | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
   >;
+  /** True if this exact order is already locked in for this buyer (so submit_order isn't run twice). */
+  isBooked?(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): boolean;
   /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
   paymentSent?(method: string, note: string): Promise<string>;
   /** Stripe payment link. Only when STRIPE_ENABLED=true. */
@@ -309,6 +311,23 @@ export function toolsFor(tools?: OrderTools) {
   );
 }
 
+const THANKS_RE = /^(?:(hey|hi|yo|hello)\s*[,!.]?\s*)?(?:thanks|thank you)(?: so much)? for (?:reaching out|messaging|the message|your message|hitting (?:us|me) up)[!.,]*\s*/i;
+const QUESTION_RE = /^(?:(hey|hi|yo|hello)\s*[,!.]?\s*)?(?:good|great) question[!.,]*\s*/i;
+
+/** Drops the customer-service openers Josh banned ("Thanks for reaching out.", "Good question."), keeping a "Hey!". */
+export function stripFiller(text: string): string {
+  let out = text;
+  for (const re of [THANKS_RE, QUESTION_RE]) {
+    const m = out.match(re);
+    if (!m) continue;
+    const rest = out.slice(m[0].length);
+    if (!rest.trim()) continue; // never blank out a whole reply
+    const greet = m[1] ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()}! ` : "";
+    out = greet + rest.charAt(0).toUpperCase() + rest.slice(1);
+  }
+  return out;
+}
+
 /** Adds a text note to the last customer turn (the API needs user and assistant turns to alternate). */
 export function withNote(messages: Anthropic.MessageParam[], note: string): Anthropic.MessageParam[] {
   const out = [...messages];
@@ -334,6 +353,12 @@ export class ClaudeAgent implements ReplyEngine {
 
   async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
     const system = systemBlocks(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
+    if (tools && !tools.checkout) {
+      system.push({
+        type: "text",
+        text: "PAYMENT LINKS ARE OFF RIGHT NOW. Never mention a card link or payment link. Payment is cash (pickup only), Cash App or Zelle; Apple Pay goes through submit_order and Josh sends the info.",
+      });
+    }
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
@@ -369,7 +394,8 @@ export class ClaudeAgent implements ReplyEngine {
           content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
-          content = "Josh alerted. Keep helping: offer the closest item we do have and keep closing.";
+          content =
+            "Josh alerted, and it's saved on their customer list, so they'll get a text if it comes in. Keep helping: offer the closest item we do have and keep closing.";
         } else if (block.name === "save_interest") {
           if (input.item) interests.push(String(input.item));
           content = "Saved to the customer list. Keep helping.";
@@ -382,6 +408,9 @@ export class ClaudeAgent implements ReplyEngine {
           content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
         } else if (block.name === "payment_sent" && tools.paymentSent) {
           content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
+        } else if (block.name === "submit_order" && tools.isBooked?.(input.items ?? [], input.fulfillment, input.delivery_area)) {
+          content =
+            "This exact order is ALREADY locked in (booked earlier). Don't call submit_order again, and don't re-send the order or the payment info unless they ask for it. Just answer what they said.";
         } else if ((block.name === "submit_order" || block.name === "create_checkout_link") && lockInBlocker(history)) {
           content = lockInBlocker(history)!;
         } else if (block.name === "submit_order" && tools.submitOrder) {
@@ -440,6 +469,7 @@ export class ClaudeAgent implements ReplyEngine {
         console.error("[ai] retry for an empty reply failed:", err);
       }
     }
+    text = stripFiller(text);
     if (!text) {
       text = handoff
         ? "Got you, someone from the team will jump in here shortly."

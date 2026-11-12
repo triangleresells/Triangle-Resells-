@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { lockInBlocker, withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
+import { lockInBlocker, stripFiller, withNote, type AgentReply, type OrderTools, type ReplyEngine } from "../src/ai.js";
 import { Bot, toBubbles, type WebhookPayload } from "../src/bot.js";
 import type { KeywordRule } from "../src/config.js";
 import type { HandoffAlert } from "../src/handoff.js";
@@ -871,5 +871,37 @@ describe("no lock-in before the summary + all sales final", () => {
   it("blocks if the summary is old (more than 2 of our messages ago)", () => {
     const h = [{ role: "assistant", text: summary }, { role: "user", text: "a" }, { role: "assistant", text: "x" }, { role: "user", text: "b" }, { role: "assistant", text: "y" }, { role: "user", text: "add a hoodie" }] as const;
     expect(lockInBlocker([...h])).toContain("NOT locked in");
+  });
+});
+
+describe("AI retest fixes", () => {
+  it("strips banned openers but keeps the greeting and never blanks a reply", () => {
+    expect(stripFiller("Hey, thanks for reaching out. We have it in M for $60.")).toBe("Hey! We have it in M for $60.");
+    expect(stripFiller("Good question. It's free with every order.")).toBe("It's free with every order.");
+    expect(stripFiller("Thanks for reaching out!")).toBe("Thanks for reaching out!");
+    expect(stripFiller("We have it in M.")).toBe("We have it in M.");
+  });
+
+  function toolsFor(store = new Store()) {
+    let tools!: OrderTools;
+    const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, t?: OrderTools) => ((tools = t!), { text: "ok" })) };
+    const { ig } = setup();
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing: loadPricing(), now: () => new Date("2026-11-05T17:00:00Z") });
+    return { bot, store, get: async () => (await bot.handle({ object: "instagram", entry: [{ id: OWN_ID, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN_ID }, message: { mid: `t${Math.random()}`, text: "hi" } }] }] }), tools) };
+  }
+
+  it("knows when the exact order is already booked", async () => {
+    const t = toolsFor();
+    const tools = await t.get();
+    const hat = [{ product: "Spider Hoodie", variant: "White/Black", size: "XS", qty: 1 }];
+    expect(tools.isBooked!(hat as any, "pickup")).toBe(false);
+    expect((await tools.submitOrder!(hat as any, "pickup", "2026-11-12", "3:00 PM", undefined, "cash_app")).ok).toBe(true);
+    expect(tools.isBooked!(hat as any, "pickup")).toBe(true);
+    expect(tools.isBooked!([{ ...hat[0], qty: 2 }] as any, "pickup")).toBe(false);
+  });
+
+  it("'I paid' with no order locked in tells the AI to hand off to Josh", async () => {
+    const tools = await toolsFor().get();
+    expect(await tools.paymentSent!("cash_app", "sent $65 for the jacket")).toContain("handoff_to_team with route josh");
   });
 });
