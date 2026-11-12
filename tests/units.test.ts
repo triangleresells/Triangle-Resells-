@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, toApiMessages } from "../src/ai.js";
+import { buildSystemBlocks, buildSystemPrompt, toApiMessages } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
 import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
@@ -63,6 +63,19 @@ describe("ai helpers", () => {
   it("puts the live sheet in the prompt only when there is one", () => {
     expect(buildSystemPrompt("I", "KB", "")).not.toContain("LIVE STOCK");
     expect(buildSystemPrompt("I", "KB", "Item | Price")).toContain("LIVE STOCK");
+  });
+
+  it("caches the instructions, knowledge base and sheet, and keeps the clock and schedule after the cache", () => {
+    const now = new Date("2026-11-12T19:00:00Z");
+    const [head, tail] = buildSystemBlocks("I", "KB", "Item | Price", now, "Fri 4 PM taken");
+    expect(head.cache_control).toEqual({ type: "ephemeral" });
+    expect(head.text).toContain("LIVE STOCK");
+    expect(head.text).not.toMatch(/TODAY|PICKUP SCHEDULE/);
+    expect(tail.cache_control).toBeUndefined();
+    expect(tail.text).toContain("PICKUP SCHEDULE");
+    expect(tail.text).toContain("2:00 PM");
+    // A minute later only the uncached block changes.
+    expect(buildSystemBlocks("I", "KB", "Item | Price", new Date(now.getTime() + 60_000))[0].text).toBe(head.text);
   });
 });
 

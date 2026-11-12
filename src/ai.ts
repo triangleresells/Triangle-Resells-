@@ -30,7 +30,7 @@ export interface OrderTools {
     payment: PaymentMethod,
     shipTo?: ShipTo,
   ): Promise<
-    | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string }
+    | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string; alreadyBooked?: boolean }
     | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
   >;
   /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
@@ -101,7 +101,7 @@ export const TOOLS = [
   {
     name: "alert_team",
     description:
-      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after.",
+      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced. Keep selling after. It does NOT save the customer to the restock list: call save_interest for that too.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -202,6 +202,29 @@ export const TOOLS = [
 ];
 
 export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): string {
+  return buildSystemBlocks(instructions, knowledgeBase, inventory, now, schedule).map((b) => b.text).join("\n\n");
+}
+
+/**
+ * The system prompt as two blocks. The first (instructions, knowledge base, stock sheet) only changes when the
+ * config or the sheet does, so it's cached and later calls read it at a tenth of the price. The second holds
+ * what changes all the time (pickup schedule, the current time), after the cache breakpoint.
+ */
+export function buildSystemBlocks(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): Anthropic.TextBlockParam[] {
+  const head = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
+  if (inventory) {
+    head.push(
+      "LIVE STOCK SHEET (updated by the team; if it disagrees with the knowledge base on stock or restock dates, trust this sheet)\n" +
+        inventory,
+    );
+  }
+  return [
+    { type: "text", text: head.join("\n\n"), cache_control: { type: "ephemeral" } },
+    { type: "text", text: systemTail(now, schedule) },
+  ];
+}
+
+function systemTail(now: Date, schedule: string): string {
   const today = now.toLocaleString("en-US", {
     weekday: "long",
     year: "numeric",
@@ -211,13 +234,7 @@ export function buildSystemPrompt(instructions: string, knowledgeBase: string, i
     minute: "2-digit",
     timeZone: "America/New_York",
   });
-  const parts = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
-  if (inventory) {
-    parts.push(
-      "LIVE STOCK SHEET (updated by the team; if it disagrees with the knowledge base on stock or restock dates, trust this sheet)\n" +
-        inventory,
-    );
-  }
+  const parts: string[] = [];
   if (schedule) parts.push("PICKUP SCHEDULE (live from Josh's calendar)\n" + schedule);
   parts.push(`TODAY\n${today} (North Carolina time). Use this to turn "today", "tomorrow" or "next Thursday" into a date.`);
   parts.push(
@@ -264,6 +281,14 @@ export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
 }
 
 const MAX_ROUNDS = 5;
+/**
+ * Current models think before answering and that thinking counts toward max_tokens. At 500 the thinking used
+ * the whole budget, so replies came back empty or cut off mid tool call and the chat got handed to the team.
+ * DM length is set by the instructions (and splitMessage), not by this cap. Low effort keeps the thinking short;
+ * medium (the model's default) did worse in the real-AI retest (32% vs 44%, more invented details).
+ */
+const MAX_TOKENS = 4000;
+const EFFORT = { effort: "low" } as const;
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
@@ -295,7 +320,7 @@ export class ClaudeAgent implements ReplyEngine {
   }
 
   async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
-    const system = buildSystemPrompt(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
+    const system = buildSystemBlocks(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
     let checkoutUrl: string | undefined;
@@ -308,7 +333,8 @@ export class ClaudeAgent implements ReplyEngine {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const res = await this.client.messages.create({
         model: this.model,
-        max_tokens: 500,
+        max_tokens: MAX_TOKENS,
+        output_config: EFFORT,
         system,
         messages,
         tools: toolsFor(tools),
@@ -326,7 +352,8 @@ export class ClaudeAgent implements ReplyEngine {
           content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
         } else if (block.name === "alert_team") {
           alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
-          content = "Josh alerted. Keep helping: offer the closest item we do have and keep closing.";
+          content =
+            "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
         } else if (block.name === "save_interest") {
           if (input.item) interests.push(String(input.item));
           content = "Saved to the customer list. Keep helping.";
@@ -341,7 +368,9 @@ export class ClaudeAgent implements ReplyEngine {
           content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
         } else if (block.name === "submit_order" && tools.submitOrder) {
           const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
-          if (r.ok) {
+          if (r.ok && r.alreadyBooked) {
+            content = `This exact order was ALREADY locked in earlier in this chat (total $${r.total}). Nothing new was booked. Don't say it just got locked in, don't send a correction, and don't resend the summary or payment info unless they ask.`;
+          } else if (r.ok) {
             const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
             content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
           } else if (!r.fixable && r.handoff) {
@@ -381,7 +410,8 @@ export class ClaudeAgent implements ReplyEngine {
       try {
         const res = await this.client.messages.create({
           model: this.model,
-          max_tokens: 400,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
           system,
           messages: withNote(
             messages,

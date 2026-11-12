@@ -205,7 +205,8 @@ async function main() {
     const convo: Anthropic.MessageParam[] = [{ role: "user", content: "Start the conversation with your first DM." }];
     let wentQuiet = false;
     for (let turn = 0; turn < 9; turn++) {
-      const c = await client.messages.create({ model: customerModel, max_tokens: 150, system: customerSystem, messages: convo });
+      // Room for the model's thinking: at 150 it sometimes spent it all and the customer never said anything.
+      const c = await client.messages.create({ model: customerModel, max_tokens: 2000, output_config: { effort: "low" }, system: customerSystem, messages: convo });
       const msg = c.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
       if (!msg || msg === "END") break;
       const before = transcript.length;
