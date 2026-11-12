@@ -9,9 +9,8 @@
  * (default claude-opus-5-5, a stricter grader). Prints the pass rate, top failures and the API cost.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ClaudeAgent, type OrderTools, type ReplyEngine } from "../src/ai.js";
 import { Bot } from "../src/bot.js";
 import { formatCatalog } from "../src/catalog.js";
@@ -100,27 +99,9 @@ const SCENARIOS: Scenario[] = [
   { id: "what_you_got_m", persona: "asks 'what you got in M?' then picks something", expect: "Lists only FOR SALE items in M from the sheet (no Essentials, no Rolex). Then closes with quote_order prices and the free Baccarat." },
 ];
 
-function photoPath(): string {
-  const dir = path.join(os.tmpdir(), "triangle-retest");
-  const file = path.join(dir, "white-ch-tee.png");
-  if (existsSync(file)) return file;
-  mkdirSync(dir, { recursive: true });
-  return file;
-}
-
-async function makePhoto(file: string): Promise<string> {
-  if (!existsSync(file)) {
-    const { chromium } = await import("playwright" as string);
-    const browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 480, height: 520 } });
-    await page.setContent(`<body style="margin:0;background:#cfcfcf;display:flex;align-items:center;justify-content:center;height:520px">
-      <svg width="420" height="460" viewBox="0 0 420 460"><path d="M140 20 L60 60 L10 150 L80 180 L100 150 L100 440 L320 440 L320 150 L340 180 L410 150 L360 60 L280 20 Q210 70 140 20 Z" fill="#fafafa" stroke="#999" stroke-width="3"/>
-      <text x="210" y="190" font-family="UnifrakturMaguntia, 'Old English Text MT', serif" font-size="44" text-anchor="middle" fill="#111">Chrome Hearts</text>
-      <text x="210" y="250" font-family="serif" font-size="60" text-anchor="middle" fill="#111">✠</text></svg></body>`);
-    await page.screenshot({ path: file });
-    await browser.close();
-  }
-  return readFileSync(file).toString("base64");
+/** Test photo of a white Chrome Hearts tee (also used as the Zelle "screenshot"). Checked in, so no browser is needed. */
+function loadPhoto(): string {
+  return readFileSync(fileURLToPath(new URL("./fixtures/white-ch-tee.png", import.meta.url))).toString("base64");
 }
 
 const VOICE_CHECK = `Also grade how it sounds (Josh wants it to NOT sound like a bot):
@@ -128,6 +109,12 @@ const VOICE_CHECK = `Also grade how it sounds (Josh wants it to NOT sound like a
 - FAIL "invented" if it stated any price, total, tier, stock count or fee that isn't on the stock sheet or returned by quote_order / submit_order.`;
 
 async function main() {
+  // Keys come from .env in the repo root (gitignored). Env vars already set win over the file.
+  if (existsSync(".env")) process.loadEnvFile(".env");
+  if (!process.env.ANTHROPIC_API_KEY?.trim()) {
+    console.error("ANTHROPIC_API_KEY is missing. Copy .env.example to .env, fill it in, and run again. Nothing was spent.");
+    process.exit(1);
+  }
   const n = Number(process.argv[2] ?? 50);
   const out = process.argv[3] ?? "ai-retest-report.json";
   const concurrency = Number(process.env.RETEST_CONCURRENCY ?? 5);
@@ -138,7 +125,7 @@ async function main() {
   const client = new Anthropic({ apiKey: config.anthropicApiKey });
   const catalogText = formatCatalog(config.pricing.stock ?? [], config.pricing.tables);
   const catalog = { pricing: config.pricing, text: catalogText };
-  const photo = SCENARIOS.some((s) => s.photo) ? await makePhoto(photoPath()) : "";
+  const photo = SCENARIOS.some((s) => s.photo) ? loadPhoto() : "";
   const results: { id: string; run: number; persona: string; transcript: string[]; tools: string[]; grade: { pass?: boolean; violations?: string[]; notes?: string } }[] = [];
 
   async function runOne(i: number) {

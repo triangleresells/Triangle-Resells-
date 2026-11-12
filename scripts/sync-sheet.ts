@@ -6,7 +6,7 @@
  *   GOOGLE_SERVICE_ACCOUNT_JSON="$(cat key.json)" npm run sync-sheet
  *   (or GOOGLE_SERVICE_ACCOUNT_FILE=path/to/key.json npm run sync-sheet; keep that file OUT of the repo)
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
 import { DEFAULT_SHEET_ID } from "../src/config.js";
 import { GoogleSheetsReader, parseServiceAccount, PRICES_TAB, STOCK_TAB } from "../src/sheet.js";
@@ -14,6 +14,8 @@ import { GoogleSheetsReader, parseServiceAccount, PRICES_TAB, STOCK_TAB } from "
 const csvCell = (c: string) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c);
 
 async function main() {
+  // Keys come from .env in the repo root (gitignored). Env vars already set win over the file.
+  if (existsSync(".env")) process.loadEnvFile(".env");
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON ?? (process.env.GOOGLE_SERVICE_ACCOUNT_FILE ? readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_FILE, "utf8") : "");
   const sa = parseServiceAccount(raw);
   if (!sa) throw new Error("Set GOOGLE_SERVICE_ACCOUNT_JSON (the key file contents) or GOOGLE_SERVICE_ACCOUNT_FILE.");

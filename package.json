@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "AI Instagram DM agent for Triangle Resells",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "vitest run",
