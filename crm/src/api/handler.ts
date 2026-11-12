@@ -65,6 +65,19 @@ export function createApi(deps: ApiDeps) {
         });
         return c ? json(200, { customer: c }) : json(404, { error: "no such customer" });
       }
+      // A new DM conversation started (counts toward "most active in DMs").
+      if (req.method === "POST" && path === "/customers/dm") {
+        const b = await body(req);
+        if (typeof b.ig_user_id !== "string" || !b.ig_user_id) return json(400, { error: "ig_user_id is required" });
+        const handle = typeof b.ig_handle === "string" ? b.ig_handle : null;
+        return json(200, { customer: await deps.db.rpc("record_dm", { p_ig_user_id: b.ig_user_id, p_ig_handle: handle, p_actor: actor }) });
+      }
+      // What the bot reads before it answers: the buyer's history and open bookings.
+      if (req.method === "GET" && path === "/customers/context") {
+        const ig = url.searchParams.get("ig_user_id");
+        if (!ig) return json(400, { error: "ig_user_id is required" });
+        return json(200, await deps.db.rpc("buyer_context", { p_ig_user_id: ig }));
+      }
       if (req.method === "GET" && path === "/customers/bookings") {
         const ig = url.searchParams.get("ig_user_id");
         if (!ig) return json(400, { error: "ig_user_id is required" });

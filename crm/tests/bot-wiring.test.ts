@@ -67,7 +67,8 @@ function setup(opts: { crmDown?: boolean; oldScript?: boolean } = {}) {
       return { text: "ok" };
     },
   };
-  const ig: InstagramApi = { sendText: async () => "m", sendPrivateReply: async () => "m", replyToComment: async () => {}, getUsername: async () => "TEST_buyer" };
+  const sent: { to: string; text: string }[] = [];
+  const ig: InstagramApi = { sendText: async (to, text) => (sent.push({ to, text }), "m"), sendPrivateReply: async () => "m", replyToComment: async () => {}, getUsername: async () => "TEST_buyer" };
   const bot = new Bot({
     ig, agent, store, notify, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [],
     humanPauseHours: 12, pricing: loadPricing(), getBusy: async () => [], now: () => NOW, desk, crm, calendarEdit,
@@ -79,8 +80,8 @@ function setup(opts: { crmDown?: boolean; oldScript?: boolean } = {}) {
     const p: WebhookPayload = { object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: BUYER }, recipient: { id: OWN }, message: { mid: `m${++n}`, text } }] }] };
     return bot.handle(p);
   };
-  const sync = new CrmSync({ crm, store, desk, calendarEdit, includeTest: true });
-  return { dm, store, alerts, results, cal, sync, contexts };
+  const sync = new CrmSync({ crm, store, desk, calendarEdit, includeTest: true, tellBuyer: (u, txt) => bot.messageBuyer(u, txt), notify, accountName: "Triangle Resells" });
+  return { dm, store, alerts, results, cal, sync, contexts, sent };
 }
 
 const crmBookings = () => t.asService.rpc<Record<string, any>[]>("bookings_between", { p_from: "2026-11-01", p_to: "2026-11-30", p_include_test: true });
@@ -354,5 +355,53 @@ describe("stock: CRM <-> BOT STOCK <-> bot", () => {
     sheet.tabs["BOT STOCK"] = [];
     await stockSync.tick();
     expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(20);
+  });
+});
+
+describe("phase 4: tracking, DM counts, repeat buyers (bot <-> CRM)", () => {
+  const shipped = (ig: string) => ({
+    date: "2026-11-14", payment_method: "cash_app", fulfillment: "ship", shipping_fee: 10, label_cost: 7.5, is_test: true, location: "TEST address",
+    customer: { ig_user_id: ig, ig_handle: "TEST_shipper" }, items: [{ item: "Chrome Hearts Hat", color: "Black", size: "One Size", qty: 1, unit_price: 35 }],
+  });
+
+  it("TEST 6: a tracking number added in the CRM is saved and DMed to the buyer", async () => {
+    const { dm, sync, sent } = setup();
+    await sync.tick();
+    await dm("hey did my hat ship", async () => null); // the buyer messaged: Instagram lets the bot answer for 24h
+    const josh = await t.login("Josh");
+    const b = await t.asUser(josh).rpc<{ id: string }>("create_booking", { p: shipped(BUYER) });
+    await sync.tick();
+    await t.asUser(josh).rpc("update_booking", { p_id: b.id, p: { tracking_number: "1ZTEST0000000001" } });
+    await sync.tick();
+    expect((await t.asUser(josh).rpc<{ tracking_number: string }>("get_booking", { p_id: b.id })).tracking_number).toBe("1ZTEST0000000001");
+    expect(sent.at(-1)).toEqual({ to: BUYER, text: "Your order shipped 📦 UPS tracking: 1ZTEST0000000001\nhttps://www.ups.com/track?tracknum=1ZTEST0000000001" });
+  });
+
+  it("tracking for a buyer outside Instagram's 24h window goes to Josh to send by hand", async () => {
+    const { sync, sent, alerts } = setup();
+    await sync.tick();
+    const josh = await t.login("Josh");
+    const b = await t.asUser(josh).rpc<{ id: string }>("create_booking", { p: shipped("ig-quiet-buyer") });
+    await t.asUser(josh).rpc("update_booking", { p_id: b.id, p: { tracking_number: "1ZTEST0000000002" } });
+    await sync.tick();
+    expect(sent).toEqual([]);
+    expect(alerts.find((a) => a.reason.includes("tracking number by hand"))!.summary).toContain("1ZTEST0000000002");
+  });
+
+  it("counts one DM conversation per visit (not per message)", async () => {
+    const { dm } = setup();
+    await dm("yo", async () => null);
+    await dm("u got hats", async () => null);
+    const c = await t.asService.rpc<{ dm_conversations: number }>("find_customer", { p_ig_user_id: BUYER });
+    expect(c.dm_conversations).toBe(1);
+  });
+
+  it("the AI is told when it's talking to a repeat buyer", async () => {
+    const { dm, contexts } = setup();
+    await dm("hats", (tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
+    const josh = await t.login("Josh");
+    await t.asUser(josh).rpc("set_booking_status", { p_id: await (async () => (await crmBookings())[0].id)(), p_status: "done" });
+    await dm("yo its me again", async () => null);
+    expect(contexts.at(-1)).toMatch(/REPEAT BUYER: 1 past order, \$\d+/);
   });
 });

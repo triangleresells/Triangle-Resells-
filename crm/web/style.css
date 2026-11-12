@@ -90,3 +90,26 @@ textarea { min-height: 70px; resize: vertical; }
 .login { max-width: 380px; margin: 40px auto; }
 .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .toggle input { width: auto; min-height: 0; }
+
+/* tabs + reports (phase 4) */
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; }
+.tab { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px; min-height: 40px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.tab.on { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+.bignum { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-end; text-align: left; background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.bignum:hover { border-color: var(--gold); }
+.bignum > span { display: flex; flex-direction: column; }
+.bignum b { font-size: clamp(28px, 6vw, 40px); font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.gold { color: var(--gold); } .good { color: var(--done); }
+.small { font-size: 12px; }
+.acct { border-top: 1px solid var(--line); padding-top: 6px; }
+.chartbox { overflow-x: auto; }
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.tablewrap { overflow-x: auto; }
+table.sales { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.sales th, table.sales td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.sales th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+table.sales .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.sales tfoot td { border-top: 2px solid var(--line); }
+tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--panel2); }
+.cashgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }

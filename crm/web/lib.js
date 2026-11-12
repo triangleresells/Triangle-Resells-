@@ -155,3 +155,51 @@ export function activityLine(a) {
   const what = a.entity === "booking_items" ? "an item" : a.entity === "customers" ? "a customer" : "the booking";
   return `${a.actor} ${a.action === "create" ? "added" : a.action === "delete" ? "removed" : "changed"} ${what}`;
 }
+
+// ---------- money / reports ----------
+/** "2026-11" -> ["2026-11-01", "2026-11-30"]. */
+export function monthRange(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  const last = new Date(y, m, 0, 12).getDate();
+  return [`${ym}-01`, `${ym}-${String(last).padStart(2, "0")}`];
+}
+/** "2026-11" -> "November 2026" (short: "Nov '26"). */
+export function monthLabel(ym, short = false) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1, 1, 12);
+  return short ? `${d.toLocaleDateString("en-US", { month: "short" })} '${String(y).slice(2)}` : d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+export const thisMonth = (d = new Date()) => isoDate(d).slice(0, 7);
+
+/** Bar chart (SVG string) of revenue + profit per month. Colors come from CSS variables, so it follows dark / light. */
+export function monthChart(months, current) {
+  const W = Math.max(560, months.length * 56), H = 240, L = 54, R = 10, T = 18, B = 30;
+  const max = Math.max(1, ...months.map((m) => Math.max(Number(m.revenue), Number(m.profit))));
+  const p = 10 ** Math.floor(Math.log10(max));
+  const top = [1, 2, 2.5, 5, 10].map((f) => f * p).find((v) => v >= max) ?? 10 * p;
+  const y = (v) => T + (H - T - B) * (1 - Math.max(0, v) / top);
+  const cw = (W - L - R) / months.length, bw = Math.min(16, cw * 0.32);
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (top * i) / 4;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${money(v)}</text>`;
+  }
+  months.forEach((m, i) => {
+    const x = L + cw * i + cw / 2;
+    const cur = m.month === current;
+    const rev = Number(m.revenue), prof = Number(m.profit);
+    g += `<g data-month="${m.month}" style="cursor:pointer"><rect x="${x - cw / 2}" y="${T}" width="${cw}" height="${H - T - B}" fill="transparent"/>`;
+    g += `<rect x="${x - bw - 1}" y="${y(rev)}" width="${bw}" height="${H - B - y(rev)}" rx="2" fill="var(--gold)" opacity="${cur ? 1 : 0.6}"><title>${monthLabel(m.month)} revenue ${money(rev)}</title></rect>`;
+    g += `<rect x="${x + 1}" y="${y(prof)}" width="${bw}" height="${H - B - y(prof)}" rx="2" fill="var(--done)" opacity="${cur ? 1 : 0.6}"><title>${monthLabel(m.month)} profit ${money(prof)}</title></rect>`;
+    g += `<text x="${x}" y="${H - 10}" text-anchor="middle" font-size="11" fill="${cur ? "var(--fg)" : "var(--muted)"}">${monthLabel(m.month, true)}</text></g>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Revenue and profit by month" style="min-width:${W}px;width:100%;height:auto">${g}</svg>`;
+}
+
+export const CUSTOMER_SORTS = [
+  { key: "top_spenders", label: "Top spenders" },
+  { key: "repeat_buyers", label: "Repeat buyers" },
+  { key: "most_dms", label: "Most active in DMs" },
+  { key: "lowest_spenders", label: "Lowest spenders" },
+  { key: "recent", label: "Most recent" },
+];

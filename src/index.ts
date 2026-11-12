@@ -98,7 +98,10 @@ if (crm && sheets && stockKeeper) {
   console.log("[stock-sync] off: needs the Google service account (GOOGLE_SERVICE_ACCOUNT_JSON) to read and write BOT STOCK");
 }
 if (crm) {
-  const sync = new CrmSync({ crm, store, desk, calendarEdit: calendarEditor(config.calendarWebhookUrl) });
+  const sync = new CrmSync({
+    crm, store, desk, calendarEdit: calendarEditor(config.calendarWebhookUrl),
+    tellBuyer: (ig, text) => bot.messageBuyer(ig, text), notify, accountName: config.accountName,
+  });
   setInterval(() => void sync.tick(), 15 * 1000).unref();
 }
 // Josh went quiet on a chat he had: after TAKEOVER_MINUTES the bot answers the waiting buyer.

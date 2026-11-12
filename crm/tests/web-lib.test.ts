@@ -48,3 +48,18 @@ describe("CRM screen helpers", () => {
     expect(lib.itemLine({ qty: 2, brand: "Essentials", item: "Essentials Hoodie", color: "Black", size: "M" })).toBe("2x Essentials Hoodie Black M");
   });
 });
+
+describe("money screen helpers", () => {
+  it("month ranges and labels", () => {
+    expect(lib.monthRange("2026-11")).toEqual(["2026-11-01", "2026-11-30"]);
+    expect(lib.monthRange("2028-02")).toEqual(["2028-02-01", "2028-02-29"]);
+    expect(lib.monthLabel("2026-11")).toBe("November 2026");
+    expect(lib.monthLabel("2026-11", true)).toBe("Nov '26");
+  });
+  it("draws one revenue and one profit bar per month, tappable", () => {
+    const svg = lib.monthChart([{ month: "2026-10", revenue: 35, profit: 22.65 }, { month: "2026-11", revenue: 205.5, profit: 118.45 }], "2026-11");
+    expect(svg.match(/data-month=/g)).toHaveLength(2);
+    expect(svg).toContain("November 2026 revenue $205.50");
+    expect(svg).toContain("October 2026 profit $22.65");
+  });
+});

@@ -17,6 +17,10 @@ const state = {
   editing: null,            // null | "new" | booking id
   history: null,            // booking id whose history is open
   historyRows: [],
+  tab: "calendar",
+  money: { month: L.thisMonth(), chart: false, months: [], report: null, filters: {} },
+  customers: { sort: "top_spenders", search: "", list: [], open: null },
+  cash: { day: L.isoDate(new Date()), report: null },
 };
 
 function banner(msg, ok = false) {
@@ -81,10 +85,24 @@ function reloadSoon() {
 }
 
 // ---------- render ----------
+const TABS = [
+  { key: "calendar", label: "Calendar" },
+  { key: "money", label: "Money" },
+  { key: "customers", label: "Customers" },
+  { key: "cash", label: "Cash" },
+];
+
+function tabsHtml() {
+  return `<nav class="tabs" role="tablist">${TABS.map((t) => `<button role="tab" class="tab ${state.tab === t.key ? "on" : ""}" aria-selected="${state.tab === t.key}" data-tab="${t.key}">${t.label}</button>`).join("")}</nav>`;
+}
+
 function render() {
   $("who").innerHTML = `<span>${esc(state.me)}</span><button class="link" id="out">Log out</button>`;
   $("out").onclick = () => state.sb.auth.signOut();
-  $("main").innerHTML = `<div class="layout">
+  if (state.tab === "money") return renderMoney();
+  if (state.tab === "customers") return renderCustomers();
+  if (state.tab === "cash") return renderCash();
+  $("main").innerHTML = tabsHtml() + `<div class="layout">
     <section class="panel" aria-labelledby="calH">
       <div class="spread" style="margin-bottom:8px">
         <h2 id="calH">${esc(state.view.toLocaleDateString("en-US", { month: "long", year: "numeric" }))}</h2>
@@ -304,6 +322,175 @@ async function openHistory(id) {
   render();
 }
 
+// ---------- Money: revenue + profit, chart of every month, drill-down ----------
+async function openTab() {
+  try {
+    if (state.tab === "money") await loadMoney();
+    if (state.tab === "customers") await loadCustomers();
+    if (state.tab === "cash") await loadCash();
+  } catch (err) {
+    banner("Couldn't load: " + err.message);
+  }
+  if (state.tab === "calendar") return load();
+  render();
+}
+
+async function loadMoney() {
+  const m = state.money;
+  const [from, to] = L.monthRange(m.month);
+  const [report, months] = await Promise.all([
+    rpc("sales_report", { p_from: from, p_to: to, p_filters: m.filters, p_include_test: state.includeTest }),
+    m.chart ? rpc("monthly_report", { p_months: 12, p_filters: m.filters, p_include_test: state.includeTest }) : Promise.resolve(m.months),
+  ]);
+  m.report = report;
+  m.months = months ?? [];
+}
+
+function filterSelect(id, label, list, val) {
+  return `<div class="fld"><label for="${id}">${label}</label><select id="${id}" data-filter="${id.slice(3)}"><option value="">All</option>${opts(list, val)}</select></div>`;
+}
+
+function renderMoney() {
+  const m = state.money;
+  const r = m.report;
+  const t = r?.totals ?? { revenue: 0, profit: 0, sales: 0, item_cost: 0, label_cost: 0, delivery_fees: 0, sales_missing_cost: 0 };
+  const f = m.filters;
+  $("main").innerHTML = tabsHtml() + `<div class="stack">
+    <section class="panel stack">
+      <div class="spread">
+        <h2>${esc(L.monthLabel(m.month))}</h2>
+        <div class="row">
+          <button class="btn small" id="mPrev" aria-label="Previous month">‹</button>
+          <button class="btn small" id="mNow">This month</button>
+          <button class="btn small" id="mNext" aria-label="Next month">›</button>
+        </div>
+      </div>
+      <button class="bignum" id="mChart" aria-expanded="${m.chart}">
+        <span><span class="label">Revenue</span><b class="gold">${L.money(t.revenue)}</b></span>
+        <span><span class="label">Profit</span><b class="good">${L.money(t.profit)}</b></span>
+        <span><span class="label">Sales done</span><b>${t.sales}</b></span>
+        <span class="muted small">${m.chart ? "Tap to hide the chart" : "Tap for every month"}</span>
+      </button>
+      ${t.sales_missing_cost ? `<div class="checktag">${t.sales_missing_cost} sale(s) have an item with no cost on BOT STOCK: their profit counts that item as $0 cost.</div>` : ""}
+      <div class="meta"><span>Item cost <b>${L.money(t.item_cost)}</b></span><span>Label cost <b>${L.money(t.label_cost)}</b></span><span>Delivery fees (not revenue) <b>${L.money(t.delivery_fees)}</b></span></div>
+      ${(r?.by_account ?? []).map((a) => `<div class="spread acct"><span>${esc(a.account)}: <b>${L.money(a.revenue)}</b> revenue, ${esc(L.monthLabel(m.month))}</span><span class="muted">${L.money(a.profit)} profit · ${a.sales} sale${a.sales === 1 ? "" : "s"}</span></div>`).join("")}
+      ${m.chart ? `<div class="chartbox" id="chart">${L.monthChart(m.months, m.month)}</div><p class="muted small">Gold = revenue, green = profit. Tap a month to see its sales.</p>` : ""}
+    </section>
+    <section class="panel stack">
+      <div class="spread"><h2>Filters</h2><button class="link" id="fClear">Clear</button></div>
+      <div class="filters">
+        ${filterSelect("fl_assignee", "Who fulfilled", L.TEAM.map((n) => ({ key: n, label: n })), f.assignee)}
+        ${filterSelect("fl_payment_method", "Payment", L.PAYMENTS, f.payment_method)}
+        ${filterSelect("fl_fulfillment", "Fulfillment", L.FULFILLMENT, f.fulfillment)}
+        ${filterSelect("fl_source_account", "IG account", [...L.ACCOUNTS.map((n) => ({ key: n, label: n })), { key: "none", label: "No account (in person etc.)" }], f.source_account)}
+      </div>
+    </section>
+    <section class="panel stack">
+      <div class="spread"><h2>Every Done sale in ${esc(L.monthLabel(m.month))}</h2><span class="muted">${t.sales} · ${L.money(t.revenue)} · ${L.money(t.profit)} profit</span></div>
+      ${(r?.sales ?? []).length ? `<div class="tablewrap"><table class="sales">
+        <thead><tr><th>Date</th><th>Customer</th><th>Items</th><th class="n">Price</th><th class="n">Cost</th><th class="n">Profit</th><th>Payment</th><th>Fulfillment</th><th>Location</th><th>Fulfilled by</th></tr></thead>
+        <tbody>${r.sales.map((s) => `<tr>
+          <td>${esc(s.date)}</td>
+          <td>${esc(L.customerName(s.customer))}</td>
+          <td>${s.items.map((i) => esc(L.itemLine(i))).join("<br>")}</td>
+          <td class="n">${L.money(s.revenue)}</td>
+          <td class="n">${L.money(Number(s.item_cost) + Number(s.label_cost))}${s.cost_missing ? ` <span class="checktag" title="An item has no cost on BOT STOCK">?</span>` : ""}</td>
+          <td class="n">${L.money(s.profit)}</td>
+          <td>${esc(L.labelOf(L.PAYMENTS, s.payment_method))}</td>
+          <td>${esc(L.labelOf(L.FULFILLMENT, s.fulfillment))}</td>
+          <td>${esc(s.location ?? "")}</td>
+          <td>${esc(s.assignee ?? "")}</td>
+        </tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="3"><b>Total (${t.sales})</b></td><td class="n"><b>${L.money(t.revenue)}</b></td><td class="n"><b>${L.money(Number(t.item_cost) + Number(t.label_cost))}</b></td><td class="n"><b>${L.money(t.profit)}</b></td><td colspan="4"></td></tr></tfoot>
+      </table></div>` : `<div class="empty">No Done sales in ${esc(L.monthLabel(m.month))}${Object.values(f).some(Boolean) ? " with these filters" : ""}.</div>`}
+    </section>
+  </div>`;
+  const go = async (ym) => { m.month = ym; await loadMoney().catch((e) => banner(e.message)); renderMoney(); };
+  const shift = (n) => { const [y, mo] = m.month.split("-").map(Number); go(L.thisMonth(new Date(y, mo - 1 + n, 1, 12))); };
+  $("mPrev").onclick = () => shift(-1);
+  $("mNext").onclick = () => shift(1);
+  $("mNow").onclick = () => go(L.thisMonth());
+  $("mChart").onclick = async () => { m.chart = !m.chart; await loadMoney().catch((e) => banner(e.message)); renderMoney(); };
+  $("chart")?.addEventListener("click", (e) => { const b = e.target.closest("[data-month]"); if (b) go(b.dataset.month); });
+  document.querySelectorAll("[data-filter]").forEach((sel) => (sel.onchange = async () => {
+    m.filters[sel.dataset.filter] = sel.value || undefined;
+    await loadMoney().catch((e) => banner(e.message));
+    renderMoney();
+  }));
+  $("fClear").onclick = async () => { m.filters = {}; await loadMoney().catch((e) => banner(e.message)); renderMoney(); };
+}
+
+// ---------- Customers ----------
+async function loadCustomers() {
+  const c = state.customers;
+  c.list = await rpc("customers_report", { p_sort: c.sort, p_limit: 200, p_include_test: state.includeTest, p_search: c.search || null });
+}
+
+function renderCustomers() {
+  const c = state.customers;
+  if (c.open) return renderCustomer();
+  $("main").innerHTML = tabsHtml() + `<section class="panel stack">
+    <div class="filters">
+      <div class="fld"><label for="cSort">Sort</label><select id="cSort">${opts(L.CUSTOMER_SORTS, c.sort)}</select></div>
+      <div class="fld"><label for="cSearch">Search</label><input id="cSearch" type="search" value="${esc(c.search)}" placeholder="@handle, name or phone"></div>
+    </div>
+    ${c.list.length ? `<div class="tablewrap"><table class="sales">
+      <thead><tr><th>Customer</th><th>Phone</th><th class="n">Orders</th><th class="n">Total spent</th><th>Last order</th><th class="n">DM chats</th></tr></thead>
+      <tbody>${c.list.map((x) => `<tr class="clickable" data-cust="${x.id}">
+        <td><b>${esc(L.customerName(x))}</b>${x.ig_handle && x.name ? ` <span class="muted">@${esc(x.ig_handle)}</span>` : ""}${x.open_orders ? ` <span class="chip open">${x.open_orders} open</span>` : ""}${x.no_shows ? ` <span class="chip red">${x.no_shows} no-show</span>` : ""}</td>
+        <td>${esc(x.phone ?? "")}</td><td class="n">${x.orders}</td><td class="n">${L.money(x.total_spent)}</td>
+        <td>${esc(x.last_order ?? "")}</td><td class="n">${x.dm_conversations}</td>
+      </tr>`).join("")}</tbody></table></div>` : `<div class="empty">No customers${c.search ? " match that search" : " yet"}.</div>`}
+  </section>`;
+  $("cSort").onchange = async (e) => { c.sort = e.target.value; await loadCustomers().catch((x) => banner(x.message)); renderCustomers(); };
+  let t;
+  $("cSearch").oninput = (e) => {
+    clearTimeout(t);
+    t = setTimeout(async () => { c.search = e.target.value.trim(); await loadCustomers().catch((x) => banner(x.message)); renderCustomers(); $("cSearch").focus(); }, 350);
+  };
+  document.querySelectorAll("[data-cust]").forEach((row) => (row.onclick = async () => {
+    try { c.open = await rpc("customer_orders", { p_customer: row.dataset.cust }); } catch (x) { return banner(x.message); }
+    renderCustomers();
+  }));
+}
+
+function renderCustomer() {
+  const c = state.customers;
+  const x = c.open.customer;
+  $("main").innerHTML = tabsHtml() + `<section class="panel stack">
+    <div class="spread"><button class="link" id="cBack">‹ All customers</button></div>
+    <h3>${esc(L.customerName(x))}${x.ig_handle && x.name ? ` <span class="muted">@${esc(x.ig_handle)}</span>` : ""}</h3>
+    <div class="meta"><span>Orders <b>${x.orders}</b></span><span>Total spent <b>${L.money(x.total_spent)}</b></span><span>Last order <b>${esc(x.last_order ?? "—")}</b></span><span>DM chats <b>${x.dm_conversations}</b></span>${x.phone ? `<span>${esc(x.phone)}</span>` : ""}</div>
+    ${c.open.orders.length ? `<div class="tablewrap"><table class="sales"><thead><tr><th>Date</th><th>Status</th><th>Items</th><th class="n">Price</th><th>Payment</th><th>Fulfillment</th></tr></thead>
+      <tbody>${c.open.orders.map((o) => `<tr><td>${esc(o.date)}</td><td>${L.isRed(o.status) ? `<span class="redtag">${esc(L.statusOf(o.status).label)}</span>` : esc(L.statusOf(o.status).label)}</td>
+        <td>${o.items.map((i) => esc(L.itemLine(i))).join("<br>")}</td><td class="n">${L.money(o.revenue)}</td><td>${esc(L.labelOf(L.PAYMENTS, o.payment_method))}</td><td>${esc(L.labelOf(L.FULFILLMENT, o.fulfillment))}</td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty">No orders yet.</div>`}
+  </section>`;
+  $("cBack").onclick = () => { c.open = null; renderCustomers(); };
+}
+
+// ---------- Cash per person per day ----------
+async function loadCash() {
+  state.cash.report = await rpc("cash_report", { p_day: state.cash.day, p_include_test: state.includeTest });
+}
+
+function renderCash() {
+  const c = state.cash;
+  const people = c.report?.people ?? [];
+  $("main").innerHTML = tabsHtml() + `<section class="panel stack">
+    <div class="spread">
+      <h2>Cash collected</h2>
+      <div class="fld"><label for="cDay">Day</label><input id="cDay" type="date" value="${esc(c.day)}"></div>
+    </div>
+    <div class="cashgrid">${people.map((p) => `<div class="card">
+      <div class="spread"><span class="buyer">${esc(p.name)}</span><span class="price">${L.money(p.total)}</span></div>
+      ${p.bookings.length ? `<ul class="items">${p.bookings.map((b) => `<li>${L.money(b.revenue)} · ${esc(L.customerName(b.customer))} · ${b.items.map((i) => esc(L.itemLine(i))).join(", ")}</li>`).join("")}</ul>` : `<span class="muted">No cash collected.</span>`}
+    </div>`).join("")}</div>
+    <p class="muted small">Cash counts the moment a cash booking is marked Paid or Done, for whoever tapped it (or who was fulfilling, if the bot marked it). Day = Eastern time.</p>
+  </section>`;
+  $("cDay").onchange = async (e) => { c.day = e.target.value; await loadCash().catch((x) => banner(x.message)); renderCash(); };
+}
+
 // ---------- start ----------
 async function start() {
   let cfg;
@@ -317,6 +504,13 @@ async function start() {
   state.sb = createClient(cfg.supabaseUrl, cfg.anonKey);
   state.sb.channel("bookings").on("postgres_changes", { event: "*", schema: "public", table: "bookings" }, reloadSoon)
     .on("postgres_changes", { event: "*", schema: "public", table: "booking_items" }, reloadSoon).subscribe();
+  // Tabs: Calendar / Money / Customers / Cash.
+  $("main").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-tab]");
+    if (!t || t.dataset.tab === state.tab) return;
+    state.tab = t.dataset.tab;
+    openTab();
+  });
   state.sb.auth.onAuthStateChange(async (_e, session) => {
     if (!session) return renderLogin();
     state.me = await whoAmI();

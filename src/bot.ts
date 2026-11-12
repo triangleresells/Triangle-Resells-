@@ -161,6 +161,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const PAYMENT_ALERT_WINDOW_MS = 6 * 60 * 60_000;
 /** The same alert (same item / question) in one chat within this window is sent to Josh only once. */
 export const ALERT_REPEAT_WINDOW_MS = 12 * 60 * 60_000;
+/** A DM after this long quiet starts a new conversation (for the CRM's DM count). */
+export const NEW_CONVERSATION_MS = 6 * 60 * 60_000;
 
 const FILLER = new Set(["the", "a", "an", "for", "in", "of", "to", "and", "or", "is", "it", "they", "them", "customer", "buyer", "asked", "asks", "wants", "want", "about", "item", "not", "stock", "carried", "we", "do", "dont", "have", "size", "if", "on", "with", "their", "this", "that", "question", "any", "our"]);
 
@@ -241,6 +243,11 @@ export class Bot {
     const text = msg.text?.trim() || describeAttachments(msg);
     const images = await this.picturesFrom(msg);
     const caption = images.length && msg.text?.trim() ? `${text}\n[Customer sent ${images.length} picture(s)]` : text;
+    // A new conversation (first DM, or back after 6+ hours): counts toward "most active in DMs" in the CRM.
+    const lastFromThem = this.d.store.customer(userId).lastMessageAt;
+    if (this.d.crm && (!lastFromThem || this.now().getTime() - lastFromThem > NEW_CONVERSATION_MS)) {
+      void this.d.crm.recordDm(userId, this.d.store.customer(userId).username).catch((err) => console.error("[bot] CRM DM count failed:", (err as Error).message ?? err));
+    }
     this.d.store.addTurn(userId, { role: "user", text: caption, ...(images.length ? { images } : {}) });
     console.log(`[bot] DM from ${userId}${this.d.store.isPaused(userId) ? ` (bot is PAUSED in this chat until ${new Date(this.d.store.pausedUntil(userId)).toISOString()}, not replying)` : ""}`);
     if (!this.d.store.customer(userId).username) {
@@ -603,11 +610,22 @@ export class Bot {
   private async crmContext(userId: string): Promise<string> {
     if (!this.d.crm) return "";
     const timeout = new Promise<string>((r) => setTimeout(() => r(""), 3000).unref?.());
-    const lookup = this.d.crm.openBookings(userId).then(crmContextText).catch((err) => {
+    const lookup = this.d.crm.buyerContext(userId).then((c) => crmContextText(c.bookings, c.customer)).catch((err) => {
       console.error("[bot] CRM lookup failed:", (err as Error).message ?? err);
       return "";
     });
     return Promise.race([lookup, timeout]);
+  }
+
+  /**
+   * A message to a buyer from outside the chat (e.g. their tracking number, added in the CRM). Instagram only allows it
+   * within 24 hours of the buyer's last message: "window_closed" means a person has to send it.
+   */
+  async messageBuyer(userId: string, text: string): Promise<"sent" | "window_closed" | "off"> {
+    if (!this.isOn()) return "off";
+    if (!this.d.store.canMessage(userId)) return "window_closed";
+    await this.inOrder(userId, () => this.send(userId, text));
+    return "sent";
   }
 
   private async busy(): Promise<BusyBlock[]> {

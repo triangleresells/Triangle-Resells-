@@ -48,6 +48,7 @@ export interface CrmBookingFull extends CrmBooking {
   shipping_fee: number;
   location: string | null;
   assignee: string | null;
+  tracking_number: string | null;
   is_test: boolean;
   customer: { id: string; ig_user_id: string | null; ig_handle: string | null; name: string | null } | null;
   items: { brand: string | null; item: string; color: string | null; size: string; qty: number; unit_price: number | null }[];
@@ -59,7 +60,7 @@ export interface CrmEvent {
   kind: "created" | "updated" | "deleted";
   actor: string;
   booking: CrmBookingFull;
-  previous: { date: string; time: string | null; status: string } | null;
+  previous: { date: string; time: string | null; status: string; tracking_number?: string | null } | null;
   is_test: boolean;
 }
 
@@ -71,8 +72,22 @@ export interface Crm {
   events(after: number | null): Promise<{ events: CrmEvent[]; latest: number }>;
   /** This Instagram buyer's bookings that aren't finished. */
   openBookings(igUserId: string): Promise<CrmBookingFull[]>;
+  /** A new DM conversation with this buyer started. */
+  recordDm(igUserId: string, igHandle?: string): Promise<void>;
+  /** The buyer's history (orders, total spent) and their open bookings. */
+  buyerContext(igUserId: string): Promise<{ customer: CrmCustomerStats | null; bookings: CrmBookingFull[] }>;
   /** Sends what BOT STOCK says; gets back the counts to write on the sheet. */
   syncStock(rows: CrmStockRow[], isTest: boolean): Promise<{ sheet_edits_applied: number; writes: StockWrite[] }>;
+}
+
+export interface CrmCustomerStats {
+  orders: number;
+  open_orders: number;
+  total_spent: number;
+  last_order: string | null;
+  no_shows: number;
+  dm_conversations: number;
+  name: string | null;
 }
 
 /** One BOT STOCK row as the CRM wants it. */
@@ -137,6 +152,8 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     reschedule: async (id, date, time) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/reschedule`, { date, time: time ?? null })).booking,
     setStatus: async (id, status, reason) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/status`, { status, reason: reason ?? null })).booking,
     events: (after) => call("GET", `/events${after === null ? "" : `?after=${after}`}`),
+    recordDm: async (ig, handle) => void (await call("POST", "/customers/dm", { ig_user_id: ig, ig_handle: handle ?? null })),
+    buyerContext: (ig) => call("GET", `/customers/context?ig_user_id=${encodeURIComponent(ig)}`),
     syncStock: (rows, isTest) => call("POST", "/stock/sync", { rows, is_test: isTest }),
     openBookings: async (ig) => (await call<{ bookings: CrmBookingFull[] }>("GET", `/customers/bookings?ig_user_id=${encodeURIComponent(ig)}`)).bookings,
   };
