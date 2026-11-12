@@ -65,8 +65,9 @@ services:
         value: Triangle Resells
       - key: VENDOR_SITE_URL
         value: triangleresells.com
+      # Sonnet: in the retest it made far fewer critical mistakes than Haiku (23/25 vs 15/25 chats clean). ~5-6 cents a chat.
       - key: CLAUDE_MODEL
-        value: claude-haiku-5-5
+        value: claude-sonnet-5-5
       - key: IG_API_VERSION
         value: v23.0
       # How long the bot stays quiet in a chat after a handoff or after the team types in it.

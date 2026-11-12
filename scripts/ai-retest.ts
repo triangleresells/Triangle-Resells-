@@ -5,7 +5,7 @@
  *
  *   ANTHROPIC_API_KEY=... npx tsx scripts/ai-retest.ts 50 ai-retest-report.json
  *
- * Bot model: CLAUDE_MODEL (default claude-haiku-5-5, same as Render). Customer: claude-haiku-5-5. Judge: JUDGE_MODEL
+ * Bot model: CLAUDE_MODEL (default claude-sonnet-5-5, same as Render). Customer: claude-haiku-5-5. Judge: JUDGE_MODEL
  * (default claude-opus-5-5, a stricter grader). Prints the pass rate, top failures and the API cost.
  */
 import Anthropic from "@anthropic-ai/sdk";
@@ -65,7 +65,7 @@ interface Scenario {
 }
 
 const SCENARIOS: Scenario[] = [
-  { id: "zelle_pickup_screenshot", persona: "wants 2 black Chrome Hearts hats, pickup tomorrow at 5pm, pays Zelle. After getting the Zelle info, says 'sent it, here's the screenshot'", photo: true, expect: "Quotes from quote_order, says all sales final, submit_order with zelle and pickup, sends the exact Zelle info from submit_order ($ total to 919-480-7349 (TEST)) and asks for a screenshot. On the screenshot: calls payment_sent and says Josh will confirm. NEVER says paid/received/confirmed." },
+  { id: "zelle_pickup_screenshot", persona: "wants 2 black Chrome Hearts hats, pickup tomorrow at 5pm, pays Zelle. After getting the Zelle info, says 'sent it, here's the screenshot'", photo: true, expect: "Quotes from quote_order, says all sales final, submit_order with zelle and pickup, sends the exact Zelle info from submit_order ($ total to 919-480-7349) and asks for a screenshot. On the screenshot: calls payment_sent and says Josh will confirm. NEVER says paid/received/confirmed." },
   { id: "ship_full_address", persona: "lives in Atlanta GA, wants 1 YSL Y EDP shipped, pays Cash App; gives name and street first, then city/state/zip only when asked", expect: "Quotes $60 + $10 shipping via quote_order. Collects full name, street, city, state and zip before submit_order (ship_to filled). Sends the exact Cash App info from submit_order. Never offers cash for shipping." },
   { id: "cash_no_ride", persona: "in Garner, wants 1 Spider hoodie, wants to pay cash, says they don't have a car and asks if it can be dropped off", expect: "Offers pickup first. When they say no ride + cash, does NOT book a cash delivery: hands off to josh. Clean voice, one question at a time." },
   { id: "cash_pickup", persona: "wants 1 Bleu de Chanel EDP, pickup Saturday 2pm, cash", expect: "submit_order with cash + pickup. Says cash at pickup and that Josh sends the pickup spot. Never gives an address or a payment handle." },
@@ -194,7 +194,8 @@ async function main() {
       accountName: config.accountName, keywords: config.keywords, publicCommentReplies: [], humanPauseHours: 12,
       pricing: config.pricing, getBusy: async () => busy, now: () => new Date(clock.t),
       fetchImage: async () => ({ mediaType: "image/png", data: photo }),
-      payInfo: { zelle: "919-480-7349 (TEST)", cashApp: "$TestCashtag" },
+      // Real-looking pay info: a fake-looking cashtag made the bot call it a placeholder and tell buyers not to pay.
+      payInfo: { zelle: config.payZelle || "919-480-7349", cashApp: config.payCashApp || "$triangleresells" },
     });
 
     const quietRule = sc.quiet

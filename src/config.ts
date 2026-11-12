@@ -123,7 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     igVerifyToken: required(env, "IG_VERIFY_TOKEN"),
     igApiVersion: env.IG_API_VERSION?.trim() || "v23.0",
     anthropicApiKey: required(env, "ANTHROPIC_API_KEY"),
-    claudeModel: env.CLAUDE_MODEL?.trim() || "claude-haiku-5-5",
+    claudeModel: env.CLAUDE_MODEL?.trim() || "claude-sonnet-5-5",
     accountName,
     vendorSiteUrl,
     googleServiceAccountJson: optional(env.GOOGLE_SERVICE_ACCOUNT_JSON),
