@@ -117,3 +117,12 @@ describe("phase 1: the bot's API", () => {
     expect((await t.pg.query("select * from customers")).rows).toHaveLength(0);
   });
 });
+
+describe("phase 2: public config for the screens", () => {
+  it("serves only the public Supabase address and anon key, without needing the bot key", async () => {
+    const api = createApi({ db: t.asService, botApiKey: KEY, publicConfig: { supabaseUrl: "https://x.supabase.co", anonKey: "anon-public" } });
+    const r = await api(new Request("https://crm.test/api/config"));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ supabaseUrl: "https://x.supabase.co", anonKey: "anon-public" });
+  });
+});

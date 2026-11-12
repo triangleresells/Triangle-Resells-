@@ -11,6 +11,8 @@ import { DbError, type Db } from "./db.js";
 export interface ApiDeps {
   db: Db;
   botApiKey: string;
+  /** Served at /api/config for the screens. Public values only. */
+  publicConfig?: { supabaseUrl: string; anonKey: string };
   /** Where errors go (default console.error). Never given keys or request bodies. */
   log?: (line: string) => void;
 }
@@ -46,6 +48,8 @@ export function createApi(deps: ApiDeps) {
     const path = url.pathname.replace(/^\/(\.netlify\/functions\/api|api)/, "") || "/";
 
     if (req.method === "GET" && path === "/health") return json(200, { ok: true });
+    // The screens' public settings: the Supabase address and its PUBLIC (anon) key. Never the service-role key.
+    if (req.method === "GET" && path === "/config") return json(200, deps.publicConfig ?? {});
 
     const auth = req.headers.get("authorization") ?? "";
     const given = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
