@@ -1,0 +1,281 @@
+{
+  "_note": "SNAPSHOT of the BOT PRICES tab in the warehouse sheet (the live sheet wins; refresh this with npm run sync-sheet). Per-piece price by quantity, per price list. Every item, size and color on the same price list counts toward the tier. In-between quantities use the highest tier reached (12 pieces = the 10-piece rate). Prices are firm. Shipping and delivery below are not on the sheet.",
+  "tables": {
+    "ALO": {
+      "1": 70,
+      "2": 52,
+      "3": 50,
+      "4": 49,
+      "5": 48,
+      "6": 47,
+      "7": 46,
+      "8": 45,
+      "9": 44,
+      "10": 43,
+      "15": 42,
+      "20": 41,
+      "50": 40,
+      "100": 38,
+      "200": 36
+    },
+    "SPIDER HOODIES": {
+      "1": 80,
+      "2": 52,
+      "3": 50,
+      "4": 49,
+      "5": 48,
+      "6": 47,
+      "7": 46,
+      "8": 45,
+      "9": 44,
+      "10": 43,
+      "15": 42,
+      "20": 41,
+      "50": 40,
+      "100": 38,
+      "200": 36
+    },
+    "CHROME TEES": {
+      "1": 35,
+      "2": 32,
+      "3": 31,
+      "4": 30,
+      "5": 29,
+      "6": 28,
+      "7": 27,
+      "8": 26,
+      "9": 25,
+      "10": 24,
+      "15": 23,
+      "20": 23,
+      "50": 22,
+      "100": 22,
+      "200": 20
+    },
+    "BAPE TEES": {
+      "1": 40,
+      "2": 38,
+      "3": 36,
+      "4": 35,
+      "5": 34,
+      "6": 33,
+      "7": 33,
+      "8": 32,
+      "9": 32,
+      "10": 31,
+      "15": 30,
+      "20": 30,
+      "25": 29,
+      "30": 29,
+      "50": 28
+    },
+    "FRAGRANCES": {
+      "1": 60,
+      "2": 52,
+      "3": 50,
+      "4": 48,
+      "5": 45,
+      "6": 39,
+      "7": 38,
+      "8": 37,
+      "9": 36,
+      "10": 35,
+      "20": 33,
+      "50": 31,
+      "100": 28,
+      "200": 24
+    },
+    "AMIRI BUTTON-UPS": {
+      "1": 35,
+      "2": 34,
+      "3": 33,
+      "4": 32,
+      "5": 31,
+      "6": 30,
+      "7": 29,
+      "8": 28,
+      "9": 27,
+      "10": 26
+    },
+    "VALLEY HOODIES": {
+      "1": 60,
+      "2": 59,
+      "3": 58
+    },
+    "VALLEY TEES": {
+      "1": 35,
+      "2": 34,
+      "3": 33
+    },
+    "GIA SETS": {
+      "1": 50,
+      "2": 49,
+      "3": 48,
+      "4": 47,
+      "5": 46,
+      "6": 45,
+      "7": 44,
+      "8": 43,
+      "9": 42
+    },
+    "LULULEMON SETS": {
+      "1": 45,
+      "2": 44,
+      "3": 43,
+      "4": 42
+    },
+    "PURPLE JEANS": {
+      "1": 60,
+      "2": 59,
+      "3": 58,
+      "4": 57,
+      "5": 56,
+      "6": 55,
+      "7": 54
+    },
+    "SATOSHI TEES": {
+      "1": 35,
+      "2": 34,
+      "3": 33,
+      "4": 32,
+      "5": 31,
+      "6": 30
+    },
+    "GODSPEED TEES": {
+      "1": 35,
+      "2": 34
+    },
+    "ERD TEES": {
+      "1": 35
+    },
+    "CHROME HEARTS HATS": {
+      "1": 30,
+      "2": 29,
+      "3": 28,
+      "4": 27,
+      "5": 26,
+      "6": 25,
+      "7": 24,
+      "8": 23,
+      "9": 22,
+      "10": 21,
+      "11": 21,
+      "12": 21,
+      "13": 21,
+      "14": 21,
+      "15": 21,
+      "16": 21,
+      "17": 21,
+      "18": 21
+    },
+    "BAGS": {
+      "1": 50,
+      "2": 49,
+      "3": 48
+    },
+    "SUPREME HOODIES": {
+      "1": 100,
+      "2": 100,
+      "3": 100,
+      "4": 100,
+      "5": 75,
+      "10": 60,
+      "15": 55,
+      "20": 50,
+      "30": 45
+    },
+    "ESSENTIALS": {
+      "1": 60,
+      "2": 55,
+      "3": 52,
+      "4": 50,
+      "5": 48,
+      "6": 46,
+      "7": 44,
+      "8": 42,
+      "9": 41,
+      "10": 40,
+      "15": 37,
+      "20": 35,
+      "25": 34,
+      "30": 33,
+      "50": 30
+    }
+  },
+  "shipping": {
+    "_note": "UPS flat rate for 1 to 9 pieces. At 10+ pieces the buyer buys and sends their own label, so no shipping is charged.",
+    "flat": 10,
+    "buyerLabelAtPieces": 10
+  },
+  "delivery": {
+    "_note": "Local delivery fee by one-way drive time from the warehouse. Nothing over 60 min: offer UPS shipping or meeting halfway. Area minutes are ESTIMATES of the one-way drive from the warehouse (Ample Storage, SE Raleigh 27610); Josh to correct any that are off. Unknown towns are never guessed.",
+    "bands": [
+      {
+        "maxMinutes": 20,
+        "fee": 5
+      },
+      {
+        "maxMinutes": 30,
+        "fee": 10
+      },
+      {
+        "maxMinutes": 45,
+        "fee": 15
+      },
+      {
+        "maxMinutes": 60,
+        "fee": 20
+      }
+    ],
+    "maxMinutes": 60,
+    "areas": {
+      "Raleigh": 15,
+      "Garner": 10,
+      "Knightdale": 15,
+      "Cary": 20,
+      "Clayton": 20,
+      "Wendell": 20,
+      "Morrisville": 25,
+      "RTP": 25,
+      "Rolesville": 25,
+      "Apex": 25,
+      "Holly Springs": 25,
+      "Fuquay-Varina": 25,
+      "Zebulon": 25,
+      "Durham": 30,
+      "Wake Forest": 30,
+      "Smithfield": 30,
+      "Selma": 30,
+      "Angier": 30,
+      "Youngsville": 35,
+      "Benson": 35,
+      "Four Oaks": 35,
+      "Chapel Hill": 40,
+      "Carrboro": 40,
+      "Creedmoor": 40,
+      "Franklinton": 40,
+      "Butner": 40,
+      "Lillington": 40,
+      "Dunn": 40,
+      "Louisburg": 45,
+      "Hillsborough": 45,
+      "Pittsboro": 45,
+      "Sanford": 45,
+      "Wilson": 45,
+      "Goldsboro": 45,
+      "Oxford": 50,
+      "Mebane": 50,
+      "Henderson": 55,
+      "Rocky Mount": 55,
+      "Burlington": 60,
+      "Roxboro": 60,
+      "Fayetteville": 65,
+      "Greensboro": 80,
+      "Greenville": 80,
+      "High Point": 90,
+      "Winston-Salem": 100,
+      "Wilmington": 120,
+      "Charlotte": 150
+    }
+  }
+}

@@ -5,6 +5,8 @@ export interface HandoffAlert {
   summary: string;
   userId: string;
   username?: string;
+  /** False for FYI alerts (like a paid order) where the bot keeps running in the chat. */
+  paused?: boolean;
 }
 
 export type Notifier = (alert: HandoffAlert) => Promise<void>;
@@ -17,7 +19,7 @@ export function formatAlert(a: HandoffAlert): string {
     `Customer: ${who}${a.username ? ` (https://instagram.com/${a.username})` : ""}`,
     `Why: ${a.reason}`,
     `Summary: ${a.summary}`,
-    `The bot is paused in this chat. Reply from the Instagram inbox.`,
+    a.paused === false ? `FYI only, the bot is still running in this chat.` : `The bot is paused in this chat. Reply from the Instagram inbox.`,
   ].join("\n");
 }
 

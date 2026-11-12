@@ -1,9 +1,9 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, toApiMessages } from "../src/ai.js";
+import { buildSystemBlocks, buildSystemPrompt, claimsSaved, toApiMessages } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
-import { formatInventoryCsv, InventorySheet } from "../src/inventory.js";
+import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
 import { isBareKeyword, matchKeyword } from "../src/keywords.js";
 import { isValidSignature } from "../src/signature.js";
 import { loadConfig } from "../src/config.js";
@@ -31,23 +31,18 @@ describe("keywords", () => {
   });
 });
 
-describe("inventory sheet", () => {
-  it("keeps the header and drops blank rows", () => {
-    const csv = 'Item,Price,In stock\nBlack hoodie,$75,Yes\n,,\n"Perfume, 100ml",$60,No\n';
-    expect(formatInventoryCsv(csv)).toBe("Item | Price | In stock\nBlack hoodie | $75 | Yes\nPerfume, 100ml | $60 | No");
+describe("warehouse sheet tabs", () => {
+  it("finds the header under the title row and reads stock rows", () => {
+    const csv = 'BOT STOCK - read me,,,\nCategory,Brand,Item,Color,Size,Qty,Price List,Status,Notes\nHoodie,Alo,Alo Hoodie,Black,XS,2.0,ALO,FOR SALE,\n,,,,,,,,\nFragrance,Baccarat,Baccarat Rouge,,,~60,,FREEBIE,"Never sell, 1 free"\n';
+    const rows = parseStockCsv(csv);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ item: "Alo Hoodie", qty: 2, priceList: "ALO", status: "for_sale" });
+    expect(rows[1]).toMatchObject({ qty: 60, status: "freebie", notes: "Never sell, 1 free" });
   });
 
-  it("caches and survives a failed fetch", async () => {
-    let calls = 0;
-    const fake = (async () => {
-      calls++;
-      if (calls > 1) throw new Error("down");
-      return new Response("Item,Price\nTee,$45\n");
-    }) as typeof fetch;
-    const sheet = new InventorySheet("https://example.com/sheet.csv", fake);
-    expect(await sheet.get()).toContain("Tee | $45");
-    expect(await sheet.get()).toContain("Tee | $45");
-    expect(calls).toBe(1);
+  it("reads per-piece prices, with $ signs, and works from Total when Each is blank", () => {
+    const csv = "BOT PRICES,,,,\nPrice List,Pieces,Total,Each,Notes\nALO,1,$70.00,$70.00,\nALO,2,104,,\n,,,,\n";
+    expect(parsePricesCsv(csv)).toEqual({ ALO: { "1": 70, "2": 52 } });
   });
 });
 
@@ -66,8 +61,21 @@ describe("ai helpers", () => {
   });
 
   it("puts the live sheet in the prompt only when there is one", () => {
-    expect(buildSystemPrompt("I", "KB", "")).not.toContain("LIVE INVENTORY");
-    expect(buildSystemPrompt("I", "KB", "Item | Price")).toContain("LIVE INVENTORY");
+    expect(buildSystemPrompt("I", "KB", "")).not.toContain("LIVE STOCK");
+    expect(buildSystemPrompt("I", "KB", "Item | Price")).toContain("LIVE STOCK");
+  });
+
+  it("caches the instructions, knowledge base and sheet, and keeps the clock and schedule after the cache", () => {
+    const now = new Date("2026-11-12T19:00:00Z");
+    const [head, tail] = buildSystemBlocks("I", "KB", "Item | Price", now, "Fri 4 PM taken");
+    expect(head.cache_control).toEqual({ type: "ephemeral" });
+    expect(head.text).toContain("LIVE STOCK");
+    expect(head.text).not.toMatch(/TODAY|PICKUP SCHEDULE/);
+    expect(tail.cache_control).toBeUndefined();
+    expect(tail.text).toContain("PICKUP SCHEDULE");
+    expect(tail.text).toContain("2:00 PM");
+    // A minute later only the uncached block changes.
+    expect(buildSystemBlocks("I", "KB", "Item | Price", new Date(now.getTime() + 60_000))[0].text).toBe(head.text);
   });
 });
 
@@ -108,4 +116,25 @@ describe("misc", () => {
   it("refuses to start without required secrets", () => {
     expect(() => loadConfig({})).toThrow(/IG_APP_SECRET/);
   });
+});
+
+describe("claimsSaved (bot says they're on the list)", () => {
+  it.each([
+    "I've saved you on the list for an XL and a L.",
+    "I also just saved your Chrome Hearts hoodie request",
+    "Bet, I've got you down for one Black Medium at $100.",
+    "I've saved your interest in a L.",
+    "You're on the restock list now, I'll DM you first when it lands.",
+    "Got you down for 2 in M 🔥",
+    "I'll put you down for the black L.",
+  ])("catches %s", (t) => expect(claimsSaved(t)).toBe(true));
+
+  it.each([
+    "Want me to put you down for one?",
+    "Got you, Jordan. Cash App works.",
+    "Restock is coming soon, I'll DM you first when it lands.",
+    "I have it in XL for $35. Pickup or shipped?",
+    "Should I save you a spot on the list?",
+    "Locked in, Jordan. Send the Cash App payment to $X for $70.",
+  ])("ignores %s", (t) => expect(claimsSaved(t)).toBe(false));
 });
