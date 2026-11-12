@@ -495,16 +495,14 @@ export class OrderDesk {
   /** Stripe said it's paid: stock off, PAID label, logged as a sale. (Calendar + alert happen in handlePaidOrder.) */
   async stripePaid(userId: string, lines: OrderLine[], summary: string, total: number, when: string, fulfillment: "pickup" | "delivery" | "ship" = "pickup"): Promise<OrderLabel> {
     await this.takeStock(lines, -1, userId);
-    const label = this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment, cost: await this.costOf(lines) });
-    await this.logSale(label);
-    return label;
+    // Paid is not fulfilled: it goes in the sales tracker when it's Done (Josh approves that).
+    return this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment, cost: await this.costOf(lines) });
   }
 
   /** Josh saw the Cash App / Zelle money (or got the cash): PAID + logged. */
   async markPaid(id: string): Promise<boolean> {
-    if (!this.d.store.markLabelPaid(id)) return false;
-    await this.logSale(this.d.store.getLabel(id)!);
-    return true;
+    // Only marks it paid. The sale goes in the tracker when it's Done (fulfilled, and Josh approved).
+    return this.d.store.markLabelPaid(id);
   }
 
   /** Order fulfilled: log it if it wasn't yet (cash), then clear the label. */

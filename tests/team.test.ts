@@ -142,3 +142,42 @@ describe("team notifications -> Discord", async () => {
     expect(await new NotifySync({ crm, store: store2, post }).tick()).toBe(0);
   });
 });
+
+describe("10:30 PM wrap-up", async () => {
+  const { WrapUp, wrapUpText } = await import("../src/team/wrapup.js");
+  const { Store } = await import("../src/store.js");
+  const b = (status: string, extra: Record<string, unknown> = {}) => ({
+    id: Math.random().toString(), date: "2026-11-12", time: "16:00:00", status, payment_method: "cash", fulfillment: "pickup" as const, sale_price: 60,
+    delivery_fee: 0, shipping_fee: 0, location: null, assignee: "Chema", tracking_number: null, is_test: false,
+    customer: { id: "c", ig_user_id: null, ig_handle: "jay", name: null }, items: [{ brand: null, item: "Essentials Hoodie", color: "Black", size: "M", qty: 1, unit_price: 60 }],
+    ...extra,
+  });
+  const day = [b("done"), b("done", { sale_price: 120.5 }), b("booked"), b("paid_needs_check", { assignee: "Diego", time: "18:30:00", customer: { id: "d", ig_user_id: null, ig_handle: null, name: "Mike" } }), b("no_show"), b("booked", { is_test: true })];
+
+  it("says what's done and lists what's still open (test bookings left out)", () => {
+    expect(wrapUpText("2026-11-12", day)).toBe([
+      "🌙 Wrap-up for Thu, Nov 12: 2 sales done, $180.50.",
+      "Still open (2): tell the assistant which were fulfilled so they go in revenue and the tracker, or mark them No-show:",
+      "- @jay 4:00 PM pickup, 1x Essentials Hoodie Black M, $60 (Chema)",
+      "- Mike 6:30 PM pickup, 1x Essentials Hoodie Black M, $60 (Diego)",
+      "Cancelled / no-show: 1.",
+    ].join("\n"));
+    expect(wrapUpText("2026-11-12", [b("booked", { is_test: true })])).toBeNull();
+  });
+
+  it("posts once, at or after 10:30 PM Eastern, and not again after a restart", async () => {
+    const posted: string[] = [];
+    let now = new Date("2026-11-13T03:00:00Z"); // 10:00 PM ET on Nov 12
+    const store = new Store();
+    const crm = { bookingsBetween: async () => day };
+    const w = new WrapUp({ crm, store, post: async (t) => void posted.push(t), now: () => now });
+    expect(await w.tick()).toBe(false);
+    now = new Date("2026-11-13T03:31:00Z"); // 10:31 PM ET
+    expect(await w.tick()).toBe(true);
+    expect(await w.tick()).toBe(false);
+    const restarted = new Store();
+    restarted.restore(store.snapshot());
+    expect(await new WrapUp({ crm, store: restarted, post: async (t) => void posted.push(t), now: () => now }).tick()).toBe(false);
+    expect(posted).toHaveLength(1);
+  });
+});

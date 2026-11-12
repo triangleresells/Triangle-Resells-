@@ -100,6 +100,8 @@ export interface StoreSnapshot {
   crmCursor?: number;
   /** Last team notification the bot posted. */
   notifyCursor?: number;
+  /** Last day the end-of-day wrap-up was posted. */
+  wrapUpDay?: string;
 }
 
 const MAX_TURNS = 20;
@@ -120,6 +122,7 @@ export class Store {
   /** Last CRM change applied by the bot. undefined = never synced (start from the newest). */
   private cursor: number | undefined;
   private nCursor: number | undefined;
+  private wrapDay: string | undefined;
   /** Called after anything worth saving changes (the file saver listens here). */
   onChange?: () => void;
 
@@ -216,11 +219,21 @@ export class Store {
       labels: this.labels,
       ...(this.cursor !== undefined ? { crmCursor: this.cursor } : {}),
       ...(this.nCursor !== undefined ? { notifyCursor: this.nCursor } : {}),
+      ...(this.wrapDay ? { wrapUpDay: this.wrapDay } : {}),
     };
   }
 
   crmCursor(): number | undefined {
     return this.cursor;
+  }
+
+  wrapUpDay(): string | undefined {
+    return this.wrapDay;
+  }
+
+  setWrapUpDay(day: string): void {
+    this.wrapDay = day;
+    this.changed();
   }
 
   notifyCursor(): number | undefined {
@@ -243,6 +256,7 @@ export class Store {
     if (!snap || snap.version !== 1) return;
     if (typeof snap.crmCursor === "number") this.cursor = snap.crmCursor;
     if (typeof snap.notifyCursor === "number") this.nCursor = snap.notifyCursor;
+    if (typeof snap.wrapUpDay === "string") this.wrapDay = snap.wrapUpDay;
     for (const c of snap.convos ?? []) {
       this.convos.set(c.userId, { turns: c.turns ?? [], pausedUntil: c.pausedUntil ?? 0, lastActivity: c.lastActivity ?? this.now(), recentBotTexts: [], lastBotAt: 0, pendingLink: c.pendingLink });
     }

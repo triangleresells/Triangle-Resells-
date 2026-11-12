@@ -6,6 +6,7 @@ import { assistantHandler } from "./team/handler.js";
 import { CrmSync } from "./crmsync.js";
 import { StockSync } from "./stocksync.js";
 import { NotifySync } from "./team/notify.js";
+import { WrapUp } from "./team/wrapup.js";
 import { HookWriter, tomorrowET } from "./team/hooks.js";
 import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
@@ -97,6 +98,9 @@ setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 if (crm) {
   const notifySync = new NotifySync({ crm, store, post: webhookText(config.handoffWebhookUrl) });
   setInterval(() => void notifySync.tick(), 20 * 1000).unref();
+  // 10:30 PM: what got done today and what's still open (the team approves what was fulfilled).
+  const wrapUp = new WrapUp({ crm, store, post: webhookText(config.handoffWebhookUrl) });
+  setInterval(() => void wrapUp.tick(), 5 * 60 * 1000).unref();
   const hooks = new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm);
   let filled = "";
   const fillTomorrow = async () => {

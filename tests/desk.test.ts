@@ -122,10 +122,25 @@ describe("order desk", () => {
     expect(alerts[0].reason).toContain("BOOKED $58");
     expect(await desk.markPaid(label.id)).toBe(true);
     expect(await desk.markPaid(label.id)).toBe(false);
-    const logged = f.writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"));
-    expect(logged).toHaveLength(1);
-    expect(await desk.cancel(label.id)).toEqual({ ok: true, wasLogged: true });
+    // Paid is not fulfilled: nothing in the sales tracker yet.
+    expect(f.writes.filter((w) => w.sheetId === "T")).toHaveLength(0);
+    expect(await desk.cancel(label.id)).toEqual({ ok: true, wasLogged: false });
     expect(f.rows[2][5]).toBe("5");
+  });
+});
+
+describe("the sales tracker gets a sale when it's Done (fulfilled), once", () => {
+  it("Done logs it; a second Done does nothing", async () => {
+    const writes: { range: string; sheetId?: string }[] = [];
+    const io = { tabs: async () => [[]], ranges: async () => [[]], write: async (d: { range: string }[], sheetId?: string) => void writes.push(...d.map((x) => ({ ...x, sheetId }))) };
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "Triangle Resells", sales: new SalesLog(io as any, "T"), now: () => new Date("2026-11-14T20:00:00Z") });
+    const label = store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x Chrome Hearts Hat Black", total: 35, payment: "cash", when: "pickup 2026-11-14 3:00 PM", fulfillment: "pickup" });
+    await desk.markPaid(label.id);
+    expect(writes).toHaveLength(0);
+    expect(await desk.done(label.id)).toBe(true);
+    expect(writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"))).toHaveLength(1);
+    expect(await desk.done(label.id)).toBe(false);
   });
 });
 

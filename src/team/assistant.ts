@@ -87,13 +87,13 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "log_sale",
     description:
-      "Book a sale in the CRM: an in-person, text or referral sale that already happened (status done), or one coming up (status booked). Stock comes off automatically; it's refused if the pieces aren't free to sell.",
+      "Book a sale in the CRM (in person, text, referral): stock comes off automatically, refused if the pieces aren't free to sell. It starts as booked or paid; if it already happened, follow with mark_fulfilled (approval) to put it in revenue and the tracker.",
     input_schema: {
       type: "object",
       properties: {
         date: DATE,
         time: { type: "string", description: "HH:MM 24h, optional" },
-        status: { type: "string", enum: ["booked", "paid", "done"], description: "done = it already happened and was paid." },
+        status: { type: "string", enum: ["booked", "paid"], description: "booked (or paid if the money is in). Even a sale that already happened is logged booked: then mark_fulfilled, which needs their approval." },
         customer: { type: "object", properties: { ig_handle: { type: "string" }, name: { type: "string" }, phone: { type: "string" } } },
         items: { type: "array", items: ITEM, minItems: 1 },
         sale_price: { type: "number", description: "Item total, only if it differs from the sum of unit prices (a bundle deal)." },
@@ -135,11 +135,21 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "set_status",
-    description: "Booked / Paid / Done / No-show / Cancelled. Cancelled and No-show put the pieces back in stock.",
+    description: "Booked / Paid / No-show / Cancelled. Cancelled and No-show put the pieces back in stock. For Done (fulfilled) use mark_fulfilled.",
     input_schema: {
       type: "object",
-      properties: { id: { type: "string" }, status: { type: "string", enum: ["booked", "paid", "done", "no_show", "cancelled"] }, reason: { type: "string" } },
+      properties: { id: { type: "string" }, status: { type: "string", enum: ["booked", "paid", "no_show", "cancelled"] }, reason: { type: "string" } },
       required: ["id", "status"],
+    },
+  },
+  {
+    name: "mark_fulfilled",
+    description:
+      "Mark pickups / deliveries / shipments as Done (fulfilled): that puts them in revenue and the sales tracker, so it needs approval. Call it WITHOUT approval_code first: you get a preview and a code. Show the preview and ask them to reply exactly \"yes\". Only a plain yes counts; then call it again with the same ids and the approval_code.",
+    input_schema: {
+      type: "object",
+      properties: { ids: { type: "array", items: { type: "string" }, minItems: 1 }, approval_code: { type: "string" } },
+      required: ["ids"],
     },
   },
   {
@@ -275,9 +285,10 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
 ];
 
 const WRITE_SUMMARY: Record<string, (input: any, out: any) => string> = {
-  log_sale: (i, o) => `Booked ${o?.status === "done" ? "a done sale" : "a sale"} for ${o?.date}: ${(o?.items ?? []).map((x: any) => `${x.qty}x ${x.item}`).join(", ")}, $${o?.sale_price}`,
+  log_sale: (i, o) => `Booked a sale for ${o?.date}: ${(o?.items ?? []).map((x: any) => `${x.qty}x ${x.item}`).join(", ")}, $${o?.sale_price}`,
   change_booking: (i) => `Changed booking ${String(i.id).slice(0, 8)}: ${Object.keys(i.changes ?? {}).join(", ")}`,
   set_status: (i) => `Marked booking ${String(i.id).slice(0, 8)} ${i.status}`,
+  mark_fulfilled: (i, o) => (o?.marked ? `Marked ${o.marked} sale(s) Done: in revenue and the sales tracker` : ""),
   log_restock: (i) => `Logged incoming restock "${i.name}" (${(i.items ?? []).length} lines)`,
   receive_restock: () => `Received a restock: pieces added to stock`,
   tell_bot: (i) => `Told the DM bot: "${String(i.note).slice(0, 80)}"`,
@@ -289,8 +300,17 @@ const WRITE_SUMMARY: Record<string, (input: any, out: any) => string> = {
 };
 
 /** Runs one tool as the person. Errors come back as text so the AI can explain or fix them. */
-async function runTool(db: UserDb, name: string, input: any, extra: AssistantExtras): Promise<unknown> {
+/** Who's talking, which message this is, and what they just said (an approval only counts if it's exactly "yes"). */
+export interface ApprovalCtx {
+  who: string;
+  turn: number;
+  lastUserText: string;
+}
+
+async function runTool(db: UserDb, name: string, input: any, extra: AssistantExtras, gate: ApprovalGate, ctx: ApprovalCtx): Promise<unknown> {
   switch (name) {
+    case "mark_fulfilled":
+      return gate.markFulfilled(db, input.ids ?? [], input.approval_code, ctx);
     case "video_ideas":
       return db.rpc("videos_for_day", { p_day: input.day, p_is_test: false });
     case "add_video_idea":
@@ -301,12 +321,14 @@ async function runTool(db: UserDb, name: string, input: any, extra: AssistantExt
       if (!extra.fillVideoIdeas) throw new Error("the hook writer isn't switched on");
       return { added: await extra.fillVideoIdeas(input.day) };
     case "log_sale":
+      if (input.status === "done") throw new Error("log it as booked, then mark_fulfilled (Done needs their approval)");
       return db.rpc("create_booking", { p: { source: "in_person", ...input } });
     case "find_bookings":
       return db.rpc("bookings_between", { p_from: input.from, p_to: input.to, p_include_test: false });
     case "change_booking":
       return db.rpc("update_booking", { p_id: input.id, p: input.changes ?? {} });
     case "set_status":
+      if (input.status === "done") throw new Error("Done needs approval: use mark_fulfilled");
       return db.rpc("set_booking_status", { p_id: input.id, p_status: input.status, p_reason: input.reason ?? null });
     case "sales_report":
       return db.rpc("sales_report", { p_from: input.from, p_to: input.to, p_filters: input.filters ?? {}, p_include_test: false });
@@ -343,9 +365,10 @@ export function assistantSystem(who: string, today: string, weekday: string): st
   return `You are the Triangle Resells team assistant. You're talking with ${who} (a co-owner; the team is Josh, Chema and Diego, all full access). Today is ${weekday} ${today} (Eastern time). The business: a resale shop near Raleigh/Wendell NC selling streetwear and cologne through Instagram DMs (accounts Triangle Resells, Triangle Scales, Triangle Sales), in person, by text and referrals.
 
 What you do, with your tools (they act as ${who} and everything is logged under their name and can be undone):
-- Log sales they tell you about (log_sale). In-person sale that already happened and was paid = status done, source in_person, today's date unless they say otherwise. A future one = booked. Cash is pickup only.
+- Log sales they tell you about (log_sale): source in_person (or text / referral), today's date unless they say otherwise. Cash is pickup only. If it already happened, preview it for Done right away with mark_fulfilled so they can approve it.
 - Read restock screenshots and log them (log_restock): read EVERY item, color, size and quantity; if a part is unreadable, say which. Mark restocks received when they say it landed (receive_restock).
 - Answer questions with exact numbers from the reports (sales_report, monthly_report, cash_report, customers, stock, find_bookings). Revenue = Done sales, delivery fees not included.
+- Mark sales fulfilled (mark_fulfilled) when they tell you a pickup / delivery / shipment happened: preview it, then ask them to reply exactly "yes". Only a plain yes approves. If they answer anything else ("yeah", "ok", a question), it is NOT approved: nothing goes in revenue or the tracker; ask again.
 - Change bookings: reschedule, status, who fulfills, tracking numbers (the buyer gets the tracking in the DMs automatically).
 - Video ideas per account (video_ideas, add_video_idea, update_video_idea, generate_video_ideas): mark them filmed / posted, save the post link and views.
 - Pass info to the Instagram DM bot (tell_bot): restock dates, closures, new rules. It uses it with buyers from now on.
@@ -360,6 +383,51 @@ Rules:
 
 const MAX_ROUNDS = 8;
 
+/** Josh's rule: only a plain "yes" approves (any capitals; a period or ! at the end is fine). "yeah", "ok", "yes but..." don't. */
+export const isYes = (text: string) => /^yes[.!]*$/i.test(text.trim());
+
+/**
+ * Josh's rule: a sale goes in revenue and the tracker (Done) only after he replies "yes". The first mark_fulfilled call
+ * only previews and hands out a code; the code works only in a LATER message from the same person, for the same bookings,
+ * within 30 minutes, AND only if that message is exactly "yes". So the AI can't approve on its own, ever.
+ */
+export class ApprovalGate {
+  private codes = new Map<string, { ids: string[]; who: string; turn: number; at: number }>();
+  constructor(private now: () => number = Date.now) {}
+
+  async markFulfilled(db: UserDb, ids: string[], code: string | undefined, ctx: ApprovalCtx): Promise<unknown> {
+    const key = [...new Set(ids)].sort().join(",");
+    if (!key) throw new Error("which bookings?");
+    if (!code) {
+      const preview: string[] = [];
+      for (const id of ids) {
+        const b = await db.rpc<any>("get_booking", { p_id: id });
+        const who = b.customer?.ig_handle ? `@${b.customer.ig_handle}` : (b.customer?.name ?? "buyer");
+        const items = (b.items ?? []).map((i: any) => `${i.qty}x ${[i.item, i.color, i.size === "One Size" ? "" : i.size].filter(Boolean).join(" ")}`).join(", ");
+        preview.push(`${who}, ${b.date}${b.time ? ` ${String(b.time).slice(0, 5)}` : ""} ${b.fulfillment}, ${items}, $${b.sale_price} ${String(b.payment_method).replace("_", " ")}, status ${b.status}, fulfilling ${b.assignee ?? "nobody"}`);
+      }
+      const fresh = Math.random().toString(36).slice(2, 6).toUpperCase();
+      this.codes.set(fresh, { ids: key.split(","), who: ctx.who, turn: ctx.turn, at: this.now() });
+      return {
+        needs_approval: true,
+        approval_code: fresh,
+        preview,
+        next: 'Show this list and ask them to reply exactly "yes" to mark it Done. Only a plain yes approves; anything else is NOT approval. When they reply yes, call mark_fulfilled again with the same ids and this approval_code.',
+      };
+    }
+    const a = this.codes.get(code.trim().toUpperCase());
+    if (!a || a.who !== ctx.who || a.ids.join(",") !== key) throw new Error("that approval code doesn't match these bookings: preview again");
+    if (a.turn >= ctx.turn) throw new Error("they haven't approved yet: show the preview and wait for their yes");
+    if (!isYes(ctx.lastUserText)) {
+      throw new Error(`not approved: their reply wasn't "yes", so nothing was marked Done. Ask them to reply exactly "yes" if it was fulfilled.`);
+    }
+    if (this.now() - a.at > 30 * 60_000) throw new Error("the approval expired: preview again");
+    this.codes.delete(code.trim().toUpperCase());
+    for (const id of a.ids) await db.rpc("set_booking_status", { p_id: id, p_status: "done", p_reason: null });
+    return { marked: a.ids.length };
+  }
+}
+
 /** Abilities that live on the bot rather than in the database. */
 export interface AssistantExtras {
   /** Writes hooks to fill a day up to the goals; returns how many it added. */
@@ -371,7 +439,11 @@ export class TeamAssistant {
     private client: Messages,
     private model: string,
     private extra: AssistantExtras = {},
+    private gate = new ApprovalGate(),
   ) {}
+
+  /** Counts messages, so an approval code is only good in a later one. */
+  private turn = 0;
 
   async chat(db: UserDb, who: string, history: AssistantMessage[], now = new Date()): Promise<AssistantResult> {
     const today = now.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
@@ -385,6 +457,9 @@ export class TeamAssistant {
     }));
     const changes: string[] = [];
     let reply = "";
+    // Their latest message: an approval only counts if it's exactly "yes".
+    const lastUserText = [...history].reverse().find((m) => m.role === "user")?.text ?? "";
+    const ctx: ApprovalCtx = { who, turn: ++this.turn, lastUserText };
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const res = await this.client.messages.create({
         model: this.model,
@@ -401,10 +476,11 @@ export class TeamAssistant {
       for (const u of uses) {
         let content: string;
         try {
-          const out = await runTool(db, u.name, u.input, this.extra);
+          const out = await runTool(db, u.name, u.input, this.extra, this.gate, ctx);
           content = JSON.stringify(out ?? null).slice(0, 60_000);
           const sum = WRITE_SUMMARY[u.name];
-          if (sum) changes.push(sum(u.input, out));
+          const line = sum?.(u.input, out);
+          if (line) changes.push(line);
         } catch (err) {
           content = `Error: ${(err as Error).message}`;
         }

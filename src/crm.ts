@@ -72,6 +72,8 @@ export interface Crm {
   events(after: number | null): Promise<{ events: CrmEvent[]; latest: number }>;
   /** This Instagram buyer's bookings that aren't finished. */
   openBookings(igUserId: string): Promise<CrmBookingFull[]>;
+  /** Every booking between two days (inclusive), with customer and items. */
+  bookingsBetween(from: string, to: string): Promise<CrmBookingFull[]>;
   /** Team notifications after id `after` (null = none yet, just where to start). */
   notifications(after: number | null): Promise<{ notifications: { id: number; kind: string; text: string; is_test: boolean }[]; latest: number }>;
   /** A day's video ideas and the goals per account. */
@@ -181,6 +183,7 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     reschedule: async (id, date, time) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/reschedule`, { date, time: time ?? null })).booking,
     setStatus: async (id, status, reason) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/status`, { status, reason: reason ?? null })).booking,
     events: (after) => call("GET", `/events${after === null ? "" : `?after=${after}`}`),
+    bookingsBetween: async (from, to) => (await call<{ bookings: CrmBookingFull[] }>("GET", `/bookings?from=${from}&to=${to}`)).bookings,
     notifications: (after) => call("GET", `/notifications${after === null ? "" : `?after=${after}`}`),
     videosForDay: (day) => call("GET", `/videos/day?day=${day}`),
     recentHooks: async () => (await call<{ hooks: string[] }>("GET", "/videos/recent-hooks")).hooks,
