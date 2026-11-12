@@ -440,7 +440,8 @@ export class ClaudeAgent implements ReplyEngine {
     }
     if (text && !handoff && interests.length === 0 && claimsSaved(text)) {
       // The reply tells the buyer they're saved / on the list, but save_interest wasn't called, so Josh would never
-      // see it. Make the save happen (forced tool call) so the promise in the reply is true.
+      // see it. Make the save happen so the promise in the reply is true. Only save_interest is offered (Sonnet 5.5
+      // rejects tool_choice "tool"/"any", so the call can't be forced that way).
       try {
         const res = await this.client.messages.create({
           model: this.model,
@@ -449,10 +450,9 @@ export class ClaudeAgent implements ReplyEngine {
           messages: [
             ...messages,
             { role: "assistant", content: text },
-            { role: "user", content: "(Note from the system, not the customer: your reply says they're saved / on the list, but you never called save_interest. Call it now with exactly what they want: brand, item, color, size, how many.)" },
+            { role: "user", content: "(Note from the system, not the customer: your reply says they're saved / on the list, but you never called save_interest. Call save_interest now with exactly what they want: brand, item, color, size, how many. Don't write anything else.)" },
           ],
-          tools: toolsFor(tools),
-          tool_choice: { type: "tool", name: "save_interest" },
+          tools: toolsFor(tools).filter((t) => t.name === "save_interest"),
         });
         for (const b of res.content) {
           if (b.type === "tool_use" && b.name === "save_interest" && (b.input as any)?.item) interests.push(String((b.input as any).item));
