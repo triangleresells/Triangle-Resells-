@@ -30,7 +30,7 @@ export interface OrderTools {
     payment: PaymentMethod,
     shipTo?: ShipTo,
   ): Promise<
-    | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string }
+    | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string; alreadyBooked?: boolean }
     | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
   >;
   /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
@@ -264,6 +264,13 @@ export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
 }
 
 const MAX_ROUNDS = 5;
+/**
+ * Current models think before answering and that thinking counts toward max_tokens. At 500 the thinking used
+ * the whole budget, so replies came back empty or cut off mid tool call and the chat got handed to the team.
+ * DM length is set by the instructions (and splitMessage), not by this cap. Low effort keeps the thinking short.
+ */
+const MAX_TOKENS = 4000;
+const EFFORT = { effort: "low" } as const;
 
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
@@ -308,7 +315,8 @@ export class ClaudeAgent implements ReplyEngine {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const res = await this.client.messages.create({
         model: this.model,
-        max_tokens: 500,
+        max_tokens: MAX_TOKENS,
+        output_config: EFFORT,
         system,
         messages,
         tools: toolsFor(tools),
@@ -341,7 +349,9 @@ export class ClaudeAgent implements ReplyEngine {
           content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
         } else if (block.name === "submit_order" && tools.submitOrder) {
           const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
-          if (r.ok) {
+          if (r.ok && r.alreadyBooked) {
+            content = `This exact order was ALREADY locked in earlier in this chat (total $${r.total}). Nothing new was booked. Don't say it just got locked in, don't send a correction, and don't resend the summary or payment info unless they ask.`;
+          } else if (r.ok) {
             const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
             content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
           } else if (!r.fixable && r.handoff) {
@@ -381,7 +391,8 @@ export class ClaudeAgent implements ReplyEngine {
       try {
         const res = await this.client.messages.create({
           model: this.model,
-          max_tokens: 400,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
           system,
           messages: withNote(
             messages,

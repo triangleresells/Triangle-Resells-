@@ -442,6 +442,30 @@ describe("no Stripe: cash, Cash App, Apple Pay", () => {
     expect(store.allLabels()[0].when).toContain("pickup 2026-11-06 4:00 PM");
   });
 
+  it("never books the same order twice when the AI calls submit_order again", async () => {
+    const pricing = loadPricing();
+    const results: unknown[] = [];
+    const order = [{ product: "Chrome Hearts Tee", variant: "White", size: "XL", qty: 1 }];
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, tools?: OrderTools) => {
+        results.push(await tools!.submitOrder!(order, "pickup", "2026-11-06", "3:00 PM", undefined, "cash_app"));
+        return { text: "Locked in." };
+      }),
+    };
+    const { ig } = setup();
+    const store = new Store(() => NOW.getTime());
+    const bot = new Bot({
+      ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells",
+      keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing, getBusy: async () => busy, now: () => NOW,
+    });
+    await bot.handle(dm("yes lock it in", "m-dupe1"));
+    await bot.handle(dm("ok", "m-dupe2"));
+    expect(results[0]).toMatchObject({ ok: true, total: 35 });
+    expect(results[0]).not.toHaveProperty("alreadyBooked");
+    expect(results[1]).toMatchObject({ ok: true, total: 35, alreadyBooked: true });
+    expect(store.allLabels()).toHaveLength(1);
+  });
+
   it("nudges a quoted buyer who went quiet once, with the free Baccarat", async () => {
     const { quietNudgeText } = await import("../src/bot.js");
     const pricing = loadPricing();

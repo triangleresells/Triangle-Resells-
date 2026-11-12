@@ -6,7 +6,7 @@ import { isBareKeyword, matchKeyword } from "./keywords.js";
 import { freebiesOf } from "./catalog.js";
 import { describeQuote, quoteOrder, type PricingConfig, type Quote } from "./pricing.js";
 import { matchCustomers } from "./customers.js";
-import type { ChatImage, Customer, Store } from "./store.js";
+import type { ChatImage, Customer, OrderLabel, Store } from "./store.js";
 import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
 import { HOLD_MINUTES } from "./stripe.js";
 import type { OrderDesk } from "./desk.js";
@@ -331,6 +331,14 @@ export class Bot {
     return { ok: true, q, fulfillDate, fulfillTime, note };
   }
 
+  /** The buyer's order from the last 24 hours with the same items, total and fulfillment, if there is one. */
+  private recentSameOrder(userId: string, q: Quote, fulfillment: string): OrderLabel | undefined {
+    if (!q.lines.length) return undefined;
+    const last = this.d.store.latestLabelFor(userId);
+    if (!last || this.now().getTime() - last.createdAt > 24 * 3_600_000) return undefined;
+    return last.summary === itemList(q) && last.total === q.total && last.fulfillment === fulfillment ? last : undefined;
+  }
+
   /** Quote and order actions for one customer. Prices always come from the price list, never the AI. */
   private orderTools(userId: string, pricing = this.d.pricing): OrderTools | undefined {
     if (!pricing) return undefined;
@@ -359,6 +367,18 @@ export class Bot {
       if (fulfillment === "ship") {
         const missing = (["name", "street", "city", "state", "zip"] as const).filter((k) => !String(shipTo?.[k] ?? "").trim());
         if (missing.length) return { ok: false, error: `Need the buyer's shipping info first: ${missing.join(", ")}`, fixable: true };
+      }
+      // The AI only sees chat text from earlier turns, not its tool calls, so it can try to lock in the same
+      // order twice. A repeat would take stock off twice and double-book Josh: answer from the first booking.
+      const dupe = this.recentSameOrder(userId, quoteOrder(pricing, items, fulfillment, deliveryArea), fulfillment);
+      if (dupe) {
+        return {
+          ok: true,
+          total: dupe.total,
+          summary: dupe.summary,
+          freebies: [],
+          alreadyBooked: true,
+        };
       }
       const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
       if (!r.ok) return r;
