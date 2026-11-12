@@ -26,6 +26,7 @@ export function statusFor(code: string | undefined): number {
   if (code === "42501") return 403; // not allowed
   if (code === "P0002") return 404; // not found
   if (code === "23505") return 409; // duplicate
+  if (code === "TR409") return 409; // not enough stock
   if (code.startsWith("22") || code.startsWith("23")) return 400; // bad data
   return 500;
 }

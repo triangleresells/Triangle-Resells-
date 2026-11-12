@@ -26,6 +26,10 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   await t.reset();
+  // The bot's own orders are real (not TEST), so this local test database gets real stock rows; Diego's TEST booking uses TEST stock.
+  const hatsRow = { brand: "Chrome Hearts", item: "Chrome Hearts Hat", color: "Black", qty: 20, price_list: "CHROME HEARTS HATS", cost: 12 };
+  await t.seedStock([hatsRow], false);
+  await t.seedStock([hatsRow], true);
 });
 
 type Step = (tools: OrderTools) => Promise<unknown>;

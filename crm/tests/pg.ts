@@ -36,6 +36,21 @@ export interface TestDb {
   reset(): Promise<void>;
   /** Plain SELECT as a logged-in person (row level security applies). */
   selectAs<T>(userId: string | null, sql: string): Promise<T[]>;
+  /** Loads stock the way the bot does (a BOT STOCK read), without logging it. */
+  seedStock(rows: StockRowIn[], isTest?: boolean): Promise<void>;
+  /** Live qty of an item (test stock unless isTest = false). */
+  qty(item: string, color: string | null, size: string | null, isTest?: boolean): Promise<number>;
+}
+
+export interface StockRowIn {
+  item: string;
+  color?: string;
+  size?: string;
+  qty: number | string;
+  status?: string;
+  brand?: string;
+  price_list?: string;
+  cost?: number;
 }
 
 function toParam(v: unknown): unknown {
@@ -73,10 +88,24 @@ export async function testDb(): Promise<TestDb> {
   return {
     pg,
     async reset() {
-      await pg.exec(`truncate activity_log, bot_events, booking_items, bookings, customers restart identity cascade; update team_members set user_id = null, email = null; delete from auth.users;`);
+      await pg.exec(`truncate activity_log, bot_events, booking_items, bookings, stock_moves, stock_items, customers restart identity cascade; update team_members set user_id = null, email = null; delete from auth.users;`);
     },
     asService: dbFor(pg, "service_role", null),
     asUser: (userId) => dbFor(pg, "authenticated", userId),
+    async seedStock(rows, isTest = true) {
+      await dbFor(pg, "service_role", null).rpc("stock_sync", {
+        p_rows: rows.map((r) => ({ status: "for_sale", ...r, qty: String(r.qty), cost: r.cost == null ? "" : String(r.cost) })),
+        p_is_test: isTest,
+        p_actor: "System",
+      });
+    },
+    async qty(item, color, size, isTest = true) {
+      const r = await pg.query<{ qty: number }>(
+        "select qty from stock_items where is_test = $1 and split_part(key, '#', 1) = crm_stock_key($2, $3, $4) order by key limit 1",
+        [isTest, item, color, size],
+      );
+      return r.rows[0]?.qty ?? -1;
+    },
     async login(name) {
       const u = await pg.query<{ id: string }>(`insert into auth.users (email) values ($1) returning id`, [`${name.toLowerCase()}@test.local`]);
       await pg.query(`update team_members set user_id = $1, email = $2 where name = $3`, [u.rows[0].id, `${name.toLowerCase()}@test.local`, name]);

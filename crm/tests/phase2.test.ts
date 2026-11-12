@@ -18,6 +18,11 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   await t.reset();
+  // TEST stock (the copy of BOT STOCK): test bookings only ever touch this.
+  await t.seedStock([
+    { brand: "Essentials", item: "Essentials Hoodie", color: "Black", size: "M", qty: 20, cost: 25 },
+    { brand: "Spider", item: "Spider Hoodie", color: "Black/Pink", size: "S", qty: 5, cost: 28 },
+  ]);
 });
 
 const log = async () => (await t.asService.rpc<Activity[]>("recent_activity", { p_limit: 200 })).reverse();
