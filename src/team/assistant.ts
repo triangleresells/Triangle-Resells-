@@ -225,6 +225,44 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
+    name: "video_ideas",
+    description: "A day's video ideas per account (goals: Resells 3, Scales 2, Sales 6 incl. a meetup video), with status To film / Filmed / Posted.",
+    input_schema: { type: "object", properties: { day: DATE }, required: ["day"] },
+  },
+  {
+    name: "add_video_idea",
+    description: "Add a video idea (hook) for a day and account. account: resells, scales or sales.",
+    input_schema: {
+      type: "object",
+      properties: { day: DATE, account: { type: "string", enum: ["resells", "scales", "sales"] }, hook: { type: "string" }, meetup: { type: "boolean" } },
+      required: ["day", "account", "hook"],
+    },
+  },
+  {
+    name: "update_video_idea",
+    description: "Change a video idea: status (todo = To film, filmed, posted), posted_to accounts, post link, views, or the hook.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        changes: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: ["todo", "filmed", "posted"] }, hook: { type: "string" },
+            posted_to: { type: "array", items: { type: "string", enum: ["resells", "scales", "sales"] } },
+            post_link: { type: "string" }, views: { type: "integer", minimum: 0 },
+          },
+        },
+      },
+      required: ["id", "changes"],
+    },
+  },
+  {
+    name: "generate_video_ideas",
+    description: "Write fresh hooks to fill a day up to the goals per account (never repeats recent ones).",
+    input_schema: { type: "object", properties: { day: DATE }, required: ["day"] },
+  },
+  {
     name: "recent_changes",
     description: "The latest changes in the CRM (who did what), with ids for undo.",
     input_schema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 50 } } },
@@ -245,11 +283,23 @@ const WRITE_SUMMARY: Record<string, (input: any, out: any) => string> = {
   tell_bot: (i) => `Told the DM bot: "${String(i.note).slice(0, 80)}"`,
   retire_bot_note: () => `Retired a bot note`,
   undo: (i) => `Undid change #${i.id}`,
+  add_video_idea: (i) => `Added a ${i.account} video idea for ${i.day}: "${String(i.hook).slice(0, 60)}"`,
+  update_video_idea: (i) => `Updated a video idea: ${Object.keys(i.changes ?? {}).join(", ")}`,
+  generate_video_ideas: (i, o) => `Wrote ${o?.added ?? 0} new video idea(s) for ${i.day}`,
 };
 
 /** Runs one tool as the person. Errors come back as text so the AI can explain or fix them. */
-async function runTool(db: UserDb, name: string, input: any): Promise<unknown> {
+async function runTool(db: UserDb, name: string, input: any, extra: AssistantExtras): Promise<unknown> {
   switch (name) {
+    case "video_ideas":
+      return db.rpc("videos_for_day", { p_day: input.day, p_is_test: false });
+    case "add_video_idea":
+      return db.rpc("add_video_ideas", { p_day: input.day, p_ideas: [{ account: input.account, hook: input.hook, meetup: input.meetup ?? false }] });
+    case "update_video_idea":
+      return db.rpc("update_video_idea", { p_id: input.id, p: input.changes ?? {} });
+    case "generate_video_ideas":
+      if (!extra.fillVideoIdeas) throw new Error("the hook writer isn't switched on");
+      return { added: await extra.fillVideoIdeas(input.day) };
     case "log_sale":
       return db.rpc("create_booking", { p: { source: "in_person", ...input } });
     case "find_bookings":
@@ -297,6 +347,7 @@ What you do, with your tools (they act as ${who} and everything is logged under 
 - Read restock screenshots and log them (log_restock): read EVERY item, color, size and quantity; if a part is unreadable, say which. Mark restocks received when they say it landed (receive_restock).
 - Answer questions with exact numbers from the reports (sales_report, monthly_report, cash_report, customers, stock, find_bookings). Revenue = Done sales, delivery fees not included.
 - Change bookings: reschedule, status, who fulfills, tracking numbers (the buyer gets the tracking in the DMs automatically).
+- Video ideas per account (video_ideas, add_video_idea, update_video_idea, generate_video_ideas): mark them filmed / posted, save the post link and views.
 - Pass info to the Instagram DM bot (tell_bot): restock dates, closures, new rules. It uses it with buyers from now on.
 - Undo things (recent_changes, then undo).
 
@@ -309,10 +360,17 @@ Rules:
 
 const MAX_ROUNDS = 8;
 
+/** Abilities that live on the bot rather than in the database. */
+export interface AssistantExtras {
+  /** Writes hooks to fill a day up to the goals; returns how many it added. */
+  fillVideoIdeas?: (day: string) => Promise<number>;
+}
+
 export class TeamAssistant {
   constructor(
     private client: Messages,
     private model: string,
+    private extra: AssistantExtras = {},
   ) {}
 
   async chat(db: UserDb, who: string, history: AssistantMessage[], now = new Date()): Promise<AssistantResult> {
@@ -343,7 +401,7 @@ export class TeamAssistant {
       for (const u of uses) {
         let content: string;
         try {
-          const out = await runTool(db, u.name, u.input);
+          const out = await runTool(db, u.name, u.input, this.extra);
           content = JSON.stringify(out ?? null).slice(0, 60_000);
           const sum = WRITE_SUMMARY[u.name];
           if (sum) changes.push(sum(u.input, out));

@@ -132,3 +132,11 @@ input.got { width: 72px; min-height: 36px; padding: 4px 6px; text-align: right; 
 .thumb { position: relative; }
 .thumb img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* videos */
+.vid { background: var(--panel2); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.vid.filmed { border-left-color: var(--booked); } .vid.posted { border-left-color: var(--done); }
+.vid.posted .hook { color: var(--muted); }
+.vid .st { min-height: 36px; width: auto; padding: 4px 12px; }
+.vid input:not([type=checkbox]) { min-height: 36px; padding: 4px 8px; }
+#vAdd select { width: auto; } #vAdd input { flex: 1; min-width: 180px; }

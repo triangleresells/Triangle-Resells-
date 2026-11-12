@@ -5,12 +5,14 @@ import { supabaseUserDb, TeamAssistant } from "./team/assistant.js";
 import { assistantHandler } from "./team/handler.js";
 import { CrmSync } from "./crmsync.js";
 import { StockSync } from "./stocksync.js";
+import { NotifySync } from "./team/notify.js";
+import { HookWriter, tomorrowET } from "./team/hooks.js";
 import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
 import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
 import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js";
 import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
-import { webhookNotifier } from "./handoff.js";
+import { webhookNotifier, webhookText } from "./handoff.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
 import { handlePaidOrder, calendarEditor, webhookCalendar } from "./orders.js";
@@ -91,6 +93,27 @@ const bot = new Bot({
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 // One follow-up DM when a payment link expires unpaid.
+// Team notifications (CRM -> Discord / Slack) every 20s, and tomorrow's video ideas each morning.
+if (crm) {
+  const notifySync = new NotifySync({ crm, store, post: webhookText(config.handoffWebhookUrl) });
+  setInterval(() => void notifySync.tick(), 20 * 1000).unref();
+  const hooks = new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm);
+  let filled = "";
+  const fillTomorrow = async () => {
+    const hour = Number(new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
+    const day = tomorrowET();
+    if (hour < 6 || filled === day) return;
+    try {
+      const n = await hooks.fillDay(day);
+      filled = day;
+      if (n) console.log(`[hooks] added ${n} video idea(s) for ${day}`);
+    } catch (err) {
+      console.error("[hooks] failed:", (err as Error).message ?? err);
+    }
+  };
+  setInterval(() => void fillTomorrow(), 30 * 60 * 1000).unref();
+  void fillTomorrow();
+}
 // CRM -> bot: changes the team makes in the CRM (reschedule, cancel, paid, done, new bookings) flow back every 15s.
 if (crm && sheets && stockKeeper) {
   // Stock: the CRM keeps the live count; BOT STOCK is synced both ways every minute.
@@ -126,7 +149,9 @@ createServer(bot, {
       ? {
           origin: config.crmWebOrigin,
           handle: assistantHandler({
-            assistant: new TeamAssistant(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel),
+            assistant: new TeamAssistant(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, {
+              fillVideoIdeas: crm ? (day) => new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm).fillDay(day) : undefined,
+            }),
             dbFor: (token) => supabaseUserDb(config.supabaseUrl, config.supabaseAnonKey, token),
           }),
         }

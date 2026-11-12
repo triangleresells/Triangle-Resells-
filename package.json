@@ -9,7 +9,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "sync-sheet": "tsx scripts/sync-sheet.ts",
-    "ai-retest": "tsx scripts/ai-retest.ts"
+    "ai-retest": "tsx scripts/ai-retest.ts",
+    "import-sales": "tsx scripts/import-sales.ts"
   },
   "repository": {
     "type": "git",

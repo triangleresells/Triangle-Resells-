@@ -83,6 +83,32 @@ export function createApi(deps: ApiDeps) {
         if (!ig) return json(400, { error: "ig_user_id is required" });
         return json(200, { bookings: await deps.db.rpc("open_bookings_for", { p_ig_user_id: ig }) });
       }
+      // Team notifications (the bot posts them to Discord / Slack). No `after` = just where to start.
+      if (req.method === "GET" && path === "/notifications") {
+        const after = url.searchParams.get("after");
+        if (after !== null && !/^\d+$/.test(after)) return json(400, { error: "after must be a number" });
+        return json(200, await deps.db.rpc("notifications_after", { p_after: after === null ? null : Number(after), p_limit: 100 }));
+      }
+      // Video ideas: the bot fills each day up to the goals with fresh hooks.
+      if (req.method === "GET" && path === "/videos/day") {
+        const day = url.searchParams.get("day");
+        if (!day || !DATE.test(day)) return json(400, { error: "day must look like 2026-11-20" });
+        return json(200, await deps.db.rpc("videos_for_day", { p_day: day, p_is_test: url.searchParams.get("is_test") === "true" }));
+      }
+      if (req.method === "GET" && path === "/videos/recent-hooks") {
+        return json(200, { hooks: await deps.db.rpc("recent_hooks", { p_days: 45 }) });
+      }
+      if (req.method === "POST" && path === "/videos") {
+        const b = await body(req);
+        if (typeof b.day !== "string" || !DATE.test(b.day) || !Array.isArray(b.ideas)) return json(400, { error: "day and ideas are required" });
+        return json(200, await deps.db.rpc("add_video_ideas", { p_day: b.day, p_ideas: b.ideas, p_auto: true, p_actor: actor, p_is_test: b.is_test === true }));
+      }
+      // Old sales import from the tracker: preview (commit false) or write (commit true).
+      if (req.method === "POST" && path === "/import/sales") {
+        const b = await body(req);
+        if (!Array.isArray(b.rows)) return json(400, { error: "rows must be a list" });
+        return json(200, await deps.db.rpc("import_sales", { p_rows: b.rows, p_commit: b.commit === true, p_actor: "System" }));
+      }
       // What the team told the DM bot (active notes, newest first).
       if (req.method === "GET" && path === "/notes") {
         return json(200, { notes: await deps.db.rpc("bot_notes_active", {}) });

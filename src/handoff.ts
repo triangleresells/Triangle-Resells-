@@ -42,3 +42,17 @@ export function webhookNotifier(url: string, fetchFn: typeof fetch = fetch): Not
     if (!res.ok) console.error(`[handoff] webhook failed: HTTP ${res.status}`);
   };
 }
+
+/** Posts one plain line to the team's Discord / Slack webhook (CRM notifications: "📅 Chema booked a sale..."). */
+export type TextPoster = (text: string) => Promise<void>;
+
+export function webhookText(url: string, fetchFn: typeof fetch = fetch): TextPoster {
+  return async (text) => {
+    if (!url) {
+      console.log(`[notify] (no HANDOFF_WEBHOOK_URL set) ${text}`);
+      return;
+    }
+    const res = await fetchFn(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: text, text }) });
+    if (!res.ok) throw new Error(`webhook answered HTTP ${res.status}`);
+  };
+}

@@ -72,6 +72,16 @@ export interface Crm {
   events(after: number | null): Promise<{ events: CrmEvent[]; latest: number }>;
   /** This Instagram buyer's bookings that aren't finished. */
   openBookings(igUserId: string): Promise<CrmBookingFull[]>;
+  /** Team notifications after id `after` (null = none yet, just where to start). */
+  notifications(after: number | null): Promise<{ notifications: { id: number; kind: string; text: string; is_test: boolean }[]; latest: number }>;
+  /** A day's video ideas and the goals per account. */
+  videosForDay(day: string): Promise<{ goals: Record<VideoAccount, number>; ideas: { account: VideoAccount; hook: string; meetup: boolean }[] }>;
+  /** Hooks from the last weeks (so new ones don't repeat). */
+  recentHooks(): Promise<string[]>;
+  /** Adds generated ideas (logged as Bot; the team gets a notification). */
+  addVideoIdeas(day: string, ideas: { account: VideoAccount; hook: string; meetup?: boolean }[]): Promise<void>;
+  /** Old sales from the tracker: preview (commit false) or write them (commit true). */
+  importSales(rows: unknown[], commit: boolean): Promise<Record<string, unknown>>;
   /** What the team told the DM bot (active notes, newest first). */
   notes(): Promise<{ note: string; created_by: string; created_at: string }[]>;
   /** A new DM conversation with this buyer started. */
@@ -131,6 +141,8 @@ export interface StockNewRow {
 }
 
 /** status: the CRM's HTTP answer (4xx = it refused, e.g. out of stock); none = couldn't reach it. */
+export type VideoAccount = "resells" | "scales" | "sales";
+
 export class CrmError extends Error {
   constructor(
     message: string,
@@ -169,6 +181,11 @@ export function crmClient(baseUrl: string, apiKey: string, fetchFn: typeof fetch
     reschedule: async (id, date, time) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/reschedule`, { date, time: time ?? null })).booking,
     setStatus: async (id, status, reason) => (await call<{ booking: CrmBooking }>("POST", `/bookings/${id}/status`, { status, reason: reason ?? null })).booking,
     events: (after) => call("GET", `/events${after === null ? "" : `?after=${after}`}`),
+    notifications: (after) => call("GET", `/notifications${after === null ? "" : `?after=${after}`}`),
+    videosForDay: (day) => call("GET", `/videos/day?day=${day}`),
+    recentHooks: async () => (await call<{ hooks: string[] }>("GET", "/videos/recent-hooks")).hooks,
+    addVideoIdeas: async (day, ideas) => void (await call("POST", "/videos", { day, ideas })),
+    importSales: (rows, commit) => call("POST", "/import/sales", { rows, commit }),
     notes: async () => (await call<{ notes: { note: string; created_by: string; created_at: string }[] }>("GET", "/notes")).notes,
     recordDm: async (ig, handle) => void (await call("POST", "/customers/dm", { ig_user_id: ig, ig_handle: handle ?? null })),
     buyerContext: (ig) => call("GET", `/customers/context?ig_user_id=${encodeURIComponent(ig)}`),

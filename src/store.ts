@@ -98,6 +98,8 @@ export interface StoreSnapshot {
   labels?: OrderLabel[];
   /** Last CRM change the bot applied (CRM -> bot sync). */
   crmCursor?: number;
+  /** Last team notification the bot posted. */
+  notifyCursor?: number;
 }
 
 const MAX_TURNS = 20;
@@ -117,6 +119,7 @@ export class Store {
   private labels: OrderLabel[] = [];
   /** Last CRM change applied by the bot. undefined = never synced (start from the newest). */
   private cursor: number | undefined;
+  private nCursor: number | undefined;
   /** Called after anything worth saving changes (the file saver listens here). */
   onChange?: () => void;
 
@@ -212,11 +215,22 @@ export class Store {
       customers: this.allCustomers(),
       labels: this.labels,
       ...(this.cursor !== undefined ? { crmCursor: this.cursor } : {}),
+      ...(this.nCursor !== undefined ? { notifyCursor: this.nCursor } : {}),
     };
   }
 
   crmCursor(): number | undefined {
     return this.cursor;
+  }
+
+  notifyCursor(): number | undefined {
+    return this.nCursor;
+  }
+
+  setNotifyCursor(n: number): void {
+    if (n === this.nCursor) return;
+    this.nCursor = n;
+    this.changed();
   }
 
   setCrmCursor(n: number): void {
@@ -228,6 +242,7 @@ export class Store {
   restore(snap: StoreSnapshot | undefined): void {
     if (!snap || snap.version !== 1) return;
     if (typeof snap.crmCursor === "number") this.cursor = snap.crmCursor;
+    if (typeof snap.notifyCursor === "number") this.nCursor = snap.notifyCursor;
     for (const c of snap.convos ?? []) {
       this.convos.set(c.userId, { turns: c.turns ?? [], pausedUntil: c.pausedUntil ?? 0, lastActivity: c.lastActivity ?? this.now(), recentBotTexts: [], lastBotAt: 0, pendingLink: c.pendingLink });
     }

@@ -23,6 +23,7 @@ const state = {
   cash: { day: L.isoDate(new Date()), report: null },
   stock: { rows: [], restocks: [], search: "", editing: null },
   chat: { messages: [], pending: [], draft: "", busy: false },
+  videos: { day: L.isoDate(new Date()), data: null, busy: false },
   assistantUrl: "",
 };
 
@@ -92,6 +93,7 @@ const TABS = [
   { key: "calendar", label: "Calendar" },
   { key: "assistant", label: "Assistant" },
   { key: "money", label: "Money" },
+  { key: "videos", label: "Videos" },
   { key: "stock", label: "Stock" },
   { key: "customers", label: "Customers" },
   { key: "cash", label: "Cash" },
@@ -109,6 +111,7 @@ function render() {
   if (state.tab === "cash") return renderCash();
   if (state.tab === "stock") return renderStock();
   if (state.tab === "assistant") return renderAssistant();
+  if (state.tab === "videos") return renderVideos();
   $("main").innerHTML = tabsHtml() + `<div class="layout">
     <section class="panel" aria-labelledby="calH">
       <div class="spread" style="margin-bottom:8px">
@@ -336,6 +339,7 @@ async function openTab() {
     if (state.tab === "customers") await loadCustomers();
     if (state.tab === "cash") await loadCash();
     if (state.tab === "stock") await loadStock();
+    if (state.tab === "videos") await loadVideos();
   } catch (err) {
     banner("Couldn't load: " + err.message);
   }
@@ -716,6 +720,108 @@ function renderAssistant() {
     saveChat();
     renderAssistant();
   };
+}
+
+// ---------- Videos: daily ideas per account ----------
+const VACCOUNTS = [
+  { key: "resells", label: "Triangle Resells" },
+  { key: "scales", label: "Triangle Scales" },
+  { key: "sales", label: "Triangle Sales" },
+];
+const VSTATUS = { todo: "To film", filmed: "Filmed", posted: "Posted" };
+const VNEXT = { todo: "filmed", filmed: "posted", posted: "todo" };
+
+async function loadVideos() {
+  state.videos.data = await rpc("videos_for_day", { p_day: state.videos.day, p_is_test: state.includeTest });
+}
+
+function renderVideos() {
+  const v = state.videos;
+  const d = v.data ?? { goals: {}, ideas: [] };
+  const title = L.parseIso(v.day).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  $("main").innerHTML = tabsHtml() + `<section class="panel stack">
+    <div class="spread">
+      <h3>${esc(title)}</h3>
+      <div class="row">
+        <button class="btn small" id="vPrev" aria-label="Previous day">‹</button>
+        <input id="vDay" type="date" value="${esc(v.day)}" aria-label="Day">
+        <button class="btn small" id="vNext" aria-label="Next day">›</button>
+      </div>
+    </div>
+    ${state.assistantUrl ? `<div><button class="btn small" id="vGen" ${v.busy ? "disabled" : ""}>${v.busy ? "Writing…" : "✨ Write ideas for this day"}</button> <span class="muted small">Fills each account up to its goal with fresh hooks.</span></div>` : ""}
+    ${VACCOUNTS.map((a) => {
+      const list = d.ideas.filter((i) => i.account === a.key);
+      const posted = list.filter((i) => i.status === "posted").length;
+      const goal = d.goals?.[a.key] ?? 0;
+      return `<div class="stack">
+        <div class="spread"><h2>${esc(a.label)}</h2><span class="${posted >= goal && goal ? "chip done" : "muted"}">${posted}/${goal} posted${a.key === "sales" ? " · incl. a meetup video" : ""}</span></div>
+        ${list.length ? list.map((i) => `<div class="vid ${i.status}" data-vid="${i.id}">
+          <div class="spread">
+            <span class="hook">${esc(i.hook)}${i.meetup ? ` <span class="chip open">meetup</span>` : ""}${i.auto ? ` <span class="muted small">auto</span>` : ""}</span>
+            <button class="st ${i.status === "posted" ? "on done" : i.status === "filmed" ? "on booked" : ""}" data-vstatus title="Tap to change">${VSTATUS[i.status]}</button>
+          </div>
+          <div class="row small">
+            <span class="muted">Posted to:</span>
+            ${VACCOUNTS.map((p) => `<label class="toggle"><input type="checkbox" data-vpost="${p.key}" ${i.posted_to.includes(p.key) ? "checked" : ""}>${p.label.replace("Triangle ", "")}</label>`).join("")}
+          </div>
+          <div class="row">
+            <input data-vlink placeholder="Post link" value="${esc(i.post_link ?? "")}" aria-label="Post link">
+            <input data-vviews type="number" min="0" step="1" inputmode="numeric" placeholder="Views" value="${esc(i.views ?? "")}" aria-label="Views" style="max-width:110px">
+            <button class="link danger" data-vdel aria-label="Remove idea">✕</button>
+          </div>
+        </div>`).join("") : `<div class="empty">No ${esc(a.label)} ideas yet.</div>`}
+      </div>`;
+    }).join("")}
+    <form class="row" id="vAdd">
+      <select id="vAcct" aria-label="Account">${VACCOUNTS.map((a) => `<option value="${a.key}">${a.label}</option>`).join("")}</select>
+      <input id="vHook" placeholder="New hook, e.g. How I turned $200 into $2,000" required aria-label="Hook">
+      <button class="btn gold small">Add idea</button>
+    </form>
+  </section>`;
+  const go = async (day) => { v.day = day; await loadVideos().catch((e) => banner(e.message)); renderVideos(); };
+  const shift = (n) => { const x = L.parseIso(v.day); x.setDate(x.getDate() + n); go(L.isoDate(x)); };
+  $("vPrev").onclick = () => shift(-1);
+  $("vNext").onclick = () => shift(1);
+  $("vDay").onchange = (e) => e.target.value && go(e.target.value);
+  $("vAdd").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await rpc("add_video_ideas", { p_day: v.day, p_ideas: [{ account: $("vAcct").value, hook: $("vHook").value.trim() }], p_is_test: state.includeTest });
+      await loadVideos();
+    } catch (err) { return banner("Not saved: " + err.message); }
+    renderVideos();
+  };
+  $("vGen")?.addEventListener("click", async () => {
+    v.busy = true;
+    renderVideos();
+    try {
+      const { data } = await state.sb.auth.getSession();
+      const res = await fetch(`${state.assistantUrl}/team/assistant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token ?? ""}` },
+        body: JSON.stringify({ messages: [{ role: "user", text: `Write video ideas for ${v.day} (fill each account up to its goal).` }] }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error ?? `error ${res.status}`);
+      banner(out.reply || "Done.", true);
+      await loadVideos();
+    } catch (err) { banner("Couldn't write ideas: " + err.message); }
+    v.busy = false;
+    renderVideos();
+  });
+  document.querySelectorAll("[data-vid]").forEach((card) => {
+    const id = card.dataset.vid;
+    const idea = d.ideas.find((i) => i.id === id);
+    const save = async (p) => { try { await rpc("update_video_idea", { p_id: id, p }); await loadVideos(); renderVideos(); } catch (err) { banner("Not saved: " + err.message); } };
+    card.querySelector("[data-vstatus]").onclick = () => save({ status: VNEXT[idea.status] });
+    card.querySelectorAll("[data-vpost]").forEach((cb) => (cb.onchange = () => save({ posted_to: [...card.querySelectorAll("[data-vpost]:checked")].map((x) => x.dataset.vpost) })));
+    card.querySelector("[data-vlink]").onchange = (e) => save({ post_link: e.target.value });
+    card.querySelector("[data-vviews]").onchange = (e) => save({ views: e.target.value === "" ? null : Number(e.target.value) });
+    card.querySelector("[data-vdel]").onclick = async () => {
+      if (!confirm("Remove this idea?")) return;
+      try { await rpc("delete_video_idea", { p_id: id }); await loadVideos(); renderVideos(); } catch (err) { banner("Not removed: " + err.message); }
+    };
+  });
 }
 
 // ---------- start ----------

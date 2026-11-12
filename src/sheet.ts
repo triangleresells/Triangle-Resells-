@@ -95,6 +95,15 @@ export class GoogleSheetsReader {
     return ranges.map((_, i) => j.valueRanges?.[i]?.values ?? []);
   }
 
+  /** The names of every tab in a spreadsheet (e.g. the sales tracker's "Nov 2026", "Dec 2026"). */
+  async tabNames(sheetId = this.sheetId): Promise<string[]> {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}?fields=sheets.properties.title`;
+    const res = await this.fetchFn(url, { headers: { authorization: `Bearer ${await this.accessToken()}` } });
+    if (!res.ok) throw new Error(`Sheets API HTTP ${res.status} (share it with ${this.sa.client_email} as Editor): ${(await res.text()).slice(0, 300)}`);
+    const j = (await res.json()) as { sheets?: { properties?: { title?: string } }[] };
+    return (j.sheets ?? []).map((s) => s.properties?.title ?? "").filter(Boolean);
+  }
+
   /** Writes cells. Values are entered like typing them in (USER_ENTERED). */
   async write(data: { range: string; values: (string | number)[][] }[], sheetId = this.sheetId): Promise<void> {
     if (!data.length) return;

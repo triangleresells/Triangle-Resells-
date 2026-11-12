@@ -452,3 +452,56 @@ describe("restock -> BOT STOCK (through the bot's sync)", () => {
     expect(tabs["BOT STOCK"]).toHaveLength(4);
   });
 });
+
+describe("phase 5 through the real CRM API", () => {
+  const live = () => {
+    const api = createApi({ db: t.asService, botApiKey: KEY });
+    return crmClient("https://crm.test", KEY, ((i: RequestInfo | URL, init?: RequestInit) => api(new Request(String(i), init))) as typeof fetch);
+  };
+
+  it("TEST 1 (notification): a team member's booking reaches the team's Discord as one plain line", async () => {
+    const { NotifySync } = await import("../../src/team/notify.js");
+    const posted: string[] = [];
+    const sync = new NotifySync({ crm: live(), store: new Store(), post: async (txt) => void posted.push(txt) });
+    await sync.tick(); // starts from now
+    const diego = await t.login("Diego");
+    await t.asUser(diego).rpc("create_booking", { p: {
+      date: "2026-11-14", time: "16:00", payment_method: "cash", fulfillment: "pickup", assignee: "Chema", is_test: true,
+      customer: { ig_handle: "TEST_walkin" }, items: [{ item: "Chrome Hearts Hat", color: "Black", size: "One Size", qty: 2, unit_price: 28 }] } });
+    expect(await sync.tick()).toBe(1);
+    expect(posted).toEqual(["[TEST] 📅 Diego booked a sale for Sat Nov 14 4:00 PM: @test_walkin, 2x Chrome Hearts Hat Black, pickup, $56.00. Fulfilling: Chema."]);
+  });
+
+  it("the hook writer fills a day up to the goals (incl. the Sales meetup video) and the team is told", async () => {
+    const { HookWriter } = await import("../../src/team/hooks.js");
+    const ideas = [
+      ...["I sold 40 hoodies in one parking lot", "What $500 of Essentials looks like", "Packing 12 orders in 10 minutes"].map((hook) => ({ account: "resells", hook })),
+      ...["How to start reselling in 2026", "The vendor mistake that cost me $500"].map((hook) => ({ account: "scales", hook })),
+      ...["Meetup run: 6 orders tonight", "Unboxing the BAPE restock", "Which hoodie would you flip?", "Day in the life of a reseller", "Pricing a $35 hat", "How we ship same day"].map((hook) => ({ account: "sales", hook })),
+    ];
+    const prompts: string[] = [];
+    const client = { messages: { create: async (req: any) => (prompts.push(req.messages[0].content), { content: [{ type: "text", text: JSON.stringify({ ideas }) }] }) } };
+    const writer = new HookWriter(client as any, "claude-sonnet-5-5", live());
+    expect(await writer.fillDay("2026-11-20")).toBe(11);
+    expect(prompts[0]).toContain("must be a meetup video");
+    const day = await t.asService.rpc<{ ideas: { account: string; meetup: boolean; auto: boolean }[] }>("videos_for_day", { p_day: "2026-11-20" });
+    expect(day.ideas.filter((i) => i.account === "sales" && i.meetup)).toHaveLength(1);
+    expect(day.ideas.every((i) => i.auto)).toBe(true);
+    expect(await writer.fillDay("2026-11-20")).toBe(0); // already full: no second call to Claude
+    expect(prompts).toHaveLength(1);
+    const n = await t.asService.rpc<{ notifications: { text: string }[] }>("notifications_after", { p_after: 0 });
+    expect(n.notifications.map((x) => x.text)).toEqual(["🎬 11 new video ideas for Fri Nov 20 are in the CRM."]);
+  });
+
+  it("old sales import: the tracker tab -> preview (nothing written) -> commit -> in revenue", async () => {
+    const { parseTrackerTab } = await import("../../src/team/importsales.js");
+    const head: string[] = ["Date", "Sales Channel", "Handle", "Products Sold", "Product Cost", "Order Total", "Platform Fee", "Label Cost"];
+    const rows = parseTrackerTab("Nov 2026", [[], [], [], [], head, ["11/2/2026", "Instagram", "@old", "1x Alo Hoodie Gray M", "25", "70", "2", "8"]]);
+    const crm = live();
+    expect(await crm.importSales(rows, false)).toMatchObject({ committed: false, would_import: 1 });
+    expect((await t.pg.query("select * from bookings")).rows).toHaveLength(0);
+    expect(await crm.importSales(rows, true)).toMatchObject({ committed: true, imported: 1 });
+    const rep = await t.asService.rpc<{ totals: { revenue: number; profit: number } }>("sales_report", { p_from: "2026-11-01", p_to: "2026-11-30" });
+    expect(rep.totals).toMatchObject({ revenue: 70, profit: 35 });
+  });
+});
