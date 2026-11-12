@@ -148,12 +148,16 @@ export interface WebhookPayload {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** A second "I paid" in the same chat within this window doesn't alert Josh again. */
+export const PAYMENT_ALERT_WINDOW_MS = 6 * 60 * 60_000;
 
 export class Bot {
   private chains = new Map<string, Promise<void>>();
   private seq = new Map<string, number>();
   /** When the bot will answer the texts it's holding for each chat (Date.now() ms). */
   private replyAt = new Map<string, number>();
+  /** Last "says they paid" alert per chat, so "thanks!" after "sent it" doesn't ping Josh again. */
+  private paidAlertAt = new Map<string, number>();
 
   constructor(private d: BotDeps) {}
 
@@ -427,6 +431,14 @@ export class Bot {
       return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note, payText: payTextFor(payment, r.q.total, this.d.payInfo) };
     };
     tools.paymentSent = async (method, note) => {
+      // The AI can't see its earlier tool calls, so it calls payment_sent again on every "thanks". One alert per chat
+      // per PAYMENT_ALERT_WINDOW_MS is enough: Josh checks his app once.
+      const nowMs = this.now().getTime();
+      const last = this.paidAlertAt.get(userId);
+      if (last !== undefined && nowMs - last < PAYMENT_ALERT_WINDOW_MS) {
+        return "Josh was ALREADY told about this payment. Don't call payment_sent again in this chat. If they're just saying thanks, say thanks back. Never say the payment is confirmed or received.";
+      }
+      this.paidAlertAt.set(userId, nowMs);
       const label = this.d.store.latestLabelFor(userId);
       if (label) this.d.store.updateLabel(label.id, { saysPaid: `${method.replace("_", " ")}: ${note}`.slice(0, 200) });
       const username = await this.d.ig.getUsername(userId).catch(() => undefined);

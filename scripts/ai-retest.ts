@@ -120,7 +120,9 @@ async function main() {
   const concurrency = Number(process.env.RETEST_CONCURRENCY ?? 5);
   const judgeModel = process.env.JUDGE_MODEL ?? "claude-opus-5-5";
   const customerModel = process.env.CUSTOMER_MODEL ?? "claude-haiku-5-5";
-  const env = { IG_APP_SECRET: "x", IG_ACCESS_TOKEN: "x", IG_VERIFY_TOKEN: "x", ...process.env } as NodeJS.ProcessEnv;
+  // Instagram isn't used (fake inbox), so blank IG keys get placeholders. A blank line in .env must not override them.
+  const env = { ...process.env } as NodeJS.ProcessEnv;
+  for (const k of ["IG_APP_SECRET", "IG_ACCESS_TOKEN", "IG_VERIFY_TOKEN"]) if (!env[k]?.trim()) env[k] = "x";
   const config = loadConfig(env);
   const client = new Anthropic({ apiKey: config.anthropicApiKey });
   const catalogText = formatCatalog(config.pricing.stock ?? [], config.pricing.tables);
@@ -225,7 +227,7 @@ async function main() {
       messages: [
         {
           role: "user",
-          content: `RULES:\n${config.agentInstructions}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
+          content: `RULES:\n${config.agentInstructions}\n\nKNOWLEDGE BASE THE BOT SAW (facts from here are NOT invented):\n${config.knowledgeBase}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
         },
       ],
     } as Anthropic.MessageCreateParamsNonStreaming);

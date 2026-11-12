@@ -173,6 +173,16 @@ describe("bot payment rules", () => {
     expect(r.alerts[0].reason).toContain("CHECK YOUR APP");
   });
 
+  it("only alerts Josh once when the buyer keeps saying they paid", async () => {
+    const r = await run(async (t) => {
+      await t.paymentSent!("cash_app", "sent $70");
+      await t.paymentSent!("cash_app", "thanks!");
+      return t.paymentSent!("cash_app", "have a good one");
+    });
+    expect(r.alerts).toHaveLength(1);
+    expect(r.out).toContain("ALREADY told");
+  });
+
   it("cash orders get no payment info", () => {
     expect(payTextFor("cash", 58)).toContain("cash at pickup");
     expect(payTextFor("cash_app", 58, { cashApp: "$X" })).toContain("Cash App $58 to $X");
