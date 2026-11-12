@@ -33,6 +33,8 @@ export interface OrderTools {
     | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string }
     | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
   >;
+  /** Facts about this buyer the AI must keep across turns (real payment handles, orders already locked in). */
+  context?(): string;
   /** True if this exact order is already locked in for this buyer (so submit_order isn't run twice). */
   isBooked?(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): boolean;
   /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
@@ -314,7 +316,7 @@ export function toolsFor(tools?: OrderTools) {
 const THANKS_RE = /^(?:(hey|hi|yo|hello)\s*[,!.]?\s*)?(?:thanks|thank you)(?: so much)? for (?:reaching out|messaging|the message|your message|hitting (?:us|me) up)[!.,]*\s*/i;
 const QUESTION_RE = /^(?:(hey|hi|yo|hello)\s*[,!.]?\s*)?(?:good|great) question[!.,]*\s*/i;
 
-/** Ends a text with a "do you want it?" question instead of the next step. ("Want me to put you down for one?" on a restock is allowed.) */
+/** Ends a text with a "do you want it?" question instead of the next step. Josh's own lines are allowed: "Want me to lock it in?" and, on a restock, "Want me to put you down for one?". */
 const WANT_RE =
   /\b(?:want (?:it|that|this|them|those|one|that one|this one|both|all \w+|to (?:grab|go ahead|do|get|add)[^?]*|me to lock it in)|would (?:that|this|it|those|the [^?]{1,40}|\$\d[^?]*) work(?: for you)?|do you (?:want|still want)|would you like|you want (?:it|that|this|one|them))\b[^?]*\?\s*$/i;
 /** "I've saved / flagged / told Josh..." said in this reply. Only true if a tool that does that ran this turn. */
@@ -331,7 +333,7 @@ export function lintReply(text: string, ranTools: Set<string> = new Set()): stri
   for (const b of bubbles) {
     const q = (b.match(/\?/g) ?? []).length;
     if (q > 1) problems.push(`One text asks ${q} questions ("${b.slice(0, 80)}"). Keep ONE question per text: the next step only.`);
-    if (WANT_RE.test(b) && !/put you down for/i.test(b)) {
+    if (WANT_RE.test(b) && !/put you down for|lock it in/i.test(b)) {
       problems.push(`A text ends by asking if they want it ("${b.slice(-70)}"). Assume the close: ask the next step instead (size, pickup or shipped, day/time, payment).`);
     }
   }
@@ -380,6 +382,9 @@ export class ClaudeAgent implements ReplyEngine {
 
   async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
     const system = systemBlocks(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
+    // Tool results aren't kept between turns, so without this the AI forgets where the payment info came from.
+    const ctx = tools?.context?.();
+    if (ctx) system.push({ type: "text", text: ctx });
     if (tools && !tools.checkout) {
       system.push({
         type: "text",

@@ -953,10 +953,24 @@ describe("reply check (lintReply): real lines the AI retest failed", () => {
 });
 
 describe("quiet-buyer nudge", () => {
-  it("ends with the next step, not 'want me to lock it in?'", async () => {
+  it("ends with Josh's close, 'Want me to lock it in?', which the reply check allows", async () => {
     const { quietNudgeText } = await import("../src/bot.js");
     const t = quietNudgeText("1x Spider Hoodie White/Black XS", "Baccarat Rouge (B tier)");
-    expect(t).not.toMatch(/want/i);
+    expect(t).toMatch(/Want me to lock it in\?$/);
     expect(lintReply(t)).toEqual([]);
+  });
+
+  it("every reply knows the real payment handles and what's already booked", async () => {
+    const store = new Store();
+    store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x YSL Y EDP", total: 70, payment: "cash app", when: "ship 2026-11-12", lines: [], stockOff: false });
+    let tools!: OrderTools;
+    const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, t?: OrderTools) => ((tools = t!), { text: "ok" })) };
+    const { ig } = setup();
+    const bot = new Bot({ ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "x", keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing: loadPricing(), payInfo: { cashApp: "$triangleresells", zelle: "919-480-7349" } });
+    await bot.handle({ object: "instagram", entry: [{ id: OWN_ID, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN_ID }, message: { mid: "ctx1", text: "did it go thru" } }] }] });
+    const ctx = tools.context!();
+    expect(ctx).toContain("Cash App $triangleresells");
+    expect(ctx).toContain("Never tell a buyer they're wrong");
+    expect(ctx).toContain("BOOKED, not paid yet: 1x YSL Y EDP, $70");
   });
 });

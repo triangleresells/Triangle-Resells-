@@ -238,7 +238,7 @@ async function main() {
       messages: [
         {
           role: "user",
-          content: `RULES:\n${config.agentInstructions}\n\nKNOWLEDGE BASE THE BOT SAW (facts here are NOT invented):\n${config.knowledgeBase}\n\nPICKUP SCHEDULE RULES THE BOT SAW:\n${scheduleText(busy, new Date(clock.t))}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\nNOTES: alert_team also saves the item on the customer's list for restock texts (it counts as save_interest). A "note" inside a submit_order result (like the ship date after 7pm) is tool output, not invented.\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
+          content: `RULES:\n${config.agentInstructions}\n\nKNOWLEDGE BASE THE BOT SAW (facts here are NOT invented):\n${config.knowledgeBase}\n\nPICKUP SCHEDULE RULES THE BOT SAW:\n${scheduleText(busy, new Date(clock.t))}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\nNOTES: "Want me to lock it in?" and "Want me to put you down for one?" are Josh's approved wording: never fail them as "do you want it" questions. alert_team also saves the item on the customer's list for restock texts (it counts as save_interest). A "note" inside a submit_order result (like the ship date after 7pm) is tool output, not invented.\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
         },
       ],
     } as Anthropic.MessageCreateParamsNonStreaming);

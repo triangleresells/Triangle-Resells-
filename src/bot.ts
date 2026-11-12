@@ -92,7 +92,7 @@ export function giftName(item: string): string {
 export function quietNudgeText(summary: string, gift?: string): string {
   const order = summary.length > 100 ? `${summary.slice(0, 97)}...` : summary;
   const hook = gift ? ` Just so you know, every order comes with a free ${giftName(gift)}.` : "";
-  return `Hey, still got you on the ${order}.${hook} Pickup or shipped?`;
+  return `Hey, still got you on the ${order}.${hook} Want me to lock it in?`;
 }
 
 /** Sent once when a payment link expires unpaid. If they answer, the AI sends a fresh link. */
@@ -436,6 +436,22 @@ export class Bot {
         });
       }
       return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note, payText: payTextFor(payment, r.q.total, this.d.payInfo) };
+    };
+    tools.context = () => {
+      const parts: string[] = [];
+      const pay = [this.d.payInfo?.cashApp && `Cash App ${this.d.payInfo.cashApp}`, this.d.payInfo?.zelle && `Zelle ${this.d.payInfo.zelle}`].filter(Boolean);
+      if (pay.length) {
+        parts.push(`REAL PAYMENT INFO (from Josh, correct): ${pay.join("; ")}. If you sent these earlier in this chat, they were right. Never tell a buyer they're wrong, unverified or not to pay them.`);
+      }
+      const booked = this.d.store.allLabels().filter((l) => l.userId === userId);
+      if (booked.length) {
+        parts.push(
+          `ORDERS ALREADY LOCKED IN FOR THIS BUYER (don't submit them again):\n${booked
+            .map((l) => `- ${l.label === "PAID" ? "PAID" : "BOOKED, not paid yet"}: ${l.summary}, $${l.total}, ${l.payment}, ${l.when}${l.saysPaid ? ` (buyer says they paid; Josh is checking)` : ""}`)
+            .join("\n")}`,
+        );
+      }
+      return parts.join("\n\n");
     };
     tools.isBooked = (items, fulfillment, deliveryArea) => {
       const q = quoteOrder(this.withHeld(pricing, userId), items, fulfillment, deliveryArea);
