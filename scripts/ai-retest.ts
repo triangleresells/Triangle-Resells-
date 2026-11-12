@@ -234,7 +234,7 @@ async function main() {
       max_tokens: 2000,
       output_config: { effort: "low" },
       system:
-        "You grade a DM sales bot strictly against its rules and the scenario's expected behavior. Judge only what the BOT wrote and did, not the customer. Reply with JSON only: {\"pass\": boolean, \"violations\": [string], \"notes\": string}. Each violation is a short label then a colon then specifics, e.g. \"invented: said $50 for 2 hats\". Only fail for real rule breaks, not style nitpicks.",
+        "You grade a DM sales bot strictly against its rules and the scenario's expected behavior. Judge only what the BOT wrote and did, not the customer. Reply with JSON only: {\"pass\": boolean, \"violations\": [string], \"notes\": string}. Each violation starts with its severity, then a short label, then specifics: \"CRITICAL: invented: said $50 for 2 hats\". Severity: CRITICAL = the customer is told something wrong or harmful (a price, total, fee, stock, size, product fact, date or payment detail not backed by the sheet, knowledge base or a tool result; says a payment is confirmed; promises a discount, hold or delivery that isn't allowed; books or quotes an item that isn't for sale; says they're saved or on the list with no save_interest call in the log). MAJOR = the sale or the process breaks (doesn't lock in when it has everything, asks permission to book, books with wrong details, hands off when it could answer, ignores a question, skips a required rule such as the 10+ shipping label). MINOR = style or missed upsell (two questions in one text, bot-like wording, long texts, forgot to mention a freebie or tier). pass is true only with no violations at all. Only list real rule breaks, not nitpicks.",
       messages: [
         {
           role: "user",
@@ -271,10 +271,15 @@ async function main() {
   results.sort((a, b) => a.run - b.run);
   const failed = results.filter((r) => !r.grade.pass);
   const byLabel = new Map<string, number>();
+  const sev = (v: string) => (/^\s*critical/i.test(v) ? "critical" : /^\s*major/i.test(v) ? "major" : "minor");
   for (const f of failed) for (const v of f.grade.violations ?? []) {
-    const label = v.split(":")[0].trim().toLowerCase().slice(0, 60);
+    const parts = v.split(":").map((p) => p.trim());
+    const label = (/^(critical|major|minor)$/i.test(parts[0]) ? `${parts[0].toUpperCase()} ${parts[1] ?? ""}` : parts[0]).toLowerCase().slice(0, 60);
     byLabel.set(label, (byLabel.get(label) ?? 0) + 1);
   }
+  const has = (r: (typeof results)[number], level: string) => (r.grade.violations ?? []).some((v) => sev(v) === level);
+  const withCritical = results.filter((r) => has(r, "critical"));
+  const withMajor = results.filter((r) => !has(r, "critical") && has(r, "major"));
   const c = cost();
   const summary = {
     passed: results.length - failed.length,
@@ -282,10 +287,15 @@ async function main() {
     passRate: `${(((results.length - failed.length) / Math.max(1, results.length)) * 100).toFixed(1)}%`,
     costUsd: Number(c.total.toFixed(4)),
     failedScenarios: failed.map((f) => `${f.id}#${f.run}`),
+    noCritical: results.length - withCritical.length,
+    noCriticalOrMajor: results.length - withCritical.length - withMajor.length,
+    criticalScenarios: withCritical.map((f) => `${f.id}#${f.run}`),
     topFailures: [...byLabel].sort((a, b) => b[1] - a[1]).slice(0, 10),
   };
   writeFileSync(out, JSON.stringify({ summary, usage: Object.fromEntries(usage), results }, null, 1));
   console.log(`\n${summary.passed}/${summary.total} passed (${summary.passRate})`);
+  console.log(`${summary.noCritical}/${summary.total} with NO critical mistakes (launch bar)`);
+  console.log(`${summary.noCriticalOrMajor}/${summary.total} with no critical or major mistakes`);
   console.log("Top failures:");
   for (const [v, k] of summary.topFailures) console.log(`  ${k}x ${v}`);
   console.log(`Cost: $${c.total.toFixed(3)}`);
