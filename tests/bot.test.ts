@@ -701,16 +701,17 @@ describe("human-like reply timing", () => {
     const t = setup();
     const typing = vi.fn(async () => {});
     t.ig.typingOn = typing;
-    (t.bot as any).d.replyTiming = { coldMinMs: 80, coldMaxMs: 80, activeMinMs: 10, activeMaxMs: 10, activeWindowMs: 60_000, settleMs: 20 };
+    // Cold wait is far longer than the live-chat wait, so a slow machine can't blur the two (was flaky at 80 vs 10 ms).
+    (t.bot as any).d.replyTiming = { coldMinMs: 1000, coldMaxMs: 1000, activeMinMs: 10, activeMaxMs: 10, activeWindowMs: 60_000, settleMs: 20 };
     const started = Date.now();
     await Promise.all([t.bot.handle(dm("yo", "m1")), t.bot.handle(dm("u got essentials?", "m2"))]);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(75);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(990);
     expect(t.sent).toHaveLength(1);
     expect(typing).toHaveBeenCalledWith(USER);
     // They answer right away: live chat, short wait.
     const again = Date.now();
     await t.bot.handle(dm("L please", "m3"));
-    expect(Date.now() - again).toBeLessThan(75);
+    expect(Date.now() - again).toBeLessThan(600);
     expect(t.sent).toHaveLength(2);
   });
 });
