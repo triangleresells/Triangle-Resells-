@@ -320,6 +320,14 @@ export function claimsSaved(text: string): boolean {
     .some((s) => !s.endsWith("?") && claim.test(s));
 }
 
+/** A reply that sends the order summary or asks permission to book ("Should I lock it in?"). */
+export function looksReadyToBook(text: string): boolean {
+  return /\ball sales (are )?final\b/i.test(text) || /\b(lock|book)\s+(it|that|this|them|you|u|ur|your order|the order)(\s+in)?\b[^.!?\n]*\?/i.test(text);
+}
+
+const LOCK_IN_NOTE =
+  "(Note from the system, not the customer: your reply sends the order summary or asks to lock it in, but you didn't call submit_order. Rule: once you have item, color, size, qty, pickup/delivery/shipping, the day and time (or the full ship_to address) and the payment method, lock it in IN THAT SAME REPLY. If you have all of that, call submit_order now, then write the DM to send INSTEAD of your last reply: the summary, \"All sales final\", and exactly what submit_order tells you to send. Don't ask permission. If something is truly missing, call nothing and reply with only: MISSING)";
+
 export class ClaudeAgent implements ReplyEngine {
   private client: Anthropic;
 
@@ -343,80 +351,102 @@ export class ClaudeAgent implements ReplyEngine {
     let finalTexts: string[] = [];
     const allTexts: string[] = [];
 
-    for (let round = 0; round < MAX_ROUNDS; round++) {
-      const res = await this.client.messages.create({
-        model: this.model,
-        max_tokens: MAX_TOKENS,
-        output_config: EFFORT,
-        system,
-        messages,
-        tools: toolsFor(tools),
-      });
+    let ordered = false;
+    const run = async (rounds: number, offered = toolsFor(tools)) => {
+      for (let round = 0; round < rounds; round++) {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages,
+          tools: offered,
+        });
 
-      const texts: string[] = [];
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of res.content) {
-        if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
-        if (block.type !== "tool_use") continue;
-        const input = block.input as any;
-        let content: string;
-        if (block.name === "handoff_to_team") {
-          handoff = input as AgentReply["handoff"];
-          content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
-        } else if (block.name === "alert_team") {
-          alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
-          content =
-            "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
-        } else if (block.name === "save_interest") {
-          if (input.item) interests.push(String(input.item));
-          content = "Saved to the customer list. Keep helping.";
-        } else if (block.name === "cancel_follow_up") {
-          cancelFollowUp = true;
-          content = "No follow-up will be sent. Close politely and leave the door open.";
-        } else if (!tools) {
-          content = "Ordering isn't available right now. Hand off to the team.";
-        } else if (block.name === "quote_order") {
-          content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
-        } else if (block.name === "payment_sent" && tools.paymentSent) {
-          content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
-        } else if (block.name === "submit_order" && tools.submitOrder) {
-          const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
-          if (r.ok && r.alreadyBooked) {
-            content = `This exact order was ALREADY locked in earlier in this chat (total $${r.total}). Nothing new was booked. Don't say it just got locked in, don't send a correction, and don't resend the summary or payment info unless they ask.`;
-          } else if (r.ok) {
-            const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
-            content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
-          } else if (!r.fixable && r.handoff) {
-            content = `Could not lock it in: ${r.error}. Call handoff_to_team (josh) with the order, and tell the customer Josh will reach out right here.`;
-          } else if (r.fixable) {
-            content = `Could not lock it in: ${r.error}. Tell the customer what's wrong and offer the closest fix (another open time, an in-stock color or size, shipping or meeting halfway), then try again once they pick.`;
+        const texts: string[] = [];
+        const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        for (const block of res.content) {
+          if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
+          if (block.type !== "tool_use") continue;
+          const input = block.input as any;
+          let content: string;
+          if (block.name === "handoff_to_team") {
+            handoff = input as AgentReply["handoff"];
+            content = "Team alerted. Write one short message telling the customer someone will jump in shortly.";
+          } else if (block.name === "alert_team") {
+            alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? "") });
+            content =
+              "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
+          } else if (block.name === "save_interest") {
+            if (input.item) interests.push(String(input.item));
+            content = "Saved to the customer list. Keep helping.";
+          } else if (block.name === "cancel_follow_up") {
+            cancelFollowUp = true;
+            content = "No follow-up will be sent. Close politely and leave the door open.";
+          } else if (!tools) {
+            content = "Ordering isn't available right now. Hand off to the team.";
+          } else if (block.name === "quote_order") {
+            content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
+          } else if (block.name === "payment_sent" && tools.paymentSent) {
+            content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
+          } else if (block.name === "submit_order" && tools.submitOrder) {
+            ordered = true;
+            const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
+            if (r.ok && r.alreadyBooked) {
+              content = `This exact order was ALREADY locked in earlier in this chat (total $${r.total}). Nothing new was booked. Don't say it just got locked in, don't send a correction, and don't resend the summary or payment info unless they ask.`;
+            } else if (r.ok) {
+              const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
+              content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
+            } else if (!r.fixable && r.handoff) {
+              content = `Could not lock it in: ${r.error}. Call handoff_to_team (josh) with the order, and tell the customer Josh will reach out right here.`;
+            } else if (r.fixable) {
+              content = `Could not lock it in: ${r.error}. Tell the customer what's wrong and offer the closest fix (another open time, an in-stock color or size, shipping or meeting halfway), then try again once they pick.`;
+            } else {
+              content = `Could not lock it in: ${r.error}. Hand off to josh.`;
+            }
+          } else if (block.name === "create_checkout_link" && tools.checkout) {
+            ordered = true;
+            const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area);
+            if (r.ok) {
+              checkoutUrl = r.url;
+              content = `Link made. Total $${r.total} (${r.summary}).${r.note ? ` ${r.note}` : ""} Send the customer this exact link: ${r.url}`;
+            } else if (r.fixable) {
+              content = `Could not make the link: ${r.error}. Tell the customer and offer an open time from the PICKUP SCHEDULE (or another fix, like shipping or meeting halfway), then try again once they pick.`;
+            } else {
+              content = `Could not make the link: ${r.error}. Hand off to the team.`;
+            }
           } else {
-            content = `Could not lock it in: ${r.error}. Hand off to josh.`;
+            content = "Unknown tool.";
           }
-        } else if (block.name === "create_checkout_link" && tools.checkout) {
-          const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area);
-          if (r.ok) {
-            checkoutUrl = r.url;
-            content = `Link made. Total $${r.total} (${r.summary}).${r.note ? ` ${r.note}` : ""} Send the customer this exact link: ${r.url}`;
-          } else if (r.fixable) {
-            content = `Could not make the link: ${r.error}. Tell the customer and offer an open time from the PICKUP SCHEDULE (or another fix, like shipping or meeting halfway), then try again once they pick.`;
-          } else {
-            content = `Could not make the link: ${r.error}. Hand off to the team.`;
-          }
-        } else {
-          content = "Unknown tool.";
+          toolResults.push({ type: "tool_result", tool_use_id: block.id, content });
         }
-        toolResults.push({ type: "tool_result", tool_use_id: block.id, content });
-      }
-      allTexts.push(...texts);
-      finalTexts = texts;
+        allTexts.push(...texts);
+        finalTexts = texts;
 
-      if (res.stop_reason !== "tool_use" || toolResults.length === 0) break;
-      messages.push({ role: "assistant", content: res.content });
-      messages.push({ role: "user", content: toolResults });
-    }
+        if (res.stop_reason !== "tool_use" || toolResults.length === 0) break;
+        messages.push({ role: "assistant", content: res.content });
+        messages.push({ role: "user", content: toolResults });
+      }
+    };
+    await run(MAX_ROUNDS);
 
     let text = (finalTexts.length ? finalTexts : allTexts).join("\n").replace(/\*\*/g, "").trim();
+    if (text && !handoff && !ordered && tools?.submitOrder && looksReadyToBook(text)) {
+      // The reply sends the order summary ("All sales final") or asks "Should I lock it in?" without booking it.
+      // The rule is to lock it in in that same reply, so give the AI one more go with only the booking tools.
+      // If it has everything, the order gets booked and its reply is rewritten; if not, the first reply goes out.
+      messages.push({ role: "assistant", content: text }, { role: "user", content: LOCK_IN_NOTE });
+      finalTexts = [];
+      try {
+        await run(3, toolsFor(tools).filter((t) => ["submit_order", "create_checkout_link", "handoff_to_team"].includes(t.name)));
+      } catch (err) {
+        console.error("[ai] lock-in retry failed:", err);
+      }
+      if (ordered || handoff) {
+        const second = finalTexts.join("\n").replace(/\*\*/g, "").trim();
+        text = second && second !== "MISSING" ? second : "";
+      }
+    }
     if (!text && !handoff) {
       // The AI used its tools but never wrote the DM. Ask once more for just the message, so the chat
       // keeps going instead of being handed to the team for no reason.

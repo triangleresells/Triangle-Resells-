@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemBlocks, buildSystemPrompt, claimsSaved, toApiMessages } from "../src/ai.js";
+import { buildSystemBlocks, buildSystemPrompt, ClaudeAgent, claimsSaved, looksReadyToBook, toApiMessages, type OrderTools } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
 import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
@@ -137,4 +137,47 @@ describe("claimsSaved (bot says they're on the list)", () => {
     "Should I save you a spot on the list?",
     "Locked in, Jordan. Send the Cash App payment to $X for $70.",
   ])("ignores %s", (t) => expect(claimsSaved(t)).toBe(false));
+});
+
+describe("lock-in guard", () => {
+  it.each([
+    "1x Bleu de Chanel @ $60, free Baccarat. Total $60. All sales final. Should I lock it in?",
+    "Want me to lock it in with Zelle?",
+    "Should I lock that in for you?",
+    "All sales are final.",
+  ])("spots an unbooked close: %s", (t) => expect(looksReadyToBook(t)).toBe(true));
+  it.each(["Pickup or shipped?", "Locked in, Jordan. Send $70 to $X.", "What size you need?"])("ignores %s", (t) =>
+    expect(looksReadyToBook(t)).toBe(false),
+  );
+
+  /** A fake Claude that replies with the given responses in order. */
+  function agentWith(responses: object[]) {
+    const agent = new ClaudeAgent("k", "m", "rules", "kb");
+    const calls: any[] = [];
+    (agent as any).client = { messages: { create: async (req: any) => (calls.push(req), responses.shift()) } };
+    return { agent, calls };
+  }
+  const text = (t: string) => ({ content: [{ type: "text", text: t }], stop_reason: "end_turn" });
+  const submit = { content: [{ type: "tool_use", id: "t1", name: "submit_order", input: { items: [{ product: "Bleu de Chanel", qty: 1 }], fulfillment: "pickup", fulfill_date: "2026-11-14", fulfill_time: "2:00 PM", payment: "cash" } }], stop_reason: "tool_use" };
+  const tools = (booked: unknown[]): OrderTools => ({
+    quote: () => "",
+    submitOrder: async (...a) => (booked.push(a), { ok: true, total: 60, summary: "1x Bleu", freebies: [], payText: "Cash at pickup." }),
+  });
+
+  it("books the order instead of asking permission, and replaces the permission question", async () => {
+    const booked: unknown[] = [];
+    const { agent, calls } = agentWith([text("Total $60. All sales final. Should I lock it in?"), submit, text("Locked in for Sat 2 PM. All sales final. Cash at pickup.")]);
+    const r = await agent.reply([{ role: "user", text: "1 bleu, pickup sat 2pm, cash" }], "", tools(booked));
+    expect(booked).toHaveLength(1);
+    expect(r.text).toBe("Locked in for Sat 2 PM. All sales final. Cash at pickup.");
+    expect(calls[1].tools.map((t: any) => t.name).sort()).toEqual(["handoff_to_team", "submit_order"]);
+  });
+
+  it("keeps the first reply when something is really missing", async () => {
+    const booked: unknown[] = [];
+    const { agent } = agentWith([text("Total $60. All sales final. Cash, Cash App or Zelle?"), text("MISSING")]);
+    const r = await agent.reply([{ role: "user", text: "1 bleu, pickup sat 2pm" }], "", tools(booked));
+    expect(booked).toHaveLength(0);
+    expect(r.text).toBe("Total $60. All sales final. Cash, Cash App or Zelle?");
+  });
 });
