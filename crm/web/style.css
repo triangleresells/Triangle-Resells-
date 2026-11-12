@@ -113,3 +113,4 @@ table.sales .n { text-align: right; font-variant-numeric: tabular-nums; white-sp
 table.sales tfoot td { border-top: 2px solid var(--line); }
 tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--panel2); }
 .cashgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+input.got { width: 72px; min-height: 36px; padding: 4px 6px; text-align: right; }

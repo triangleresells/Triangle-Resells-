@@ -21,6 +21,7 @@ const state = {
   money: { month: L.thisMonth(), chart: false, months: [], report: null, filters: {} },
   customers: { sort: "top_spenders", search: "", list: [], open: null },
   cash: { day: L.isoDate(new Date()), report: null },
+  stock: { rows: [], restocks: [], search: "", editing: null },
 };
 
 function banner(msg, ok = false) {
@@ -88,6 +89,7 @@ function reloadSoon() {
 const TABS = [
   { key: "calendar", label: "Calendar" },
   { key: "money", label: "Money" },
+  { key: "stock", label: "Stock" },
   { key: "customers", label: "Customers" },
   { key: "cash", label: "Cash" },
 ];
@@ -102,6 +104,7 @@ function render() {
   if (state.tab === "money") return renderMoney();
   if (state.tab === "customers") return renderCustomers();
   if (state.tab === "cash") return renderCash();
+  if (state.tab === "stock") return renderStock();
   $("main").innerHTML = tabsHtml() + `<div class="layout">
     <section class="panel" aria-labelledby="calH">
       <div class="spread" style="margin-bottom:8px">
@@ -328,6 +331,7 @@ async function openTab() {
     if (state.tab === "money") await loadMoney();
     if (state.tab === "customers") await loadCustomers();
     if (state.tab === "cash") await loadCash();
+    if (state.tab === "stock") await loadStock();
   } catch (err) {
     banner("Couldn't load: " + err.message);
   }
@@ -489,6 +493,115 @@ function renderCash() {
     <p class="muted small">Cash counts the moment a cash booking is marked Paid or Done, for whoever tapped it (or who was fulfilling, if the bot marked it). Day = Eastern time.</p>
   </section>`;
   $("cDay").onchange = async (e) => { c.day = e.target.value; await loadCash().catch((x) => banner(x.message)); renderCash(); };
+}
+
+// ---------- Stock: the full picture per item + restocks ----------
+async function loadStock() {
+  const [overview, restocks] = await Promise.all([
+    rpc("stock_overview", { p_is_test: state.includeTest }),
+    rpc("restocks_list", { p_include_test: state.includeTest }),
+  ]);
+  state.stock.rows = overview ?? [];
+  state.stock.restocks = restocks ?? [];
+}
+
+const STOCK_STATUS = { for_sale: "For sale", incoming: "Incoming", freebie: "Freebie", not_for_sale: "Not for sale", other: "Other" };
+
+function restockRowHtml(i = {}) {
+  return `<div class="itemrow" data-rrow>
+    <div class="fld"><label>Brand</label><input name="brand" value="${esc(i.brand)}"></div>
+    <div class="fld"><label>Item *</label><input name="item" value="${esc(i.item)}"></div>
+    <div class="fld"><label>Color</label><input name="color" value="${esc(i.color)}"></div>
+    <div class="fld"><label>Size</label><input name="size" value="${esc(i.size)}"></div>
+    <div class="fld"><label>Qty *</label><input name="qty_expected" type="number" min="0" step="1" inputmode="numeric" value="${esc(i.qty_expected ?? "")}"></div>
+    <div class="fld"><label>$ cost</label><input name="unit_cost" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(i.unit_cost ?? "")}"></div>
+    <button type="button" class="link danger" data-delrrow aria-label="Remove line">✕</button>
+  </div>`;
+}
+
+function renderStock() {
+  const st = state.stock;
+  const q = st.search.trim().toLowerCase();
+  const rows = st.rows.filter((r) => !q || [r.brand, r.item, r.color, r.size].join(" ").toLowerCase().includes(q));
+  const editing = st.editing; // null | "new" | restock id
+  const restockForm = (r) => `<form class="panel f" id="rf">
+      <div class="full"><h2>${r ? "Edit incoming restock" : "New incoming restock"}</h2></div>
+      <div class="fld"><label for="r_name">Name *</label><input id="r_name" name="name" required value="${esc(r?.name ?? "")}" placeholder="Nov 16-17 restock"></div>
+      <div class="fld"><label for="r_date">Expected</label><input id="r_date" name="expected_date" type="date" value="${esc(r?.expected_date ?? "")}"></div>
+      <div class="full stack" id="rrows">${(r?.items?.length ? r.items : [{}]).map(restockRowHtml).join("")}</div>
+      <div class="full"><button type="button" class="btn small" id="raddrow">+ Line</button></div>
+      <div class="fld full"><label for="r_notes">Notes</label><input id="r_notes" name="notes" value="${esc(r?.notes ?? "")}"></div>
+      <div class="full spread"><button type="button" class="btn" id="rcancel">Cancel</button><button class="btn gold">${r ? "Save" : "Log restock"}</button></div>
+    </form>`;
+  $("main").innerHTML = tabsHtml() + `<div class="stack">
+    <section class="panel stack">
+      <div class="spread"><h2>Restocks</h2><button class="btn gold small" id="rnew">+ Incoming restock</button></div>
+      ${editing === "new" ? restockForm(null) : ""}
+      ${st.restocks.length ? st.restocks.map((r) => editing === r.id ? restockForm(r) : `<article class="card ${r.status === "received" ? "done" : "check"}" data-restock="${r.id}">
+        <div class="spread"><span class="buyer">${esc(r.name)}</span><span>${r.status === "received" ? `<span class="chip done">Received ${esc(new Date(r.received_at).toLocaleDateString("en-US"))}</span>` : `<span class="checktag">Incoming${r.expected_date ? ` · ${esc(r.expected_date)}` : ""}</span>`}</span></div>
+        <div class="tablewrap"><table class="sales"><thead><tr><th>Item</th><th class="n">${r.status === "received" ? "Expected" : "Coming"}</th>${r.status === "received" ? `<th class="n">Received</th>` : `<th class="n">Got</th>`}</tr></thead>
+          <tbody>${r.items.map((i) => `<tr><td>${esc([i.brand && !i.item.toLowerCase().startsWith(i.brand.toLowerCase()) ? i.brand : "", i.item, i.color, i.size].filter(Boolean).join(" "))}</td>
+            <td class="n">${i.qty_expected}</td>
+            <td class="n">${r.status === "received" ? i.qty_received : `<input class="got" type="number" min="0" step="1" inputmode="numeric" data-got="${i.id}" value="${i.qty_expected}" aria-label="How many arrived">`}</td></tr>`).join("")}</tbody></table></div>
+        ${r.notes ? `<div class="meta">${esc(r.notes)}</div>` : ""}
+        ${r.status === "incoming" ? `<div class="row"><button class="btn gold small" data-receive>It landed: mark received</button><button class="link" data-redit>Edit</button></div>
+          <p class="muted small">Change "Got" for anything that came in short before you mark it received. The pieces are added to stock right away, and the bot puts them on BOT STOCK within a minute.</p>` : ""}
+      </article>`).join("") : editing === "new" ? "" : `<div class="empty">No restocks logged yet.</div>`}
+    </section>
+    <section class="panel stack">
+      <div class="spread"><h2>Stock</h2><div class="fld"><input id="sSearch" type="search" placeholder="Search items" value="${esc(st.search)}" aria-label="Search items"></div></div>
+      ${rows.length ? `<div class="tablewrap"><table class="sales">
+        <thead><tr><th>Item</th><th>Status</th><th class="n">Came in</th><th class="n">Sold this restock</th><th class="n">Reserved</th><th class="n">Free to sell</th><th class="n">Sold all-time</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr>
+          <td><b>${esc([r.brand && !r.item.toLowerCase().startsWith((r.brand || "").toLowerCase()) ? r.brand : "", r.item].filter(Boolean).join(" "))}</b> ${esc([r.color, r.size].filter(Boolean).join(" · "))}${r.restock ? `<br><span class="muted small">${esc(r.restock)}</span>` : ""}${r.needs_sheet_row ? `<br><span class="checktag">Being added to BOT STOCK</span>` : ""}</td>
+          <td>${esc(STOCK_STATUS[r.status] ?? r.status)}</td>
+          <td class="n">${r.restock ? r.came_in : "—"}</td>
+          <td class="n">${r.sold_since_restock}</td>
+          <td class="n">${r.reserved}</td>
+          <td class="n">${r.status === "for_sale" && r.free === 0 ? `<span class="redtag">0</span>` : `<b>${r.free}</b>`}</td>
+          <td class="n">${r.sold_all_time}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="empty">${q ? "Nothing matches that search." : "No stock yet. It shows up once the bot syncs BOT STOCK."}</div>`}
+      <p class="muted small">Free to sell is what buyers can get (the bot only offers this). Reserved = booked, not picked up yet. Sold this restock counts Done sales since the restock landed.</p>
+    </section>
+  </div>`;
+  $("rnew").onclick = () => { st.editing = "new"; renderStock(); $("r_name")?.focus(); };
+  let t;
+  $("sSearch").oninput = (e) => { clearTimeout(t); t = setTimeout(() => { st.search = e.target.value; renderStock(); $("sSearch").focus(); }, 250); };
+  const form = $("rf");
+  if (form) {
+    $("rcancel").onclick = () => { st.editing = null; renderStock(); };
+    $("raddrow").onclick = () => { const d = document.createElement("div"); d.innerHTML = restockRowHtml(); $("rrows").append(d.firstElementChild); };
+    $("rrows").onclick = (e) => { if (e.target.closest("[data-delrrow]") && $("rrows").children.length > 1) e.target.closest("[data-rrow]").remove(); };
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const items = [...form.querySelectorAll("[data-rrow]")].map((r) => Object.fromEntries(["brand", "item", "color", "size", "qty_expected", "unit_cost"].map((k) => [k, r.querySelector(`[name=${k}]`).value.trim()])))
+        .filter((i) => i.item)
+        .map((i) => ({ ...i, qty_expected: Number(i.qty_expected), unit_cost: i.unit_cost === "" ? null : Number(i.unit_cost) }));
+      if (!items.length) return banner("Add at least one line.");
+      if (items.some((i) => !Number.isInteger(i.qty_expected) || i.qty_expected < 0)) return banner("Every line needs a quantity.");
+      const p = { name: $("r_name").value.trim(), expected_date: $("r_date").value || null, notes: $("r_notes").value.trim() || null, items, is_test: state.includeTest };
+      try {
+        if (st.editing === "new") await rpc("create_restock", { p });
+        else await rpc("update_restock", { p_id: st.editing, p });
+        st.editing = null;
+        banner("Saved.", true);
+        await loadStock();
+      } catch (err) { return banner("Not saved: " + err.message); }
+      renderStock();
+    };
+  }
+  document.querySelectorAll("[data-restock]").forEach((card) => (card.onclick = async (e) => {
+    const id = card.dataset.restock;
+    if (e.target.closest("[data-redit]")) { st.editing = id; return renderStock(); }
+    if (!e.target.closest("[data-receive]")) return;
+    const got = [...card.querySelectorAll("[data-got]")].map((x) => ({ id: x.dataset.got, qty_received: Number(x.value) }));
+    if (got.some((g) => !Number.isInteger(g.qty_received) || g.qty_received < 0)) return banner("Each 'Got' needs a number (0 or more).");
+    const total = got.reduce((a, g) => a + g.qty_received, 0);
+    if (!confirm(`Mark it received? ${total} piece(s) go into stock now.`)) return;
+    try { await rpc("receive_restock", { p_id: id, p_received: got }); banner("Received. Stock is updated.", true); await loadStock(); }
+    catch (err) { return banner("Not saved: " + err.message); }
+    renderStock();
+  }));
 }
 
 // ---------- start ----------

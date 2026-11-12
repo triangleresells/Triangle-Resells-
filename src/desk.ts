@@ -1,7 +1,10 @@
 import { rowMatches, type StockRow } from "./catalog.js";
 import type { Notifier } from "./handoff.js";
 import type { CalendarPoster } from "./orders.js";
-import { CrmError, crmPayment, to24h, type Crm, type StockWrite } from "./crm.js";
+import { CrmError, crmPayment, to24h, type Crm, type StockNewRow, type StockWrite } from "./crm.js";
+
+/** The words BOT STOCK uses in its Status column. */
+export const SHEET_STATUS: Record<string, string> = { for_sale: "FOR SALE", incoming: "INCOMING", freebie: "FREEBIE", not_for_sale: "NOT FOR SALE" };
 import { STOCK_TAB } from "./sheet.js";
 import type { OrderLabel, ShipTo, Store } from "./store.js";
 
@@ -57,19 +60,19 @@ export class StockKeeper {
    * Sets exact Qty values on a tab (the CRM's stock sync says what the sheet should show). Rows are matched like the
    * CRM matches them: item + color + size, and which repeat when the same item, color and size appear twice.
    */
-  setQty(writes: StockWrite[], tab = STOCK_TAB): Promise<string[]> {
-    const run = this.chain.then(() => this.doSet(writes, tab));
+  setQty(writes: StockWrite[], tab = STOCK_TAB, addRows: StockNewRow[] = []): Promise<string[]> {
+    const run = this.chain.then(() => this.doSet(writes, tab, addRows));
     this.chain = run.catch(() => {});
     return run;
   }
 
-  private async doSet(list: StockWrite[], tab: string): Promise<string[]> {
-    if (!list.length) return [];
+  private async doSet(list: StockWrite[], tab: string, addRows: StockNewRow[] = []): Promise<string[]> {
+    if (!list.length && !addRows.length) return [];
     const [rows] = await this.io.tabs([tab]);
     const at = rows.findIndex((r) => r.some((c) => norm(c ?? "") === "item") && r.some((c) => norm(c ?? "") === "qty"));
     if (at < 0) return [`no Item/Qty header on ${tab}`];
     const head = rows[at].map((c) => norm(c ?? ""));
-    const [ci, cc, cs, cq] = ["item", "color", "size", "qty"].map((n) => head.indexOf(n));
+    const [ci, cc, cs, cq, cst] = ["item", "color", "size", "qty", "status"].map((n) => head.indexOf(n));
     const where = new Map<string, number>();
     const seen = new Map<string, number>();
     for (let i = at + 1; i < rows.length; i++) {
@@ -81,11 +84,25 @@ export class StockKeeper {
       where.set(`${k}#${n}`, i);
     }
     const problems: string[] = [];
-    const writes: { range: string; values: number[][] }[] = [];
+    const writes: { range: string; values: (string | number)[][] }[] = [];
     for (const w of list) {
       const i = where.get(`${stockKey(w.item, w.color, w.size)}#${w.occurrence}`);
       if (i === undefined) problems.push(`not found on ${tab}: ${[w.item, w.color, w.size].filter(Boolean).join(" ")}`);
-      else writes.push({ range: `'${tab}'!${colLetter(cq)}${i + 1}`, values: [[w.qty]] });
+      else {
+        writes.push({ range: `'${tab}'!${colLetter(cq)}${i + 1}`, values: [[w.qty]] });
+        if (w.status && cst >= 0) writes.push({ range: `'${tab}'!${colLetter(cst)}${i + 1}`, values: [[SHEET_STATUS[w.status] ?? w.status]] });
+      }
+    }
+    // New items from a restock: one row each, after the last row, under the sheet's own column headers.
+    let next = rows.length + 1;
+    for (const r of addRows) {
+      const cells: Record<string, string | number> = {
+        category: r.category ?? "", brand: r.brand ?? "", item: r.item, color: r.color ?? "", size: r.size ?? "", qty: r.qty,
+        "price list": r.price_list ?? "", status: SHEET_STATUS[r.status] ?? r.status, notes: "Added from a restock in the CRM", cost: r.cost ?? "",
+      };
+      const row = head.map((h) => cells[h] ?? "");
+      writes.push({ range: `'${tab}'!A${next}:${colLetter(head.length - 1)}${next}`, values: [row] });
+      next++;
     }
     if (writes.length) await this.io.write(writes);
     this.onChange?.();

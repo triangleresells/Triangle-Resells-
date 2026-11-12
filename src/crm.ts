@@ -77,7 +77,7 @@ export interface Crm {
   /** The buyer's history (orders, total spent) and their open bookings. */
   buyerContext(igUserId: string): Promise<{ customer: CrmCustomerStats | null; bookings: CrmBookingFull[] }>;
   /** Sends what BOT STOCK says; gets back the counts to write on the sheet. */
-  syncStock(rows: CrmStockRow[], isTest: boolean): Promise<{ sheet_edits_applied: number; writes: StockWrite[] }>;
+  syncStock(rows: CrmStockRow[], isTest: boolean): Promise<{ sheet_edits_applied: number; writes: StockWrite[]; add_rows?: StockNewRow[] }>;
 }
 
 export interface CrmCustomerStats {
@@ -111,6 +111,21 @@ export interface StockWrite {
   size: string | null;
   occurrence: number;
   qty: number;
+  /** Set the Status cell too (e.g. a restock landed: INCOMING -> FOR SALE). */
+  status?: CrmStockRow["status"] | null;
+}
+
+/** A row the CRM made (a new item in a restock) that the bot adds to BOT STOCK. */
+export interface StockNewRow {
+  category: string | null;
+  brand: string | null;
+  item: string;
+  color: string | null;
+  size: string | null;
+  qty: number;
+  price_list: string | null;
+  status: CrmStockRow["status"];
+  cost: number | null;
 }
 
 /** status: the CRM's HTTP answer (4xx = it refused, e.g. out of stock); none = couldn't reach it. */

@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { testDb, type TestDb } from "./pg.js";
 
 type Booking = { id: string; status: string; items: { item: string; qty: number; unit_cost: string | null; reserved: boolean }[] };
-type Sync = { sheet_edits_applied: number; writes: { item: string; color: string | null; size: string | null; occurrence: number; qty: number }[] };
+type Sync = { sheet_edits_applied: number; writes: { item: string; color: string | null; size: string | null; occurrence: number; qty: number; status: string | null }[]; add_rows: unknown[] };
 
 let t: TestDb;
 beforeAll(async () => {
@@ -113,9 +113,9 @@ describe("phase 3: BOT STOCK sync", () => {
   it("after a booking, tells the bot what to write on the sheet, and doesn't double-count once it's written", async () => {
     await book(hats(2));
     const first = await sync(sheet(3));
-    expect(first).toEqual({ sheet_edits_applied: 0, writes: [{ item: "Chrome Hearts Hat", color: "Black", size: null, occurrence: 1, qty: 1 }] });
+    expect(first).toEqual({ sheet_edits_applied: 0, add_rows: [], writes: [{ item: "Chrome Hearts Hat", color: "Black", size: null, occurrence: 1, qty: 1, status: null }] });
     // Next minute: the sheet now shows 1 (our write landed). Nothing more to do.
-    expect(await sync(sheet(1))).toEqual({ sheet_edits_applied: 0, writes: [] });
+    expect(await sync(sheet(1))).toEqual({ sheet_edits_applied: 0, add_rows: [], writes: [] });
     expect(await t.qty("Chrome Hearts Hat", "Black", null)).toBe(1);
   });
 
@@ -123,7 +123,7 @@ describe("phase 3: BOT STOCK sync", () => {
     await book(hats(2));
     await sync(sheet(3));
     const again = await sync(sheet(3)); // the sheet still shows 3
-    expect(again.writes).toEqual([{ item: "Chrome Hearts Hat", color: "Black", size: null, occurrence: 1, qty: 1 }]);
+    expect(again.writes).toEqual([{ item: "Chrome Hearts Hat", color: "Black", size: null, occurrence: 1, qty: 1, status: null }]);
     expect(await t.qty("Chrome Hearts Hat", "Black", null)).toBe(1);
   });
 

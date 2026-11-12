@@ -59,9 +59,11 @@ export class StockSync {
         try {
           const res = await this.d.crm.syncStock(rows, isTest);
           if (res.sheet_edits_applied) console.log(`[stock-sync] ${res.sheet_edits_applied} edit(s) on ${tab} applied to the CRM`);
-          if (res.writes.length) {
-            const problems = await this.d.keeper.setQty(res.writes, tab);
-            wrote += res.writes.length - problems.length;
+          const adds = res.add_rows ?? [];
+          if (res.writes.length || adds.length) {
+            const problems = await this.d.keeper.setQty(res.writes, tab, adds);
+            wrote += res.writes.length + adds.length - problems.length;
+            if (adds.length) console.log(`[stock-sync] added ${adds.length} new row(s) to ${tab} from a restock`);
             for (const p of problems) console.error(`[stock-sync] ${p}`);
           }
         } catch (err) {

@@ -273,8 +273,11 @@ describe("stock: CRM <-> BOT STOCK <-> bot", () => {
         ranges: async () => [],
         write: async (data: { range: string; values: (string | number)[][] }[]) => {
           for (const d of data) {
-            const m = d.range.match(/^'(.+)'!([A-Z]+)(\d+)$/)!;
-            tabs[m[1]][Number(m[3]) - 1][m[2].charCodeAt(0) - 65] = String(d.values[0][0]);
+            // "'TAB'!F5" (one cell) or "'TAB'!A9:J9" (a whole new row)
+            const m = d.range.match(/^'(.+)'!([A-Z]+)(\d+)(?::[A-Z]+\d+)?$/)!;
+            const r = Number(m[3]) - 1;
+            while (tabs[m[1]].length <= r) tabs[m[1]].push([]);
+            d.values[0].forEach((v, j) => (tabs[m[1]][r][m[2].charCodeAt(0) - 65 + j] = String(v)));
           }
         },
       },
@@ -403,5 +406,49 @@ describe("phase 4: tracking, DM counts, repeat buyers (bot <-> CRM)", () => {
     await t.asUser(josh).rpc("set_booking_status", { p_id: await (async () => (await crmBookings())[0].id)(), p_status: "done" });
     await dm("yo its me again", async () => null);
     expect(contexts.at(-1)).toMatch(/REPEAT BUYER: 1 past order, \$\d+/);
+  });
+});
+
+describe("restock -> BOT STOCK (through the bot's sync)", () => {
+  it("receiving a restock in the CRM flips INCOMING to FOR SALE on the sheet, sets the count, and adds rows for new items", async () => {
+    const { StockKeeper } = await import("../../src/desk.js");
+    const { StockSync } = await import("../../src/stocksync.js");
+    await t.reset();
+    const tabs: Record<string, string[][]> = {
+      "BOT STOCK": [
+        ["BOT STOCK - read me"],
+        ["Category", "Brand", "Item", "Color", "Size", "Qty", "Price List", "Status", "Notes", "Cost"],
+        ["Hoodie", "Essentials", "Essentials Hoodie", "Black", "XS", "0", "ESSENTIALS", "INCOMING", "", "25"],
+      ],
+    };
+    const io = {
+      tabs: async (names: string[]) => names.map((n) => { if (!tabs[n]) throw new Error("no tab"); return tabs[n].map((r) => [...r]); }),
+      ranges: async () => [],
+      write: async (data: { range: string; values: (string | number)[][] }[]) => {
+        for (const d of data) {
+          const m = d.range.match(/^'(.+)'!([A-Z]+)(\d+)(?::[A-Z]+\d+)?$/)!;
+          const r = Number(m[3]) - 1;
+          while (tabs[m[1]].length <= r) tabs[m[1]].push([]);
+          d.values[0].forEach((v, j) => (tabs[m[1]][r][m[2].charCodeAt(0) - 65 + j] = String(v)));
+        }
+      },
+    };
+    const api = createApi({ db: t.asService, botApiKey: KEY });
+    const crm = crmClient("https://crm.test", KEY, ((i: RequestInfo | URL, init?: RequestInit) => api(new Request(String(i), init))) as typeof fetch);
+    const sync = new StockSync({ crm, io, keeper: new StockKeeper(io) });
+    await sync.tick();
+    const josh = await t.login("Josh");
+    const r = await t.asUser(josh).rpc<{ id: string }>("create_restock", { p: { name: "TEST restock", items: [
+      { brand: "Essentials", item: "Essentials Hoodie", color: "Black", size: "XS", qty_expected: 20 },
+      { category: "Hoodie", brand: "Supreme", item: "Supreme Hoodie", color: "Red", size: "M", qty_expected: 5, unit_cost: 30, price_list: "SUPREME HOODIES" },
+    ] } });
+    await t.asUser(josh).rpc("receive_restock", { p_id: r.id });
+    await sync.tick();
+    expect(tabs["BOT STOCK"][2].slice(2, 8)).toEqual(["Essentials Hoodie", "Black", "XS", "20", "ESSENTIALS", "FOR SALE"]);
+    expect(tabs["BOT STOCK"][3]).toEqual(["Hoodie", "Supreme", "Supreme Hoodie", "Red", "M", "5", "SUPREME HOODIES", "FOR SALE", "Added from a restock in the CRM", "30"]);
+    await sync.tick(); // settles: nothing more to write, nothing double-counted
+    expect(await t.qty("Supreme Hoodie", "Red", "M", false)).toBe(5);
+    expect(await t.qty("Essentials Hoodie", "Black", "XS", false)).toBe(20);
+    expect(tabs["BOT STOCK"]).toHaveLength(4);
   });
 });
