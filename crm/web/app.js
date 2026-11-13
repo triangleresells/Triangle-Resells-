@@ -100,7 +100,8 @@ const TABS = [
 ];
 
 function tabsHtml() {
-  return `<nav class="tabs" role="tablist">${TABS.map((t) => `<button role="tab" class="tab ${state.tab === t.key ? "on" : ""}" aria-selected="${state.tab === t.key}" data-tab="${t.key}">${t.label}</button>`).join("")}</nav>`;
+  return `<nav class="tabs" role="tablist">${TABS.map((t) => `<button role="tab" class="tab ${state.tab === t.key ? "on" : ""}" aria-selected="${state.tab === t.key}" data-tab="${t.key}">${t.label}</button>`).join("")}</nav>`
+    + (state.includeTest ? `<div class="checktag" style="margin-bottom:10px">TEST MODE: you're seeing TEST data, and anything you add is TEST.</div>` : "");
 }
 
 function render() {
@@ -124,7 +125,7 @@ function render() {
       </div>
       <div class="dows">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<div>${d}</div>`).join("")}</div>
       <div class="grid" id="cal">${calendarHtml()}</div>
-      <label class="toggle" style="margin-top:10px"><input type="checkbox" id="tst" ${state.includeTest ? "checked" : ""}> Show TEST bookings</label>
+      <label class="toggle" style="margin-top:10px"><input type="checkbox" id="tst" ${state.includeTest ? "checked" : ""}> Test mode (shows TEST data; anything you add is TEST and only uses BOT STOCK TEST)</label>
     </section>
     <section class="panel stack" aria-labelledby="dayH">${dayHtml()}</section>
   </div>`;
@@ -282,7 +283,8 @@ function wireDay() {
       const btn = form.querySelector("button.gold");
       btn.disabled = true;
       try {
-        if (state.editing === "new") await rpc("create_booking", { p: r.payload });
+        // Test mode: the sale is TEST (only BOT STOCK TEST, deleted by the test cleanup).
+        if (state.editing === "new") await rpc("create_booking", { p: state.includeTest ? { ...r.payload, is_test: true } : r.payload });
         else await rpc("update_booking", { p_id: state.editing, p: r.payload });
         state.sel = r.payload.date;
         state.editing = null;
