@@ -142,6 +142,20 @@ describe("the sales tracker gets a sale when it's Done (fulfilled), once", () =>
     expect(writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"))).toHaveLength(1);
     expect(await desk.done(label.id)).toBe(false);
   });
+
+  it("end-of-day close logs only PAID orders the CRM doesn't own", async () => {
+    const writes: { range: string; sheetId?: string }[] = [];
+    const io = { tabs: async () => [[]], ranges: async () => [[]], write: async (d: { range: string }[], sheetId?: string) => void writes.push(...d.map((x) => ({ ...x, sheetId }))) };
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "Triangle Resells", sales: new SalesLog(io as any, "T"), now: () => new Date("2026-11-14T20:00:00Z") });
+    const base = { summary: "1x Chrome Hearts Hat Black", total: 35, payment: "cash", when: "pickup 2026-11-14 3:00 PM", fulfillment: "pickup" as const };
+    store.addLabel({ ...base, userId: "paid", label: "PAID" });
+    const unpaid = store.addLabel({ ...base, userId: "noshow", label: "BOOKED" });
+    const inCrm = store.addLabel({ ...base, userId: "crm", label: "PAID", crmId: "11111111-1111-1111-1111-111111111111" });
+    expect(await desk.doneAll()).toBe(1);
+    expect(writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"))).toHaveLength(1);
+    expect(store.allLabels().map((l) => l.id).sort()).toEqual([unpaid.id, inCrm.id].sort());
+  });
 });
 
 describe("bot payment rules", () => {

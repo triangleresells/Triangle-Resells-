@@ -121,6 +121,41 @@ describe("customer list and restock blast", () => {
       server.close();
     }
   });
+
+  it("won't change an order the CRM owns from the admin page (only in the CRM)", async () => {
+    const store = new Store();
+    const crmOrder = store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x Valley hoodie", total: 60, payment: "zelle", when: "pickup", crmId: "11111111-1111-1111-1111-111111111111" });
+    const own = store.addLabel({ userId: "u2", label: "BOOKED", summary: "1x Valley tee", total: 30, payment: "cash", when: "pickup" });
+    const calls: string[] = [];
+    const app = createServer({ handle: async () => {} }, {
+      appSecret: "s", verifyToken: "v",
+      admin: {
+        key: "secret-key-123", customers: () => [], blast: async () => ({ sent: [], manual: [] }),
+        labels: {
+          all: () => store.allLabels(),
+          markPaid: async (id) => (calls.push(`paid ${id}`), store.markLabelPaid(id)),
+          done: async (id) => (calls.push(`done ${id}`), store.clearLabel(id)),
+          doneAll: async () => 0,
+          cancel: async (id) => (calls.push(`cancel ${id}`), { ok: store.clearLabel(id) }),
+        },
+      },
+    });
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    const post = (action: string, id: string) =>
+      fetch(`http://127.0.0.1:${port}/admin/labels/${action}?key=secret-key-123`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `id=${id}` }).then((r) => r.text());
+    try {
+      const page = await (await fetch(`http://127.0.0.1:${port}/admin?key=secret-key-123`)).text();
+      expect(page).toContain("In the CRM: mark it paid, done or cancelled there.");
+      for (const action of ["paid", "clear", "cancel"]) expect(await post(action, crmOrder.id)).toContain("That order is in the CRM");
+      expect(calls).toEqual([]);
+      expect(await post("cancel", own.id)).toContain("Cancelled.");
+      expect(calls).toEqual([`cancel ${own.id}`]);
+      expect(store.allLabels().map((l) => l.id)).toEqual([crmOrder.id]);
+    } finally {
+      server.close();
+    }
+  });
 });
 
 describe("drive times from the warehouse (SE Raleigh)", () => {

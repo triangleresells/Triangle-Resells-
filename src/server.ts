@@ -164,18 +164,25 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
     app.use("/admin", (req, res, next) => (keyOk(req.query.key, admin.key) ? next() : res.sendStatus(404)));
     const page = (key: unknown, notice = "", result?: Parameters<typeof adminPage>[1]) =>
       adminPage(String(key), result, admin.labels?.all() ?? [], notice);
+    // Orders the CRM owns are changed only in the CRM: a change here never reaches it (stock stays reserved, the
+    // booking stays open, and the sale gets logged twice once someone marks it Done there).
+    const crmOwned = (id: unknown) => !!admin.labels?.all().find((l) => l.id === String(id ?? ""))?.crmId;
+    const inCrm = "That order is in the CRM. Mark it paid, done or cancelled there.";
     app.get("/admin", (req, res) => {
       res.type("html").send(page(req.query.key));
     });
     app.post("/admin/labels/paid", async (req, res) => {
+      if (crmOwned(req.body?.id)) return void res.type("html").send(page(req.query.key, inCrm));
       const ok = (await admin.labels?.markPaid(String(req.body?.id ?? ""))) ?? false;
-      res.type("html").send(page(req.query.key, ok ? "Marked PAID and logged in the sales tracker." : "That order wasn't found (or was already paid)."));
+      res.type("html").send(page(req.query.key, ok ? "Marked PAID. It goes in the sales tracker when you tap Done." : "That order wasn't found (or was already paid)."));
     });
     app.post("/admin/labels/clear", async (req, res) => {
+      if (crmOwned(req.body?.id)) return void res.type("html").send(page(req.query.key, inCrm));
       const ok = (await admin.labels?.done(String(req.body?.id ?? ""))) ?? false;
       res.type("html").send(page(req.query.key, ok ? "Done. Label cleared." : "That order wasn't found."));
     });
     app.post("/admin/labels/cancel", async (req, res) => {
+      if (crmOwned(req.body?.id)) return void res.type("html").send(page(req.query.key, inCrm));
       const r = (await admin.labels?.cancel(String(req.body?.id ?? ""))) ?? { ok: false };
       res
         .type("html")
@@ -184,7 +191,7 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
     app.post("/admin/labels/clear-all", async (req, res) => {
       const n = (await admin.labels?.doneAll()) ?? 0;
       console.log(`[admin] cleared ${n} order label(s)`);
-      res.type("html").send(page(req.query.key, `Cleared ${n} label(s).`));
+      res.type("html").send(page(req.query.key, `Closed ${n} paid order(s) and logged them. Unpaid and CRM orders were left open.`));
     });
     app.get("/admin/customers.csv", (_req, res) => {
       res.type("text/csv").attachment("triangle-customers.csv").send(customersCsv(admin.customers()));

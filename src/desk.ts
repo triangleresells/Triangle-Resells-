@@ -518,9 +518,11 @@ export class OrderDesk {
     return this.d.store.clearLabel(id);
   }
 
+  /** End of day on /admin: closes PAID orders only. Unpaid ones (maybe no-shows) are never logged as sales, and
+   *  orders the CRM owns are closed in the CRM. */
   async doneAll(): Promise<number> {
     let n = 0;
-    for (const l of this.d.store.allLabels()) if (await this.done(l.id)) n++;
+    for (const l of this.d.store.allLabels()) if (l.label === "PAID" && !l.crmId && (await this.done(l.id))) n++;
     return n;
   }
 

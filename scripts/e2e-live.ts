@@ -15,6 +15,12 @@ import { reportText, runE2E } from "./e2e/run.js";
 
 async function main() {
   if (existsSync(".env")) process.loadEnvFile(".env");
+  // The Supabase address and public key: from .env, or else from the CRM itself (they're public).
+  if ((!process.env.SUPABASE_URL?.trim() || !process.env.SUPABASE_ANON_KEY?.trim()) && process.env.CRM_API_URL?.trim()) {
+    const cfg = (await (await fetch(`${process.env.CRM_API_URL.trim().replace(/\/+$/, "")}/api/config`)).json()) as { supabaseUrl?: string; anonKey?: string };
+    process.env.SUPABASE_URL ||= cfg.supabaseUrl ?? "";
+    process.env.SUPABASE_ANON_KEY ||= cfg.anonKey ?? "";
+  }
   const need = ["CRM_API_URL", "CRM_BOT_API_KEY", "SUPABASE_URL", "SUPABASE_ANON_KEY", "E2E_EMAIL", "E2E_PASSWORD"];
   const missing = need.filter((k) => !process.env[k]?.trim());
   if (missing.length) {

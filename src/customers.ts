@@ -65,10 +65,11 @@ function labelsHtml(labels: OrderLabel[], key: string, esc: (s: string) => strin
     const tag = l.label === "PAID" ? "🟢 PAID" : "🟡 BOOKED";
     const says = l.saysPaid ? `<br>💸 <b>Says they paid</b> (${esc(l.saysPaid)}). Check your app before marking paid.` : "";
     const ship = l.shipTo ? `<br>📦 ${esc([l.shipTo.name, l.shipTo.street, l.shipTo.apt, `${l.shipTo.city}, ${l.shipTo.state} ${l.shipTo.zip}`].filter(Boolean).join(", "))}` : "";
-    return `<li><b>${tag}</b> ${who} – $${l.total} (${esc(l.payment)})<br>${esc(l.summary)}${ship}${says}<br><small>${esc(l.when)} · ${new Date(l.createdAt).toLocaleString("en-US", { timeZone: "America/New_York" })}</small><br>${
-      l.label === "BOOKED" ? btn("paid", l.id, "Mark paid") + " " : ""
-    }${btn("clear", l.id, "Done, clear label")} ${btn("cancel", l.id, "Cancel (put stock back)")}</li>`;
+    const buttons = l.crmId
+      ? "<i>In the CRM: mark it paid, done or cancelled there.</i>"
+      : `${l.label === "BOOKED" ? btn("paid", l.id, "Mark paid") + " " : ""}${btn("clear", l.id, "Done, clear label")} ${btn("cancel", l.id, "Cancel (put stock back)")}`;
+    return `<li><b>${tag}</b> ${who} – $${l.total} (${esc(l.payment)})<br>${esc(l.summary)}${ship}${says}<br><small>${esc(l.when)} · ${new Date(l.createdAt).toLocaleString("en-US", { timeZone: "America/New_York" })}</small><br>${buttons}</li>`;
   };
   if (!labels.length) return "<p>No open orders.</p>";
-  return `<ul>${labels.map(row).join("")}</ul><form method="post" action="/admin/labels/clear-all?key=${k}"><button>Clear ALL labels (end of day)</button></form>`;
+  return `<ul>${labels.map(row).join("")}</ul><form method="post" action="/admin/labels/clear-all?key=${k}"><button>Close all PAID orders (end of day)</button></form>`;
 }
