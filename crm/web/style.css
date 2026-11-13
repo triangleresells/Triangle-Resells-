@@ -140,3 +140,5 @@ input.got { width: 72px; min-height: 36px; padding: 4px 6px; text-align: right; 
 .vid .st { min-height: 36px; width: auto; padding: 4px 12px; }
 .vid input:not([type=checkbox]) { min-height: 36px; padding: 4px 8px; }
 #vAdd select { width: auto; } #vAdd input { flex: 1; min-width: 180px; }
+/* A date picker inside a row of buttons stays on one line (Videos day picker). */
+.row input[type=date] { width: auto; flex: 0 1 auto; }
