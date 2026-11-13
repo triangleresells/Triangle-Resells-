@@ -158,7 +158,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminKey: optional(env.ADMIN_KEY),
     crmApiUrl: optional(env.CRM_API_URL),
     crmBotApiKey: optional(env.CRM_BOT_API_KEY),
-    supabaseUrl: optional(env.SUPABASE_URL),
+    // Accepts the project URL however it was copied from Supabase (with or without "/rest/v1/").
+    supabaseUrl: optional(env.SUPABASE_URL).replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, ""),
     supabaseAnonKey: optional(env.SUPABASE_ANON_KEY),
     crmWebOrigin: optional(env.CRM_WEB_ORIGIN).replace(/\/+$/, ""),
     crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",

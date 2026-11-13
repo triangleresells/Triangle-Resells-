@@ -169,3 +169,12 @@ describe("one-paste setup (supabase/setup.sql)", () => {
     await pg.close();
   });
 });
+
+describe("Supabase address, however it was copied", () => {
+  it("trims a trailing slash and the '/rest/v1' REST URL suffix", async () => {
+    const { supabaseBase } = await import("../src/api/db.js");
+    for (const u of ["https://abc.supabase.co", "https://abc.supabase.co/", "https://abc.supabase.co/rest/v1", "https://abc.supabase.co/rest/v1/", " https://abc.supabase.co/REST/V1/ "]) {
+      expect(supabaseBase(u), u).toBe("https://abc.supabase.co");
+    }
+  });
+});

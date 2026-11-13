@@ -3,10 +3,11 @@
  * Env (Netlify site settings, never committed): SUPABASE_URL, SUPABASE_ANON_KEY (public), SUPABASE_SERVICE_ROLE_KEY,
  * CRM_BOT_API_KEY, BOT_ASSISTANT_URL (the bot's address, for the assistant chat; public).
  */
-import { supabaseDb } from "../../src/api/db.js";
+import { supabaseBase, supabaseDb } from "../../src/api/db.js";
 import { createApi } from "../../src/api/handler.js";
 
-const url = process.env.SUPABASE_URL ?? "";
+// Accepts the project URL however it was copied (with or without "/rest/v1/").
+const url = supabaseBase(process.env.SUPABASE_URL ?? "");
 const anonKey = process.env.SUPABASE_ANON_KEY ?? "";
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const botKey = process.env.CRM_BOT_API_KEY ?? "";

@@ -31,8 +31,16 @@ export function statusFor(code: string | undefined): number {
   return 500;
 }
 
+/**
+ * The project address, however it was copied from Supabase: "https://x.supabase.co", with a trailing slash, or the
+ * "REST URL" ("https://x.supabase.co/rest/v1/"). Always gives "https://x.supabase.co".
+ */
+export function supabaseBase(url: string): string {
+  return url.trim().replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, "");
+}
+
 export function supabaseDb(url: string, serviceRoleKey: string, fetchFn: typeof fetch = fetch): Db {
-  const base = url.replace(/\/+$/, "");
+  const base = supabaseBase(url);
   return {
     async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
       if (!/^[a-z_][a-z0-9_]*$/.test(fn)) throw new DbError(`bad function name`, 400);
