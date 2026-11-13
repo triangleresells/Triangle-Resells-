@@ -109,6 +109,10 @@ export function createApi(deps: ApiDeps) {
         if (!Array.isArray(b.rows)) return json(400, { error: "rows must be a list" });
         return json(200, await deps.db.rpc("import_sales", { p_rows: b.rows, p_commit: b.commit === true, p_actor: "System" }));
       }
+      // After the end-to-end tests: delete every TEST row (never anything real).
+      if (req.method === "POST" && path === "/test-data/delete") {
+        return json(200, await deps.db.rpc("delete_test_data", { p_actor: "System" }));
+      }
       // What the team told the DM bot (active notes, newest first).
       if (req.method === "GET" && path === "/notes") {
         return json(200, { notes: await deps.db.rpc("bot_notes_active", {}) });

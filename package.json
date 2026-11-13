@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "sync-sheet": "tsx scripts/sync-sheet.ts",
     "ai-retest": "tsx scripts/ai-retest.ts",
-    "import-sales": "tsx scripts/import-sales.ts"
+    "import-sales": "tsx scripts/import-sales.ts",
+    "e2e-live": "tsx scripts/e2e-live.ts"
   },
   "repository": {
     "type": "git",

@@ -3,6 +3,9 @@ import type { Notifier } from "./handoff.js";
 import type { CalendarPoster } from "./orders.js";
 import { CrmError, crmPayment, to24h, type Crm, type StockNewRow, type StockWrite } from "./crm.js";
 
+/** End-to-end test buyers: ids starting "e2e-test-". Real Instagram ids are only digits, so a real buyer never matches. */
+export const isTestBuyer = (userId: string) => userId.startsWith("e2e-test-");
+
 /** The words BOT STOCK uses in its Status column. */
 export const SHEET_STATUS: Record<string, string> = { for_sale: "FOR SALE", incoming: "INCOMING", freebie: "FREEBIE", not_for_sale: "NOT FOR SALE" };
 import { STOCK_TAB } from "./sheet.js";
@@ -413,6 +416,8 @@ export class OrderDesk {
         source: "instagram",
         source_account: this.d.accountName,
         notes: b.freebies.length ? `Free: ${b.freebies.join(", ")}` : null,
+        // End-to-end test buyers (never a real Instagram id, those are numbers) only ever touch TEST stock.
+        ...(isTestBuyer(b.userId) ? { is_test: true } : {}),
       });
       return { id: booking.id };
     } catch (err) {
