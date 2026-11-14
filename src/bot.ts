@@ -37,8 +37,8 @@ export interface BotDeps {
   /** Live stock + prices from the warehouse sheet. When set, it replaces getInventory and pricing on every reply. */
   getCatalog?: () => Promise<{ pricing: PricingConfig; text: string }>;
   /**
-   * Stock read fresh from BOT STOCK (no cache), used right before an order is locked in, so the bot never agrees to a
-   * piece that sold minutes ago. (The CRM still has the final say: it refuses a booking when the piece is gone.)
+   * Stock read fresh from BOT STOCK (no cache), used right before an order is locked in. Unpaid bookings don't hold
+   * stock (pieces are reserved when paid), so the count must be current before the bot agrees to a sale.
    */
   freshCatalog?: () => Promise<{ pricing: PricingConfig }>;
   /** A buyer who got a quote and then went quiet gets ONE nudge after this many minutes (default 90). 0 = off. */

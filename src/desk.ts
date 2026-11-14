@@ -301,10 +301,10 @@ export class OrderDesk {
   }
 
   /**
-   * submit_order: cash, Cash App, Zelle (or Apple Pay with no Stripe). Label BOOKED. With the CRM on, the CRM booking
-   * comes first: it reserves the stock, and if the pieces are gone it refuses and nothing is booked ({refused}), so two
-   * buyers can never both pay for the last piece. If the CRM can't be reached, stock comes off the sheet here instead
-   * and Josh is told to add the booking by hand.
+   * submit_order: cash, Cash App, Zelle (or Apple Pay with no Stripe). Label BOOKED. Unpaid bookings hold NO stock:
+   * pieces are reserved when it's paid. With the CRM on, the CRM booking comes first and it may refuse ({refused}),
+   * e.g. the item isn't sellable. If the CRM can't be reached, the order is kept here and Josh is told to add it by
+   * hand; its stock comes off the sheet when it's marked paid (or done, for cash at pickup).
    */
   async booked(b: Booking): Promise<OrderLabel | { refused: string }> {
     let crmId: string | undefined;
@@ -315,7 +315,6 @@ export class OrderDesk {
       crmId = r.id;
       crmFailed = r.failed;
     }
-    if (!crmId) await this.takeStock(b.lines, -1, b.userId);
     const when = [b.fulfillment, b.fulfillDate, b.fulfillTime, b.deliveryArea && `(${b.deliveryArea})`].filter(Boolean).join(" ");
     const label = this.d.store.addLabel({
       userId: b.userId,
@@ -331,7 +330,7 @@ export class OrderDesk {
       shipping: b.shipping,
       deliveryMinutes: b.deliveryMinutes,
       cost: await this.costOf(b.lines),
-      ...(crmId ? { crmId } : {}),
+      ...(crmId ? { crmId } : { stockHeld: false }),
     });
     const who = b.username ? `@${b.username}` : "IG buyer";
     const steps: [string, () => Promise<void>][] = [];
@@ -429,7 +428,7 @@ export class OrderDesk {
 
   /**
    * A booking a team member made in the CRM: the bot takes it on like its own order (an order label linked to the CRM
-   * booking, and a calendar event; the CRM already reserved the stock). No alert: the team made it. No CRM write: it came from there.
+   * booking, and a calendar event; the CRM handles its stock). No alert: the team made it. No CRM write: it came from there.
    */
   async adopt(a: {
     crmId: string;
@@ -448,7 +447,7 @@ export class OrderDesk {
     deliveryFee?: number;
     shipping?: number;
   }): Promise<OrderLabel> {
-    // No stock change here: the CRM already reserved these pieces when the booking was made.
+    // No stock change here: the CRM owns this booking's stock (reserved when it's paid).
     const when = [a.fulfillment, a.date, a.time].filter(Boolean).join(" ");
     const label = this.d.store.addLabel({
       userId: a.userId,
@@ -490,7 +489,7 @@ export class OrderDesk {
   async replaceLines(id: string, lines: OrderLine[], summary: string, total: number): Promise<void> {
     const l = this.d.store.getLabel(id);
     if (!l) return;
-    if (!l.crmId) {
+    if (!l.crmId && l.stockHeld !== false) {
       await this.takeStock(l.lines ?? [], 1, l.userId);
       await this.takeStock(lines, -1, l.userId);
     }
@@ -501,19 +500,30 @@ export class OrderDesk {
   async stripePaid(userId: string, lines: OrderLine[], summary: string, total: number, when: string, fulfillment: "pickup" | "delivery" | "ship" = "pickup"): Promise<OrderLabel> {
     await this.takeStock(lines, -1, userId);
     // Paid is not fulfilled: it goes in the sales tracker when it's Done (Josh approves that).
-    return this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment, cost: await this.costOf(lines) });
+    return this.d.store.addLabel({ userId, label: "PAID", summary, total, payment: "stripe", when, lines, fulfillment, cost: await this.costOf(lines), stockHeld: true });
   }
 
-  /** Josh saw the Cash App / Zelle money (or got the cash): PAID. */
+  /** An unpaid order the CRM doesn't own gets its pieces now (paid, or handed over for cash). Once only. */
+  private async holdStock(l: OrderLabel): Promise<void> {
+    if (l.crmId || l.stockHeld !== false) return;
+    this.d.store.updateLabel(l.id, { stockHeld: true });
+    await this.takeStock(l.lines ?? [], -1, l.userId);
+  }
+
+  /** Josh saw the Cash App / Zelle money (or got the cash): PAID, pieces reserved. */
   async markPaid(id: string): Promise<boolean> {
     // Only marks it paid. The sale goes in the tracker when it's Done (fulfilled, and Josh approved).
-    return this.d.store.markLabelPaid(id);
+    const l = this.d.store.getLabel(id);
+    if (!l || !this.d.store.markLabelPaid(id)) return false;
+    await this.holdStock(l);
+    return true;
   }
 
   /** Order fulfilled: log it if it wasn't yet (cash), then clear the label. */
   async done(id: string): Promise<boolean> {
     const l = this.d.store.getLabel(id);
     if (!l) return false;
+    await this.holdStock(l);
     await this.logSale(l);
     return this.d.store.clearLabel(id);
   }
@@ -530,8 +540,9 @@ export class OrderDesk {
   async cancel(id: string): Promise<{ ok: boolean; wasLogged?: boolean }> {
     const l = this.d.store.getLabel(id);
     if (!l) return { ok: false };
-    // Orders the CRM knows about get their stock back in the CRM (its cancel); only the others go back on the sheet here.
-    if (!l.crmId) await this.takeStock(l.lines ?? [], 1, l.userId);
+    // Orders the CRM knows about get their stock back in the CRM (its cancel); only the others go back on the sheet
+    // here, and only if they were holding pieces (an unpaid booking never took any).
+    if (!l.crmId && l.stockHeld !== false) await this.takeStock(l.lines ?? [], 1, l.userId);
     this.d.store.clearLabel(id);
     return { ok: true, wasLogged: !!l.logged };
   }
