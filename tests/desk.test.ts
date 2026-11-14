@@ -257,6 +257,21 @@ describe("bot payment rules", () => {
     expect(down.out).toMatchObject({ ok: true });
   });
 
+  it("'I paid' for a piece someone else paid for first: Josh's alert says it's gone (likely a refund)", async () => {
+    const p = loadPricing();
+    const gone = { ...p, stock: (p.stock ?? []).map((r) => (r.item === "Chrome Hearts Hat" && r.color === "Black" ? { ...r, qty: 0 } : r)) };
+    const store = new Store();
+    store.addLabel({ userId: "u1", label: "BOOKED", summary: "2x Chrome Hearts Hat Black", total: 58, payment: "zelle", when: "pickup 2026-11-06 4:00 PM", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }], crmId: "11111111-1111-1111-1111-111111111111" });
+    const r = await run((t) => t.paymentSent!("zelle", "sent $58"), { store, freshCatalog: async () => ({ pricing: gone }) });
+    expect(r.alerts[0].reason).toContain("GONE");
+    expect(r.alerts[0].reason).toContain("refund");
+    // Still in stock: the normal alert.
+    const store2 = new Store();
+    store2.addLabel({ userId: "u1", label: "BOOKED", summary: "2x Chrome Hearts Hat Black", total: 58, payment: "zelle", when: "pickup 2026-11-06 4:00 PM", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }], crmId: "11111111-1111-1111-1111-111111111111" });
+    const ok = await run((t) => t.paymentSent!("zelle", "sent $58"), { store: store2, freshCatalog: async () => ({ pricing: p }) });
+    expect(ok.alerts[0].reason).not.toContain("GONE");
+  });
+
   it("cash orders get no payment info", () => {
     expect(payTextFor("cash", 58)).toContain("cash at pickup");
     expect(payTextFor("cash_app", 58, { cashApp: "$X" })).toContain("Cash App $58 to $X");

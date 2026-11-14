@@ -521,6 +521,14 @@ export class Bot {
       const label = this.d.store.latestLabelFor(userId);
       if (label) this.d.store.updateLabel(label.id, { saysPaid: `${method.replace("_", " ")}: ${note}`.slice(0, 200) });
       const username = await this.d.ig.getUsername(userId).catch(() => undefined);
+      // Stock is held when PAID, not at booking: someone else may have paid for the last piece first. Check now so
+      // Josh knows before he confirms (he refunds that buyer). Only for orders that aren't holding stock yet.
+      let soldOut = "";
+      if (label?.lines?.length && (label.crmId || label.stockHeld === false)) {
+        const q = quoteOrder(await livePricing(), label.lines.map((l) => ({ product: l.name, variant: l.variant, size: l.size, qty: l.qty })), "pickup");
+        const gone = q.problems.filter((p) => /not in stock|Only \d+ of|sold out/i.test(p));
+        if (gone.length) soldOut = gone.join("; ");
+      }
       await this.d
         .notify({
           account: this.d.accountName,
@@ -528,8 +536,10 @@ export class Bot {
           username,
           route: "josh",
           paused: false,
-          reason: `💸 Says they paid${label ? ` $${label.total}` : ""} by ${method.replace("_", " ")}: CHECK YOUR APP`,
-          summary: `${note}${label ? `. Order: ${label.summary}` : ""}. Screenshots can be faked: only mark it paid (in the CRM, or /admin if the CRM is off) once the money is actually in.`,
+          reason: soldOut
+            ? `⚠️ Says they paid $${label!.total}, but the piece is GONE (someone else paid first): CHECK YOUR APP, likely a refund`
+            : `💸 Says they paid${label ? ` $${label.total}` : ""} by ${method.replace("_", " ")}: CHECK YOUR APP`,
+          summary: `${note}${label ? `. Order: ${label.summary}` : ""}.${soldOut ? ` Stock now: ${soldOut}.` : ""} Screenshots can be faked: only mark it paid (in the CRM, or /admin if the CRM is off) once the money is actually in.`,
         })
         .catch((err) => console.error("[bot] payment alert failed:", err));
       // CRM: the bot's "paid" on Zelle / Cash App becomes "Paid - needs check" there (only a person confirms).
