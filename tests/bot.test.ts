@@ -823,3 +823,30 @@ describe("SHADOW_MODE", () => {
     expect(log.recent().find((d) => d.kind === "booking")!.text).toContain("WOULD BOOK 1x Chrome Hearts Hat Black");
   });
 });
+
+describe("meetup reminder buzz (Josh texts them himself)", () => {
+  it("buzzes Josh once, in the last hour of the 24h window, only when the meetup is after the window closes", async () => {
+    let now = new Date("2026-11-13T15:00:00Z"); // 10:00 AM ET Fri
+    const store = new Store(() => now.getTime());
+    const alerts: HandoffAlert[] = [];
+    const ig: InstagramApi = { sendText: vi.fn(async () => "m"), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer1") };
+    const bot = new Bot({
+      ig, agent: { reply: vi.fn() } as any, store, notify: async (a) => void alerts.push(a), getInventory: async () => "", accountName: "Triangle Resells",
+      keywords: [], publicCommentReplies: [], humanPauseHours: 12, now: () => now, enabled: () => true,
+    });
+    store.addTurn("111", { role: "user", content: "pickup sunday" }); // last message: Fri 10:00 AM ET
+    store.addTurn("222", { role: "user", content: "pickup tomorrow morning" });
+    store.addLabel({ userId: "111", label: "BOOKED", summary: "1x Valley Hoodie", total: 60, payment: "zelle", when: "pickup 2026-11-15 3:00 PM", fulfillment: "pickup" });
+    // Meetup Sat 9 AM: before the window closes Sat 10 AM, the bot can still message them itself.
+    store.addLabel({ userId: "222", label: "PAID", summary: "1x Valley Tee", total: 30, payment: "cash app", when: "pickup 2026-11-14 9:00 AM", fulfillment: "pickup" });
+    store.addLabel({ userId: "333", label: "BOOKED", summary: "ship", total: 40, payment: "zelle", when: "ship 2026-11-14", fulfillment: "ship" });
+    now = new Date("2026-11-14T13:30:00Z"); // Sat 8:30 AM ET: 1.5h left
+    expect(await bot.buzzMeetupReminders()).toBe(0);
+    now = new Date("2026-11-14T14:10:00Z"); // Sat 9:10 AM ET: 50 min left
+    expect(await bot.buzzMeetupReminders()).toBe(1);
+    expect(alerts[0]).toMatchObject({ userId: "111", route: "josh" });
+    expect(alerts[0].reason).toContain("@buyer1");
+    expect(alerts[0].summary).toContain("10:00 AM");
+    expect(await bot.buzzMeetupReminders()).toBe(0); // once
+  });
+});

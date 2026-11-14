@@ -65,6 +65,8 @@ export interface OrderLabel {
   saysPaid?: string;
   /** The matching booking in the Triangle CRM. */
   crmId?: string;
+  /** Josh was buzzed to text a meetup reminder before the bot's 24-hour window closed (the buyer's last message time it was for). */
+  reminderBuzzFor?: number;
   /** Google Calendar event id (to move it on a reschedule, delete it on a cancel). */
   calendarId?: string;
 }

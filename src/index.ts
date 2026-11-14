@@ -147,6 +147,8 @@ if (crm) {
 // Josh went quiet on a chat he had: after TAKEOVER_MINUTES the bot answers the waiting buyer.
 setInterval(() => void bot.takeOverStalled().catch((err) => console.error("[bot] takeover failed:", err)), 30 * 1000).unref();
 setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();
+// 1 hour before the bot loses the right to DM a buyer with a meetup coming up: buzz Josh to text the reminder himself.
+setInterval(() => void bot.buzzMeetupReminders().catch((err) => console.error("[bot] reminder buzz failed:", err)), 5 * 60 * 1000).unref();
 
 createServer(bot, {
   appSecret: config.igAppSecret,

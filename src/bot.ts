@@ -7,7 +7,7 @@ import { freebiesOf } from "./catalog.js";
 import { describeQuote, quoteOrder, type PricingConfig, type Quote } from "./pricing.js";
 import { matchCustomers } from "./customers.js";
 import type { ChatImage, Customer, OrderLabel, Store } from "./store.js";
-import { addDays, deliveryProblem, etParts, pickupProblem, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
+import { addDays, deliveryProblem, etParts, etToDate, parseTime, pickupProblem, PICKUP_OPEN_MIN, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
 import { HOLD_MINUTES } from "./stripe.js";
 import type { OrderDesk } from "./desk.js";
 import type { ShipTo } from "./store.js";
@@ -675,6 +675,46 @@ export class Bot {
 
   private async busy(): Promise<BusyBlock[]> {
     return this.d.getBusy ? this.d.getBusy().catch(() => []) : [];
+  }
+
+  /**
+   * Meetup reminders (Josh sends them himself). Instagram only lets the bot DM a buyer within 24 hours of their last
+   * message. When that window has 1 hour left and the buyer still has a pickup or delivery coming up after it closes,
+   * Josh gets buzzed once to text them a reminder by hand. Call this every few minutes. Returns how many buzzes.
+   */
+  async buzzMeetupReminders(): Promise<number> {
+    if (!this.isOn()) return 0;
+    const now = this.now().getTime();
+    let buzzed = 0;
+    for (const l of this.d.store.allLabels()) {
+      if (l.fulfillment !== "pickup" && l.fulfillment !== "delivery") continue;
+      if (!/^\d+$/.test(l.userId)) continue; // CRM walk-ins have no Instagram chat
+      const last = this.d.store.customer(l.userId).lastMessageAt;
+      if (!last || l.reminderBuzzFor === last) continue;
+      const closes = last + 24 * 60 * 60_000;
+      if (now < closes - 60 * 60_000 || now >= closes) continue;
+      const m = l.when.match(/(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}:\d{2}\s*[AP]M))?/i);
+      if (!m) continue;
+      const meetupMin = parseTime(m[2]) ?? PICKUP_OPEN_MIN;
+      // The bot can still message them right up to the meetup: no reminder needed from Josh.
+      if (etToDate(m[1], meetupMin).getTime() <= closes) continue;
+      this.d.store.updateLabel(l.id, { reminderBuzzFor: last });
+      const username = l.username ?? (await this.d.ig.getUsername(l.userId).catch(() => undefined));
+      const closeAt = new Date(closes).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+      await this.d
+        .notify({
+          account: this.d.accountName,
+          userId: l.userId,
+          username,
+          route: "josh",
+          paused: false,
+          reason: `📲 Text ${username ? `@${username}` : "this buyer"} a meetup reminder yourself`,
+          summary: `${l.when}: ${l.summary}, $${l.total}. After ${closeAt} the bot can't DM them (Instagram's 24-hour rule), so the reminder has to come from you.`,
+        })
+        .catch((err) => console.error("[bot] reminder buzz failed:", err));
+      buzzed++;
+    }
+    return buzzed;
   }
 
   /**
