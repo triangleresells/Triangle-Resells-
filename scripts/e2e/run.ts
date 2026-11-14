@@ -92,6 +92,10 @@ export async function runE2E(d: E2EDeps): Promise<{ results: E2EResult[]; cleanu
   };
   const buyer = `e2e-test-${stamp}-1`;
   let botBooking: any;
+  /** Set by test 1. "booked": a booking reserves its pieces. "paid": only paying does. */
+  let mode: "booked" | "paid" = "paid";
+  /** How much a new unpaid booking takes off (1 piece). */
+  const held = () => (mode === "booked" ? 1 : 0);
 
   await check("1", "Bot books a pickup from a DM", async () => {
     const before = await qtyOf(it);
@@ -102,9 +106,12 @@ export async function runE2E(d: E2EDeps): Promise<{ results: E2EResult[]; cleanu
     for (const f of ["date", "time", "payment_method", "fulfillment", "location", "assignee", "source_account", "sale_price"]) must(botBooking[f] != null, `field ${f} is empty`);
     must(botBooking.created_by === "Bot" && botBooking.is_test, "not logged as Bot / not TEST");
     must(botBooking.customer?.id, "no customer record");
-    must((await qtyOf(it)) === before - 1, "TEST stock wasn't reserved");
+    // Which rule this CRM runs: stock reserved when BOOKED (an unpaid booking takes it) or when PAID (it doesn't).
+    const now = await qtyOf(it);
+    must(now === before || now === before - 1, `TEST stock moved by ${now - before} for 1 piece`);
+    mode = now === before ? "paid" : "booked";
     must(alerts.some((a) => a.reason.includes("BOOKED")), "no booking notification");
-    return `${botBooking.date} ${botBooking.time}, ${it.item}, $${botBooking.sale_price}, customer made, TEST stock ${before} -> ${before - 1}, notification sent`;
+    return `${botBooking.date} ${botBooking.time}, ${it.item}, $${botBooking.sale_price}, customer made, notification sent. CRM reserves stock when ${mode.toUpperCase()}: TEST stock ${before} -> ${now}`;
   });
 
   await check("2", "Bot reschedules it", async () => {
@@ -125,8 +132,8 @@ export async function runE2E(d: E2EDeps): Promise<{ results: E2EResult[]; cleanu
     must(String(r).startsWith("Cancelled"), `cancel failed: ${r}`);
     const b = (await bookingsOn(day2)).find((x) => x.id === botBooking.id);
     must(b?.status === "cancelled", "not Cancelled (bright red)");
-    must((await qtyOf(it)) === before + 1, "TEST stock didn't come back");
-    return `Cancelled, TEST stock ${before} -> ${before + 1}`;
+    must((await qtyOf(it)) === before + held(), mode === "booked" ? "TEST stock didn't come back" : "TEST stock changed (an unpaid booking held nothing)");
+    return `Cancelled (unpaid), TEST stock ${before} -> ${before + held()}`;
   });
 
   let teamBooking: any;
@@ -137,23 +144,27 @@ export async function runE2E(d: E2EDeps): Promise<{ results: E2EResult[]; cleanu
       is_test: true, customer: { name: `TEST walk-in ${stamp}` }, items: [{ item: it.item, color: it.color, size: it.size ?? "One Size", qty: 1, unit_price: 50 }] } });
     must(teamBooking?.created_by === d.teamName, "not logged as the team member");
     must(teamBooking.customer?.id, "no customer record");
-    must((await qtyOf(it)) === before - 1, "TEST stock wasn't reserved");
+    must((await qtyOf(it)) === before - held(), mode === "booked" ? "TEST stock wasn't reserved" : "an unpaid booking took TEST stock");
     const n = (await d.api("GET", `/notifications?after=${latest}`)).notifications as { text: string }[];
     must(n.some((x) => x.text.includes(`${d.teamName} booked a sale`)), "no team notification");
-    return `logged as ${d.teamName}, customer made, TEST stock reserved, notification: "${n[0]?.text.slice(0, 70)}..."`;
+    return `logged as ${d.teamName}, customer made, TEST stock ${before} -> ${before - held()}, notification: "${n[0]?.text.slice(0, 70)}..."`;
   });
 
   await check("5", "Paid then Done: revenue, profit, drill-down, cash", async () => {
     must(teamBooking, "test 4 didn't book");
+    const before = await qtyOf(it);
+    const paidTakes = 1 - held(); // "paid" mode: paying reserves it; "booked" mode: it was reserved at booking
     await d.team.rpc("set_booking_status", { p_id: teamBooking.id, p_status: "paid" });
+    must((await qtyOf(it)) === before - paidTakes, mode === "paid" ? "paying didn't reserve the TEST stock" : "paying took the stock a second time");
     await d.team.rpc("set_booking_status", { p_id: teamBooking.id, p_status: "done" });
+    must((await qtyOf(it)) === before - paidTakes, "Done changed the stock again");
     const rep: any = await d.team.rpc("sales_report", { p_from: day, p_to: day, p_filters: {}, p_include_test: true });
     must(rep.sales.some((s: any) => s.id === teamBooking.id), "not in the drill-down");
     const sum = (k: string) => Math.round(rep.sales.reduce((t: number, s: any) => t + Number(s[k]), 0) * 100) / 100;
     must(sum("revenue") === Number(rep.totals.revenue) && sum("profit") === Number(rep.totals.profit), "drill-down doesn't add up to the totals");
     const cash: any = await d.team.rpc("cash_report", { p_day: iso(new Date()), p_include_test: true });
     must(cash.people.find((p: any) => p.name === d.teamName)?.bookings.some((b: any) => b.id === teamBooking.id), "not in cash per person");
-    return `revenue $${rep.totals.revenue}, profit $${rep.totals.profit} (adds up to the cent), cash collected by ${d.teamName}`;
+    return `paid -> TEST stock ${before} -> ${before - paidTakes}; revenue $${rep.totals.revenue}, profit $${rep.totals.profit} (adds up to the cent), cash collected by ${d.teamName}`;
   });
 
   await check("6", "Shipped order: tracking saved and sent to the buyer", async () => {
@@ -172,22 +183,43 @@ export async function runE2E(d: E2EDeps): Promise<{ results: E2EResult[]; cleanu
     return `tracking ${saved.tracking_number} saved and DMed`;
   });
 
-  await check("7", "Two bookings for the last unit", async () => {
+  await check("7", "Two buyers for the last unit", async () => {
     const left = await qtyOf(it);
     must(left > 0, "no TEST stock left to test with");
-    const first: any = await d.team.rpc("create_booking", { p: { date: day, payment_method: "cash", fulfillment: "pickup", is_test: true, customer: { name: `TEST last ${stamp}` },
-      items: [{ item: it.item, color: it.color, size: it.size ?? "One Size", qty: left, unit_price: 50 }] } });
-    let refused = "";
-    try {
-      await d.team.rpc("create_booking", { p: { date: day, payment_method: "cash", fulfillment: "pickup", is_test: true, customer: { name: `TEST second ${stamp}` },
-        items: [{ item: it.item, color: it.color, size: it.size ?? "One Size", qty: 1, unit_price: 50 }] } });
-    } catch (err) {
-      refused = (err as Error).message;
+    const book = (name: string, qty: number) =>
+      d.team.rpc("create_booking", { p: { date: day, payment_method: "cash_app", fulfillment: "pickup", is_test: true, customer: { name: `TEST ${name} ${stamp}` },
+        items: [{ item: it.item, color: it.color, size: it.size ?? "One Size", qty, unit_price: 50 }] } }) as Promise<any>;
+    const first = await book("last", left);
+    if (mode === "booked") {
+      // Reserved at booking: the second booking for the last piece is refused.
+      let refused = "";
+      try {
+        await book("second", 1);
+      } catch (err) {
+        refused = (err as Error).message;
+      }
+      must(refused, "the second booking wasn't refused");
+      must((await qtyOf(it)) === 0, "stock isn't 0");
+      await d.team.rpc("cancel_booking", { p_id: first.id, p_reason: "TEST" });
+      must((await qtyOf(it)) === left, "cancel didn't give the stock back");
+      return `second refused ("${refused}"), stock stayed at 0, never negative`;
     }
-    must(refused, "the second booking wasn't refused");
-    must((await qtyOf(it)) === 0, "stock isn't 0");
+    const second = await book("second", 1); // unpaid bookings don't hold stock, so this one is allowed
+    await d.team.rpc("set_booking_status", { p_id: first.id, p_status: "paid" });
+    must((await qtyOf(it)) === 0, "the first buyer paid for the last pieces but stock isn't 0");
+    let secondPaid = "refused";
+    try {
+      await d.team.rpc("set_booking_status", { p_id: second.id, p_status: "paid" });
+      secondPaid = "allowed";
+    } catch (err) {
+      secondPaid = `refused ("${(err as Error).message}")`;
+    }
+    const after = await qtyOf(it);
+    must(after >= 0, `stock went negative (${after})`);
+    await d.team.rpc("cancel_booking", { p_id: second.id, p_reason: "TEST" });
     await d.team.rpc("cancel_booking", { p_id: first.id, p_reason: "TEST" });
-    return `second refused ("${refused}"), stock stayed at 0, never negative`;
+    must((await qtyOf(it)) === left, `cancelling the paid booking didn't give the stock back (${await qtyOf(it)} of ${left})`);
+    return `both booked (unpaid holds nothing); first paid -> stock 0; second marked paid: ${secondPaid}; stock never negative; cancel -> back to ${left}`;
   });
 
   await check("8", "Bad data / CRM down: nothing half-saved, logged, team alerted", async () => {
