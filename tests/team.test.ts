@@ -143,7 +143,7 @@ describe("team notifications -> Discord", async () => {
   });
 });
 
-describe("10:30 PM wrap-up", async () => {
+describe("10 PM wrap-up", async () => {
   const { WrapUp, wrapUpText } = await import("../src/team/wrapup.js");
   const { Store } = await import("../src/store.js");
   const b = (status: string, extra: Record<string, unknown> = {}) => ({
@@ -165,14 +165,14 @@ describe("10:30 PM wrap-up", async () => {
     expect(wrapUpText("2026-11-12", [b("booked", { is_test: true })])).toBeNull();
   });
 
-  it("posts once, at or after 10:30 PM Eastern, and not again after a restart", async () => {
+  it("posts once, at or after 10 PM Eastern, and not again after a restart", async () => {
     const posted: string[] = [];
-    let now = new Date("2026-11-13T03:00:00Z"); // 10:00 PM ET on Nov 12
+    let now = new Date("2026-11-13T02:59:00Z"); // 9:59 PM ET on Nov 12
     const store = new Store();
     const crm = { bookingsBetween: async () => day };
     const w = new WrapUp({ crm, store, post: async (t) => void posted.push(t), now: () => now });
     expect(await w.tick()).toBe(false);
-    now = new Date("2026-11-13T03:31:00Z"); // 10:31 PM ET
+    now = new Date("2026-11-13T03:01:00Z"); // 10:01 PM ET
     expect(await w.tick()).toBe(true);
     expect(await w.tick()).toBe(false);
     const restarted = new Store();

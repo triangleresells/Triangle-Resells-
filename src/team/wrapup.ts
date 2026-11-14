@@ -1,5 +1,5 @@
 /**
- * End of day (10:30 PM Eastern): one post to the team's Discord / Slack with what got done today and what's still open,
+ * End of day (10 PM Eastern): one post to the team's Discord / Slack with what got done today and what's still open,
  * so nothing gets forgotten. It never marks anything Done itself: the team tells the assistant what was fulfilled
  * (and approves), and only then it goes in revenue and the sales tracker.
  */
@@ -32,14 +32,14 @@ export function wrapUpText(day: string, bookings: CrmBookingFull[]): string | nu
 export class WrapUp {
   constructor(private d: { crm: { bookingsBetween(from: string, to: string): Promise<CrmBookingFull[]> }; store: Store; post: TextPoster; now?: () => Date }) {}
 
-  /** Posts today's wrap-up once, at or after 10:30 PM Eastern. Returns true if it posted. Never throws. */
+  /** Posts today's wrap-up once, at or after 10 PM Eastern. Returns true if it posted. Never throws. */
   async tick(): Promise<boolean> {
     const now = this.d.now?.() ?? new Date();
     const et = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
     const part = (t: string) => et.find((p) => p.type === t)!.value;
     const day = `${part("year")}-${part("month")}-${part("day")}`;
     const minutes = (Number(part("hour")) % 24) * 60 + Number(part("minute"));
-    if (minutes < 22 * 60 + 30 || this.d.store.wrapUpDay() === day) return false;
+    if (minutes < 22 * 60 || this.d.store.wrapUpDay() === day) return false;
     try {
       const text = wrapUpText(day, await this.d.crm.bookingsBetween(day, day));
       if (text) await this.d.post(text);

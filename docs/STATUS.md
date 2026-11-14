@@ -34,7 +34,7 @@ until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-calendar
 
 ## Test data in the shared database
 - The CRM session deletes TEST bookings and their events. The bot ignores every `is_test` CRM event (`src/crmsync.ts`,
-  only tests turn `includeTest` on) and the 10:30 PM wrap-up counts real bookings only (`src/team/wrapup.ts`). A deleted
+  only tests turn `includeTest` on) and the 10 PM wrap-up counts real bookings only (`src/team/wrapup.ts`). A deleted
   TEST booking is never treated as a real cancel. TEST notifications DO go to Discord, prefixed `[TEST]`, on purpose.
 
 ## Waiting on Josh

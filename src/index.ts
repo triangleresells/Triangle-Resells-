@@ -107,7 +107,7 @@ setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
 if (crm) {
   const notifySync = new NotifySync({ crm, store, post: webhookText(config.handoffWebhookUrl) });
   setInterval(() => void notifySync.tick(), 20 * 1000).unref();
-  // 10:30 PM: what got done today and what's still open (the team approves what was fulfilled).
+  // 10 PM: what got done today and what's still open (the team approves what was fulfilled).
   const wrapUp = new WrapUp({ crm, store, post: webhookText(config.handoffWebhookUrl) });
   setInterval(() => void wrapUp.tick(), 5 * 60 * 1000).unref();
   const hooks = new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm);
