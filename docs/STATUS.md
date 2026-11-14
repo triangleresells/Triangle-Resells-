@@ -56,6 +56,24 @@ local until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-ca
 - Invented what's in a Lululemon set; said Supreme can't be bought before it lands (deposits exist).
 - Said "I put you down for one" without saving it.
 
+## Go-live checklist (docs/go-live.md): where it stands
+- Steps 1-4 DONE: Google key, BOT STOCK TEST tab, Supabase, Netlify (https://venerable-marigold-a0d29b.netlify.app).
+- Live CRM test run (8/8) and the 18-step browser walkthrough passed earlier on 2026-11-13. That was BEFORE the
+  reserve-at-paid change, so test 7 needs a re-run.
+- **NEXT = step 5, Render env vars (by hand).** Run the clipboard helper in PowerShell and paste each value into
+  Render > triangle-ai-dm > Environment:
+  `powershell -ExecutionPolicy Bypass -File "C:\Users\kenta\AppData\Local\Temp\claude\9519414f725d5b3e\514abed5-3e8d-4adf-88c7-2250d3e901e8\scratchpad\render-env.ps1"`
+  (if that temp file is gone, ask Claude to recreate it). Names: CRM_API_URL, CRM_BOT_API_KEY, CRM_ASSIGNEE (Chema),
+  CRM_WEB_ORIGIN, SUPABASE_URL, SUPABASE_ANON_KEY, GOOGLE_SERVICE_ACCOUNT_JSON, WAREHOUSE_SHEET_ID, TRACKER_SHEET_ID,
+  plus HANDOFF_WEBHOOK_URL (Discord channel webhook, make it in Discord; empty in .env). Keep BOT_ENABLED=false.
+- Then: AI retest (~$4, approved), merge crm-v1 into ai-dm-checkout-calendar (needs Josh), BOT_ENABLED=true,
+  `npm run import-sales` preview, then `-- --commit` after Josh approves.
+- **Repo gap:** 5 migrations applied straight to live Supabase via MCP (2026-11-14 02:30Z-02:51Z:
+  crm_additive_1_tenancy_roles_settings, crm_additive_2_notifications, crm_behavior_changes, crm_rls_business_scope,
+  crm_lock_internal_functions) are NOT in crm/supabase/migrations. Export them into the repo before anyone re-runs
+  setup.sql, which would otherwise wipe them out.
+- Small: the "Powered by Netlify" badge covers content on phones (check the Netlify site settings).
+
 ## Later (after go-live): new items from the upgrade spec
 Save every DM in the database; which video each chat came from (+ asking new buyers once); per-video results
 (chats, bookings, revenue); learning loop (bot proposes answers, team approves in the CRM); top questions of the week
