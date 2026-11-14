@@ -65,11 +65,6 @@ export interface OrderLabel {
   saysPaid?: string;
   /** The matching booking in the Triangle CRM. */
   crmId?: string;
-  /**
-   * Orders the CRM doesn't own: whether the pieces are off BOT STOCK. false = booked but unpaid, nothing held yet
-   * (stock comes off when it's paid or done). Missing = an order from before that rule, when stock came off at booking.
-   */
-  stockHeld?: boolean;
   /** Google Calendar event id (to move it on a reschedule, delete it on a cancel). */
   calendarId?: string;
 }
