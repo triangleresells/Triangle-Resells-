@@ -13,6 +13,12 @@ local until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-ca
   piece. Josh decided: back to reserved at booking. Fix = `reserve_on='booked'` (CRM session, waiting on Josh's OK),
   plus checking unpaid bookings made since 02:49Z (they hold no stock).
 
+**Open conflict:** a later FYI relayed from the CRM session says "reservation changed to reserved when paid, re-run
+your booking tests". That contradicts Josh's decision below. The bot stays on reserved-at-booking until Josh confirms
+which one he wants. Same FYI: logged-in users can't call booking_json / find_customer / crm_stock_move anymore
+(checked: the bot, the team assistant and the CRM pages don't; the CRM API calls find_customer with the service key,
+still allowed); new CRM tables/views `notifications`, `agent_events`, `crm_sales`, `crm_stock` (the bot creates none).
+
 ## Josh's decisions (2026-11-13)
 - Stock reserved at BOOKING (never two buyers paying for the last piece). Bot side: `b2a6ac6`.
 - Cash = pickup today only; any later day is paid first. Bot re-reads BOT STOCK right before locking in.
