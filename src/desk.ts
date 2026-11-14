@@ -372,7 +372,7 @@ export class OrderDesk {
             route: "josh",
             paused: false,
             reason: "⚠️ Order NOT saved in the CRM: add it by hand",
-            summary: `${b.items}, ${b.fulfillment} ${b.fulfillDate} ${b.fulfillTime ?? ""}, $${b.total} by ${b.payment}. ${crmFailed}. Stock was taken off BOT STOCK directly.`,
+            summary: `${b.items}, ${b.fulfillment} ${b.fulfillDate} ${b.fulfillTime ?? ""}, $${b.total} by ${b.payment}. ${crmFailed}. Stock comes off BOT STOCK when you mark it paid (on /admin).`,
           }),
       ]);
     }

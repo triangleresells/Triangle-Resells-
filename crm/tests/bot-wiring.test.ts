@@ -308,7 +308,7 @@ describe("stock: CRM <-> BOT STOCK <-> bot", () => {
     };
     const stockSync = new StockSync({ crm: live, io: sheet.io, keeper });
     await stockSync.tick(); // first sync: the CRM learns the sheet
-    return { dm, sheet, stockSync, alerts, results };
+    return { dm, sheet, stockSync, alerts, results, desk, store };
   }
   const SHEET_QTY = (s: ReturnType<typeof fakeSheet>) => Number(s.cell("BOT STOCK", 3, 5));
 
@@ -343,13 +343,18 @@ describe("stock: CRM <-> BOT STOCK <-> bot", () => {
     expect(await t.qty("Chrome Hearts Hat", "Black", null, false)).toBe(1);
   });
 
-  it("CRM down: the bot takes the stock off the sheet itself (once) and tells Josh", async () => {
+  it("CRM down: the bot keeps the order, tells Josh, and takes the stock off the sheet itself when it's paid (once)", async () => {
     await t.reset();
-    const { dm, sheet, alerts, results } = await stockSetup({ crmDown: true });
+    const { dm, sheet, alerts, results, desk, store } = await stockSetup({ crmDown: true });
     await dm((tl) => tl.submitOrder!(hats, "pickup", "2026-11-14", "4:00 PM", undefined, "cash_app"));
     expect(results[0]).toMatchObject({ ok: true });
+    expect(SHEET_QTY(sheet)).toBe(20); // stock is reserved when paid: an unpaid booking holds nothing
+    expect(alerts.some((a) => a.reason.includes("NOT saved in the CRM") && a.summary!.includes("comes off BOT STOCK when you mark it paid"))).toBe(true);
+    const label = store.allLabels()[0];
+    expect(await desk.markPaid(label.id)).toBe(true);
     expect(SHEET_QTY(sheet)).toBe(18);
-    expect(alerts.some((a) => a.reason.includes("NOT saved in the CRM") && a.summary!.includes("taken off BOT STOCK directly"))).toBe(true);
+    expect(await desk.markPaid(label.id)).toBe(false);
+    expect(SHEET_QTY(sheet)).toBe(18);
   });
 
   it("an empty sheet read never wipes the CRM's stock", async () => {
