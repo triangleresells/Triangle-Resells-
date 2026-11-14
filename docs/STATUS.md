@@ -8,38 +8,33 @@ local until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-ca
   the Google key isn't on Render yet.
 - CRM site (Netlify, `crm-v1`): up. Bot API key works. Real stock in CRM: 0 rows (fills from BOT STOCK on the first
   sync once `crm-v1` runs on Render; checked: the first sync never overwrites the sheet). TEST stock: 82 rows.
-- **CRM database: stock is reserved when PAID right now** (`crm_settings.reserve_on='paid'`, set 2026-11-14 02:49Z by
-  migrations applied from another session, not in this repo). So the CRM does NOT refuse a 2nd booking for the last
-  piece. Josh decided: back to reserved at booking. Fix = `reserve_on='booked'` (CRM session, waiting on Josh's OK),
-  plus checking unpaid bookings made since 02:49Z (they hold no stock).
+- CRM database: stock is reserved when PAID (`crm_settings.reserve_on='paid'`, live since 2026-11-14 02:49Z, from
+  migrations another session applied; not in this repo, which stops at 0009). **Josh's final call: keep it.**
 
-**Open conflict:** a later FYI relayed from the CRM session says "reservation changed to reserved when paid, re-run
-your booking tests". That contradicts Josh's decision below. The bot stays on reserved-at-booking until Josh confirms
-which one he wants. Same FYI: logged-in users can't call booking_json / find_customer / crm_stock_move anymore
-(checked: the bot, the team assistant and the CRM pages don't; the CRM API calls find_customer with the service key,
-still allowed); new CRM tables/views `notifications`, `agent_events`, `crm_sales`, `crm_stock` (the bot creates none).
-
-## Josh's decisions (2026-11-13)
-- Stock reserved at BOOKING (never two buyers paying for the last piece). Bot side: `b2a6ac6`.
+## Josh's decisions (2026-11-13, final)
+- Stock reserved when PAID. Two buyers can book the last piece; whoever pays first gets it. When a buyer says
+  "I paid" and the piece is gone, Josh's alert says GONE / likely refund (`93f4d76`). Josh refunds by hand.
 - Cash = pickup today only; any later day is paid first. Bot re-reads BOT STOCK right before locking in.
 - Human takeover stays: team reply pauses the chat; bot takes it back after 5 min with no team reply.
 - Daily wrap-up at 10 PM ET (`667159a`).
 - Meetup reminders: Josh gets buzzed 1 hour before the bot's 24h DM window closes, and texts them himself (`74a473b`).
-- New spec items (conversation logging, attribution, learning loop...) come later, after go-live.
+- Don't disturb the CRM while it's being built. New spec items come after go-live.
+- From the CRM session: logged-in users can't call booking_json / find_customer / crm_stock_move (bot, assistant
+  and CRM pages don't; the CRM API uses the service key, still allowed). New CRM tables/views `notifications`,
+  `agent_events`, `crm_sales`, `crm_stock`: the bot creates none. TEST bookings get deleted: the bot ignores them.
 
 ## Done today
 | Step | Result |
 |---|---|
-| Typecheck + bot tests | pass, 152/152 |
-| CRM tests (incl. 8 end-to-end scenarios on a local database) | pass, 101/101 |
+| Typecheck + bot tests / CRM tests | pass, 153/153 and 101/101 |
 | Google key (local): BOT STOCK, BOT STOCK TEST, BOT PRICES, sales tracker | all readable |
 | Fix: /admin buttons changed CRM orders without telling the CRM; "Clear ALL" logged no-shows as sales | `d116c59` |
 | SHADOW_MODE (drafts on /admin/shadow, sends and books nothing) | `a7ea4fd` |
 | Instructions: fixes for the retest's critical mistakes | `c46baa1` |
-| Back to reserved-at-booking (bot side) | `b2a6ac6` |
-| Wrap-up at 10 PM | `667159a` |
-| Meetup reminder buzz | `74a473b` |
-| AI retest, Sonnet, 50 chats | stopped at 34/50 (PC low on memory). 27/34 no critical mistake. **Re-run after the fixes** |
+| Reserved when paid (bot side) + "I paid" sold-out catch | `2b98810`, `93f4d76`, `dc9d574` |
+| Wrap-up at 10 PM / meetup reminder buzz | `667159a` / `74a473b` |
+| Live end-to-end tests detect the CRM's mode (booked or paid) | `ef9d358`; 8/8 locally (booked mode). **Live run pending** |
+| AI retest, Sonnet, 50 chats | stopped at 34/50 (PC low on memory). **Re-run after the fixes** |
 
 ## Test data in the shared database
 - The CRM session deletes TEST bookings and their events. The bot ignores every `is_test` CRM event (`src/crmsync.ts`,
@@ -47,7 +42,6 @@ still allowed); new CRM tables/views `notifications`, `agent_events`, `crm_sales
   TEST booking is never treated as a real cancel. TEST notifications DO go to Discord, prefixed `[TEST]`, on purpose.
 
 ## Waiting on Josh
-- [ ] OK the CRM session to set `reserve_on='booked'` (live end-to-end test 7 fails until then).
 - [ ] Google key on Render (`GOOGLE_SERVICE_ACCOUNT_JSON`), then /health should say `"stock": "sheet"`.
 - [ ] `E2E_EMAIL` / `E2E_PASSWORD` in `.env` (a CRM login) for the live end-to-end tests.
 - [ ] One Claude session only, then: AI retest re-run (~$4) and live end-to-end tests.
