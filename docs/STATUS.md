@@ -4,8 +4,8 @@ Last updated: 2026-11-13 evening (Claude, Windows session, branch `crm-v1`). Kep
 local until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-calendar` (any push there goes live).
 
 ## Live right now
-- Render bot: up, `BOT_ENABLED=false` (sends nothing), old code (no CRM). Reads the **snapshot**, not the sheet:
-  the Google key isn't on Render yet.
+- Render bot: up, `BOT_ENABLED=false` (sends nothing), old code (no CRM). Google key is on Render: /health shows
+  `"stock": "sheet"`, 37 for sale (checked 2026-11-13).
 - CRM site (Netlify, `crm-v1`): up. Bot API key works. Real stock in CRM: 0 rows (fills from BOT STOCK on the first
   sync once `crm-v1` runs on Render; checked: the first sync never overwrites the sheet). TEST stock: 82 rows.
 - CRM database: stock is reserved when PAID (`crm_settings.reserve_on='paid'`, live since 2026-11-14 02:49Z, from
@@ -42,8 +42,9 @@ local until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-ca
   TEST booking is never treated as a real cancel. TEST notifications DO go to Discord, prefixed `[TEST]`, on purpose.
 
 ## Waiting on Josh
-- [ ] Google key on Render (`GOOGLE_SERVICE_ACCOUNT_JSON`), then /health should say `"stock": "sheet"`.
-- [ ] `E2E_EMAIL` / `E2E_PASSWORD` in `.env` (a CRM login) for the live end-to-end tests.
+- [ ] Live end-to-end tests + AI retest: WAIT until the CRM session finishes (it's on step e, sheet stock sync). The live
+      tests delete every TEST row in the shared database, and two sessions at once ran the PC out of memory. `.env` has
+      E2E_EMAIL / E2E_PASSWORD already.
 - [ ] One Claude session only, then: AI retest re-run (~$4) and live end-to-end tests.
 - [ ] Confirm Render env from go-live step 4 (`CRM_API_URL`, `HANDOFF_WEBHOOK_URL`, Supabase keys...).
 
