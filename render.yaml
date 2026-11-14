@@ -18,6 +18,9 @@ services:
       # Master switch. The bot sends NO DMs unless this is "true". Change it on Render's Environment page.
       - key: BOT_ENABLED
         value: "false"
+      # Dress rehearsal: "true" = the bot reads real DMs and drafts replies on /admin/shadow but sends and books nothing.
+      - key: SHADOW_MODE
+        value: "false"
       # Same Node version the bot is tested on.
       - key: NODE_VERSION
         value: "22"

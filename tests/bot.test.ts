@@ -793,3 +793,33 @@ describe("bot takes the chat back when Josh goes quiet", () => {
     expect(sent).toHaveLength(0);
   });
 });
+
+describe("SHADOW_MODE", () => {
+  it("drafts the reply, the alert and the booking, and sends / books / alerts nothing for real", async () => {
+    const { ShadowLog, shadowDesk, shadowInstagram, shadowNotifier } = await import("../src/shadow.js");
+    const OWN = "17840000000000000";
+    const log = new ShadowLog();
+    const real: InstagramApi = { sendText: vi.fn(async () => "m"), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer") };
+    const realNotify = vi.fn(async () => {});
+    let booked: unknown;
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _i, tools?: OrderTools) => {
+        booked = await tools!.submitOrder!([{ product: "Chrome Hearts Hat", variant: "Black", qty: 1 }], "pickup", "2026-11-06", "4:00 PM", undefined, "zelle");
+        return { text: "bet, locked in" };
+      }),
+    };
+    const bot = new Bot({
+      ig: shadowInstagram(real, log), agent, store: new Store(), notify: shadowNotifier(log), getInventory: async () => "", accountName: "Triangle Resells",
+      keywords: [], publicCommentReplies: [], humanPauseHours: 12, pricing: loadPricing(), now: () => new Date("2026-11-05T19:00:00Z"),
+      desk: shadowDesk(log), payInfo: { zelle: "919-480-7349" },
+    });
+    await bot.handle({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN }, message: { mid: "s1", text: "1 black ch hat tmrw 4pm zelle" } }] }] });
+    expect(booked).toMatchObject({ ok: true });
+    expect(real.sendText).not.toHaveBeenCalled();
+    expect(realNotify).not.toHaveBeenCalled();
+    const kinds = log.recent().map((d) => d.kind);
+    expect(kinds).toContain("reply");
+    expect(kinds).toContain("booking");
+    expect(log.recent().find((d) => d.kind === "booking")!.text).toContain("WOULD BOOK 1x Chrome Hearts Hat Black");
+  });
+});

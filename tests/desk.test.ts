@@ -89,7 +89,7 @@ describe("sales log", () => {
 });
 
 describe("order desk", () => {
-  it("booked: stock off, BOOKED with cost, calendar + alert; paid logs once; cancel puts stock back", async () => {
+  it("booked: BOOKED holds no stock; paid takes it off once; cancel puts it back", async () => {
     const f = fakeSheets();
     const store = new Store();
     const alerts: HandoffAlert[] = [];
@@ -116,15 +116,35 @@ describe("order desk", () => {
       fulfillTime: "3:00 PM",
       freebies: ["1 free Baccarat Rouge"],
     });
-    expect(label).toMatchObject({ label: "BOOKED", cost: 30 });
-    expect(f.rows[2][5]).toBe("3");
+    expect(label).toMatchObject({ label: "BOOKED", cost: 30, stockHeld: false });
+    // Unpaid bookings don't hold stock: still 5.
+    expect(f.rows[2][5]).toBe("5");
     expect((cal.mock.calls[0] as any)[0].title).toContain("BOOKED");
     expect(alerts[0].reason).toContain("BOOKED $58");
     expect(await desk.markPaid(label.id)).toBe(true);
+    expect(f.rows[2][5]).toBe("3");
     expect(await desk.markPaid(label.id)).toBe(false);
+    expect(f.rows[2][5]).toBe("3");
     // Paid is not fulfilled: nothing in the sales tracker yet.
     expect(f.writes.filter((w) => w.sheetId === "T")).toHaveLength(0);
     expect(await desk.cancel(label.id)).toEqual({ ok: true, wasLogged: false });
+    expect(f.rows[2][5]).toBe("5");
+  });
+
+  it("an unpaid booking cancelled (no-show) puts nothing back; cash handed over at Done takes it off; old orders still return stock", async () => {
+    const f = fakeSheets();
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "Triangle Resells", stock: new StockKeeper(f.io), sales: new SalesLog(f.io, "T") });
+    const b = { userId: "u1", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 1 }], items: "1x Chrome Hearts Hat Black", itemsTotal: 30, total: 30, payment: "cash", fulfillment: "pickup" as const, fulfillDate: "2026-11-13", fulfillTime: "3:00 PM", freebies: [] };
+    const noShow = (await desk.booked(b)) as any;
+    expect(await desk.cancel(noShow.id)).toEqual({ ok: true, wasLogged: false });
+    expect(f.rows[2][5]).toBe("5");
+    const cash = (await desk.booked(b)) as any;
+    expect(await desk.done(cash.id)).toBe(true);
+    expect(f.rows[2][5]).toBe("4");
+    // An order saved before this rule (no stockHeld) had its stock taken at booking: cancel still returns it.
+    const old = store.addLabel({ userId: "u2", label: "BOOKED", summary: "1x Chrome Hearts Hat Black", total: 30, payment: "cash", when: "pickup", lines: b.lines });
+    await desk.cancel(old.id);
     expect(f.rows[2][5]).toBe("5");
   });
 });
@@ -162,7 +182,7 @@ describe("bot payment rules", () => {
   const OWN = "17840000000000000";
   const dm = (text: string, mid: string): WebhookPayload => ({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN }, message: { mid, text } }] }] });
 
-  async function run(call: (t: OrderTools) => Promise<unknown>) {
+  async function run(call: (t: OrderTools) => Promise<unknown>, extra: Partial<ConstructorParameters<typeof Bot>[0]> = {}) {
     let out: unknown;
     const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, tools?: OrderTools) => ((out = await call(tools!)), { text: "ok" })) };
     const ig: InstagramApi = { sendText: vi.fn(async () => "m"), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer") };
@@ -173,6 +193,7 @@ describe("bot payment rules", () => {
       ig, agent, store, notify: async (a) => void alerts.push(a), getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [],
       humanPauseHours: 12, pricing: loadPricing(), now: () => new Date("2026-11-05T19:00:00Z"), desk: { booked, stripePaid: vi.fn() },
       payInfo: { zelle: "919-480-7349", cashApp: "$TriangleResells" },
+      ...extra,
     });
     await bot.handle(dm("yo", "m1"));
     return { out: out as any, alerts, booked, store };
@@ -210,6 +231,30 @@ describe("bot payment rules", () => {
     });
     expect(r.alerts).toHaveLength(1);
     expect(r.out).toContain("ALREADY told");
+  });
+
+  it("cash is for a pickup today only: a later day must be paid first", async () => {
+    // now = 2026-11-05 2:00 PM ET
+    const later = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "cash"));
+    expect(later.out).toMatchObject({ ok: false, fixable: true });
+    expect(later.out.error).toContain("pay first");
+    expect(later.booked).not.toHaveBeenCalled();
+    const today = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-05", "4:00 PM", undefined, "cash"));
+    expect(today.out).toMatchObject({ ok: true });
+  });
+
+  it("re-reads live stock before locking in (unpaid bookings don't hold pieces, so the count must be current)", async () => {
+    const p = loadPricing();
+    const lastOne = { ...p, stock: (p.stock ?? []).map((r) => (r.item === "Chrome Hearts Hat" && r.color === "Black" ? { ...r, qty: 1 } : r)) };
+    const freshCatalog = vi.fn(async () => ({ pricing: lastOne }));
+    const r = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "zelle"), { freshCatalog });
+    expect(freshCatalog).toHaveBeenCalled();
+    expect(r.out).toMatchObject({ ok: false, fixable: true });
+    expect(r.out.error).toMatch(/Only 1 of/);
+    expect(r.booked).not.toHaveBeenCalled();
+    // A failed fresh read falls back to the last copy instead of blocking the sale.
+    const down = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "zelle"), { freshCatalog: async () => { throw new Error("sheet down"); } });
+    expect(down.out).toMatchObject({ ok: true });
   });
 
   it("cash orders get no payment info", () => {

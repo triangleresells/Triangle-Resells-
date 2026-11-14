@@ -30,6 +30,8 @@ export interface ServerOpts {
     key: string;
     customers: () => Customer[];
     blast: (message: string, search: string) => Promise<{ sent: Customer[]; manual: Customer[] }>;
+    /** SHADOW_MODE drafts, newest first (only when shadow mode is on). */
+    shadowDrafts?: () => { at: string; kind: string; to: string; text: string }[];
     /** Turns the bot back on in every chat it paused itself in. Returns how many. */
     unpauseAll?: () => number;
     /** PAID / BOOKED orders (Instagram's own DM labels can't be set by API, so they live here). */
@@ -192,6 +194,18 @@ export function createServer(bot: Pick<Bot, "handle">, opts: ServerOpts) {
       const n = (await admin.labels?.doneAll()) ?? 0;
       console.log(`[admin] cleared ${n} order label(s)`);
       res.type("html").send(page(req.query.key, `Closed ${n} paid order(s) and logged them. Unpaid and CRM orders were left open.`));
+    });
+    app.get("/admin/shadow", (_req, res) => {
+      const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+      const drafts = admin.shadowDrafts?.();
+      const body = !drafts
+        ? "<p>Shadow mode is off (SHADOW_MODE on Render).</p>"
+        : drafts.length
+          ? `<ol>${drafts.map((d) => `<li><small>${esc(new Date(d.at).toLocaleString("en-US", { timeZone: "America/New_York" }))} · ${esc(d.kind)} → ${esc(d.to)}</small><br>${esc(d.text).replace(/\n/g, "<br>")}</li>`).join("")}</ol>`
+          : "<p>No drafts yet. They show up here as DMs come in.</p>";
+      res.type("html").send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shadow drafts</title>
+<style>body{font:16px system-ui;margin:16px;max-width:720px;background:#0B0B0B;color:#eee}li{margin:0 0 14px}small{color:#aaa}</style>
+<h1>🔺 Shadow drafts (NOT sent)</h1>${body}`);
     });
     app.get("/admin/customers.csv", (_req, res) => {
       res.type("text/csv").attachment("triangle-customers.csv").send(customersCsv(admin.customers()));

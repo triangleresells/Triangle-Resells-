@@ -68,7 +68,7 @@ PICKUP, SHIPPING AND DELIVERY
 - Local delivery: Josh drops off orders himself. The fee is by drive time from the warehouse: 20 min or less $5, 20 to 30 min $10, 30 to 45 min $15, 45 min to 1 hour $20. quote_order works out the fee from the town.
 - Nothing over 1 hour away gets delivered, no matter how big the order. Those buyers can get it shipped, or meet Josh halfway (someone in Greensboro meets in Durham).
 - Deliveries happen 10 AM to 10 PM. When there are several on one day, the farthest one goes first.
-- Payment: cash (pickup only), Cash App, Zelle, and card/Apple Pay through a payment link when it's turned on. Shipping and delivery are paid up front. The bot sends the Cash App / Zelle info once the order is locked in; Josh confirms every payment himself.
+- Payment: cash (pickup today only; a later day is paid first), Cash App, Zelle, and card/Apple Pay through a payment link when it's turned on. Shipping and delivery are paid up front. The bot sends the Cash App / Zelle info once the order is locked in; Josh confirms every payment himself.
 - Pickup is the default for local buyers. Delivery is for buyers who ask or have no ride.
 
 PRE-ORDERS

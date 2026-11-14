@@ -45,6 +45,8 @@ export interface Config {
   stateFile: string;
   /** Master switch: the bot only sends DMs when BOT_ENABLED is "true". Anything else = OFF. */
   botEnabled: boolean;
+  /** SHADOW_MODE=true: the bot reads DMs and drafts replies on /admin/shadow but sends nothing and books nothing. */
+  shadowMode: boolean;
   /** Minutes before a quoted buyer who went quiet gets one nudge. 0 = off. */
   quietNudgeMinutes: number;
   /** Josh has the chat but the buyer waited this long with no reply: the bot takes over. 0 = never. */
@@ -167,6 +169,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,
     quietNudgeMinutes: env.QUIET_NUDGE_MINUTES?.trim() ? Math.max(0, Number(env.QUIET_NUDGE_MINUTES) || 0) : 90,
     botEnabled: /^(true|on|yes|1)$/i.test(env.BOT_ENABLED?.trim() ?? ""),
+    shadowMode: /^(true|on|yes|1)$/i.test(env.SHADOW_MODE?.trim() ?? ""),
     pricing: withFreebieSwitch(loadPricing(), env.FREEBIES_ENABLED?.trim().toLowerCase() === "true"),
     port: Number(env.PORT) || 3000,
     agentInstructions: fill(readConfigFile("agent-instructions.md")),

@@ -36,6 +36,11 @@ export interface BotDeps {
   pricing?: PricingConfig;
   /** Live stock + prices from the warehouse sheet. When set, it replaces getInventory and pricing on every reply. */
   getCatalog?: () => Promise<{ pricing: PricingConfig; text: string }>;
+  /**
+   * Stock read fresh from BOT STOCK (no cache), used right before an order is locked in. Unpaid bookings don't hold
+   * stock (pieces are reserved when paid), so the count must be current before the bot agrees to a sale.
+   */
+  freshCatalog?: () => Promise<{ pricing: PricingConfig }>;
   /** A buyer who got a quote and then went quiet gets ONE nudge after this many minutes (default 90). 0 = off. */
   quietNudgeMinutes?: number;
   /** Josh has the chat but a buyer's message sits unanswered this long: the bot steps back in. 0 = never. Default 5. */
@@ -410,6 +415,16 @@ export class Bot {
         return q.lines.length ? describeQuote(q) + issues : `Nothing could be priced.${issues}`;
       },
     };
+    // Right before locking in, re-read stock so "only N left" is checked against the live sheet, not a copy from minutes ago.
+    const livePricing = async (): Promise<PricingConfig> => {
+      if (!this.d.freshCatalog) return pricing;
+      try {
+        return (await this.d.freshCatalog()).pricing;
+      } catch (err) {
+        console.error("[bot] fresh stock read failed, using the last copy:", err);
+        return pricing;
+      }
+    };
     tools.submitOrder = async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea, payment, shipTo) => {
       // Payment rules first, so the AI can fix them with the buyer.
       if (payment === "apple_pay" && this.d.checkout) {
@@ -425,9 +440,18 @@ export class Bot {
         const missing = (["name", "street", "city", "state", "zip"] as const).filter((k) => !String(shipTo?.[k] ?? "").trim());
         if (missing.length) return { ok: false, error: `Need the buyer's shipping info first: ${missing.join(", ")}`, fixable: true };
       }
+      // We don't hold unpaid items: cash is paid in person, so cash is for a pickup TODAY only. A later day is paid first.
+      if (payment === "cash" && /^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "") && fulfillDate > etParts(this.now()).date) {
+        return {
+          ok: false,
+          error: "Cash is only for a pickup today. For a later day they pay first (Cash App or Zelle) and we hold it once Josh confirms the payment. Or they can come today with cash",
+          fixable: true,
+        };
+      }
+      const pricingNow = await livePricing();
       // The AI only sees chat text from earlier turns, not its tool calls, so it can try to lock in the same
       // order twice. A repeat would take stock off twice and double-book Josh: answer from the first booking.
-      const dupe = this.recentSameOrder(userId, quoteOrder(pricing, items, fulfillment, deliveryArea), fulfillment);
+      const dupe = this.recentSameOrder(userId, quoteOrder(pricingNow, items, fulfillment, deliveryArea), fulfillment);
       if (dupe) {
         return {
           ok: true,
@@ -437,7 +461,7 @@ export class Bot {
           alreadyBooked: true,
         };
       }
-      const r = await this.settle(pricing, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
+      const r = await this.settle(pricingNow, items, fulfillment, fulfillDate, fulfillTime, deliveryArea);
       if (!r.ok) return r;
       this.d.store.clearPendingLink(userId);
       this.d.store.addInterest(userId, itemList(r.q));
@@ -505,7 +529,7 @@ export class Bot {
           route: "josh",
           paused: false,
           reason: `💸 Says they paid${label ? ` $${label.total}` : ""} by ${method.replace("_", " ")}: CHECK YOUR APP`,
-          summary: `${note}${label ? `. Order: ${label.summary}` : ""}. Screenshots can be faked: only Mark paid on /admin once the money is actually in.`,
+          summary: `${note}${label ? `. Order: ${label.summary}` : ""}. Screenshots can be faked: only mark it paid (in the CRM, or /admin if the CRM is off) once the money is actually in.`,
         })
         .catch((err) => console.error("[bot] payment alert failed:", err));
       // CRM: the bot's "paid" on Zelle / Cash App becomes "Paid - needs check" there (only a person confirms).
@@ -572,7 +596,7 @@ export class Bot {
     if (!this.d.checkout) return tools;
     tools.checkout = async (items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea) => {
         if (!this.d.checkout) return { ok: false, error: "card checkout isn't set up yet" };
-        const r = await this.settle(pricing, items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea);
+        const r = await this.settle(await livePricing(), items, fulfillment, fulfillDateIn, fulfillTimeIn, deliveryArea);
         if (!r.ok) return r;
         const { q, fulfillDate, fulfillTime, note } = r;
         const now = this.now();

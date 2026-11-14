@@ -21,6 +21,8 @@ import { FileSaver } from "./persist.js";
 import { BusyCalendar } from "./schedule.js";
 import { Store } from "./store.js";
 import { StripeCheckout } from "./stripe.js";
+import { ShadowLog, shadowCrm, shadowDesk, shadowInstagram, shadowNotifier } from "./shadow.js";
+import { dirname, join } from "node:path";
 
 const config = loadConfig();
 const store = new Store();
@@ -66,15 +68,21 @@ const desk = new OrderDesk({
   calendar,
   stockRows: async () => (await catalog.get()).pricing.stock ?? [],
 });
+// SHADOW_MODE: the bot drafts everything (replies, alerts, bookings) to /admin/shadow and sends nothing. It also gets
+// its own scratch memory, so it can't change real orders, paused chats or the customer list.
+const shadow = config.shadowMode ? new ShadowLog(config.stateFile ? join(dirname(config.stateFile), "shadow-drafts.jsonl") : undefined) : undefined;
+if (shadow) console.log("[shadow] SHADOW MODE: replies are drafted on /admin/shadow, nothing is sent or booked");
+const realIg = new InstagramClient(config.igAccessToken, config.igApiVersion);
 const bot = new Bot({
-  crm,
-  calendarEdit: calendarEditor(config.calendarWebhookUrl),
-  ig: new InstagramClient(config.igAccessToken, config.igApiVersion),
+  crm: crm && shadow ? shadowCrm(crm) : crm,
+  calendarEdit: shadow ? undefined : calendarEditor(config.calendarWebhookUrl),
+  ig: shadow ? shadowInstagram(realIg, shadow) : realIg,
   agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
-  store,
-  notify,
+  store: shadow ? new Store() : store,
+  notify: shadow ? shadowNotifier(shadow) : notify,
   getInventory: async () => (await catalog.get()).text,
   getCatalog: () => catalog.get(),
+  freshCatalog: () => (catalog.refresh(), catalog.get()),
   accountName: config.accountName,
   keywords: config.keywords,
   publicCommentReplies: config.publicCommentReplies,
@@ -85,10 +93,11 @@ const bot = new Bot({
   pricing: config.pricing,
   checkout: config.stripeEnabled ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
   getBusy: () => busyCalendar.get(),
-  enabled: () => config.botEnabled,
+  // Shadow mode runs the bot (that's the point) even with BOT_ENABLED=false; nothing it does leaves it.
+  enabled: () => config.botEnabled || !!shadow,
   quietNudgeMinutes: config.quietNudgeMinutes,
   takeoverMinutes: config.takeoverMinutes,
-  desk,
+  desk: shadow ? shadowDesk(shadow) : desk,
   payInfo: { zelle: config.payZelle, cashApp: config.payCashApp },
 });
 
@@ -130,7 +139,8 @@ if (crm && sheets && stockKeeper) {
 if (crm) {
   const sync = new CrmSync({
     crm, store, desk, calendarEdit: calendarEditor(config.calendarWebhookUrl),
-    tellBuyer: (ig, text) => bot.messageBuyer(ig, text), notify, accountName: config.accountName,
+    // In shadow mode the bot sends nothing, so a tracking number goes to Josh to send by hand.
+    tellBuyer: shadow ? async () => "off" as const : (ig, text) => bot.messageBuyer(ig, text), notify, accountName: config.accountName,
   });
   setInterval(() => void sync.tick(), 15 * 1000).unref();
 }
@@ -145,7 +155,7 @@ createServer(bot, {
   stripeWebhookSecret: config.stripeEnabled ? config.stripeWebhookSecret : "",
   health: async () => {
     const c = await catalog.get();
-    return { botEnabled: config.botEnabled, stock: c.source, forSaleRows: (c.pricing.stock ?? []).filter((r) => r.status === "for_sale" && r.qty > 0).length };
+    return { botEnabled: config.botEnabled, shadowMode: !!shadow, stock: c.source, forSaleRows: (c.pricing.stock ?? []).filter((r) => r.status === "for_sale" && r.qty > 0).length };
   },
   // Team assistant: the chat inside the CRM. Acts as the logged-in person through their Supabase login.
   assistant:
@@ -165,6 +175,7 @@ createServer(bot, {
     customers: () => store.allCustomers(),
     blast: (m, s) => bot.blast(m, s),
     unpauseAll: () => store.unpauseAll(),
+    shadowDrafts: shadow ? () => shadow.recent(200) : undefined,
     labels: { all: () => store.allLabels(), markPaid: (id) => desk.markPaid(id), done: (id) => desk.done(id), doneAll: () => desk.doneAll(), cancel: (id) => desk.cancel(id) },
   },
   onPaidOrder: async (order) => {
