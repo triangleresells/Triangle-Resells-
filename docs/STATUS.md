@@ -32,6 +32,11 @@ until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-calendar
 5. `scripts/e2e/run.ts` live tests 1, 3, 4, 7 assume reservation at booking: **to update once the CRM migration is
    in this repo** (not here yet; newest is 0009).
 
+## Test data in the shared database
+- The CRM session deletes TEST bookings and their events. The bot ignores every `is_test` CRM event (`src/crmsync.ts`,
+  only tests turn `includeTest` on) and the 10:30 PM wrap-up counts real bookings only (`src/team/wrapup.ts`). A deleted
+  TEST booking is never treated as a real cancel. TEST notifications DO go to Discord, prefixed `[TEST]`, on purpose.
+
 ## Waiting on Josh
 - [ ] Google key on Render (`GOOGLE_SERVICE_ACCOUNT_JSON`), then /health should say `"stock": "sheet"`.
 - [ ] `E2E_EMAIL` / `E2E_PASSWORD` in `.env` (a CRM login) for the live end-to-end tests.
