@@ -14,6 +14,8 @@ import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
 import { to24h, type Crm } from "./crm.js";
 import { crmContextText } from "./crmsync.js";
+import type { ChatLog } from "./chatlog.js";
+import { isTestBuyer } from "./desk.js";
 import type { CalendarEditor } from "./orders.js";
 
 export interface BotDeps {
@@ -59,6 +61,8 @@ export interface BotDeps {
   calendarEdit?: CalendarEditor;
   /** What the bot sends buyers to pay. Unset = Josh sends it himself. */
   payInfo?: { zelle?: string; cashApp?: string };
+  /** Chats + Knowledge in the team's phone CRM (every DM, Take over, approved answers). Optional. */
+  chatLog?: ChatLog;
   /** Clock, for tests. */
   now?: () => Date;
 }
@@ -202,6 +206,8 @@ export class Bot {
   private alertsSent = new Map<string, { words: Set<string>; at: number }[]>();
   /** What happened earlier in each chat that the AI can't see (it doesn't keep its tool results between messages). */
   private memory = new Map<string, { questions: string[]; saved: string[] }>();
+  /** The last question the bot passed to the team in each chat, waiting for a team member's answer (learning loop). */
+  private awaitingAnswer = new Map<string, string>();
 
   constructor(private d: BotDeps) {}
 
@@ -240,6 +246,17 @@ export class Bot {
       // A team member typed in the Instagram inbox: step back and let them handle it.
       this.d.store.addTurn(userId, { role: "assistant", text: `[Team member replied] ${text}` });
       this.d.store.pause(userId, this.d.humanPauseHours);
+      if (this.d.chatLog) {
+        const log = this.d.chatLog;
+        void log.message(userId, "agent", text, { mid: msg.mid, isTest: isTestBuyer(userId) });
+        void log.setNeedsHuman(userId, false);
+        // Learning loop: the team just answered a question the bot couldn't. Propose it for the Knowledge tab.
+        const q = this.awaitingAnswer.get(userId);
+        if (q && text.trim().length > 2) {
+          this.awaitingAnswer.delete(userId);
+          void log.propose(userId, q, text, isTestBuyer(userId));
+        }
+      }
       console.log(`[bot] team replied to ${userId} from the inbox; bot paused ${Math.round(this.d.humanPauseHours * 60)} min in that chat`);
       return;
     }
@@ -256,6 +273,7 @@ export class Bot {
       void this.d.crm.recordDm(userId, this.d.store.customer(userId).username).catch((err) => console.error("[bot] CRM DM count failed:", (err as Error).message ?? err));
     }
     this.d.store.addTurn(userId, { role: "user", text: caption, ...(images.length ? { images } : {}) });
+    void this.d.chatLog?.message(userId, "customer", caption, { mid: msg.mid, username: this.d.store.customer(userId).username, isTest: isTestBuyer(userId) });
     console.log(`[bot] DM from ${userId}${this.d.store.isPaused(userId) ? ` (bot is PAUSED in this chat until ${new Date(this.d.store.pausedUntil(userId)).toISOString()}, not replying)` : ""}`);
     if (!this.d.store.customer(userId).username) {
       void this.d.ig.getUsername(userId).then((u) => this.d.store.setUsername(userId, u)).catch(() => {});
@@ -284,6 +302,11 @@ export class Bot {
 
   private async replyTo(userId: string, latestText: string): Promise<void> {
     if (this.d.store.isPaused(userId)) return;
+    // "Take over" tapped in the phone CRM: a team member has this chat, the bot stays quiet until released.
+    if (this.d.chatLog && (await this.d.chatLog.isSilent(userId))) {
+      console.log(`[bot] ${userId}: the team took over this chat in the CRM, not replying`);
+      return;
+    }
     if (!this.isOn()) {
       console.log(`[bot] OFF (BOT_ENABLED isn't true): saved the DM from ${userId}, not replying`);
       return;
@@ -297,8 +320,8 @@ export class Bot {
 
     // "typing..." while the AI writes, like a person. Best effort.
     void this.d.ig.typingOn?.(userId).catch(() => {});
-    const [catalog, busy, crmNote] = await Promise.all([this.catalog(), this.busy(), this.crmContext(userId)]);
-    const schedule = scheduleText(busy, this.now()) + crmNote + this.chatMemoryText(userId);
+    const [catalog, busy, crmNote, approved] = await Promise.all([this.catalog(), this.busy(), this.crmContext(userId), this.d.chatLog?.approvedText() ?? ""]);
+    const schedule = scheduleText(busy, this.now()) + crmNote + approved + this.chatMemoryText(userId);
     const started = Date.now();
     const result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
     console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
@@ -307,7 +330,11 @@ export class Bot {
     await this.send(userId, text);
     if (result.cancelFollowUp || result.handoff) this.d.store.clearPendingLink(userId);
     const mem = this.memory.get(userId) ?? { questions: [], saved: [] };
-    for (const a of result.alerts ?? []) if (a.kind === "question" && a.reason) mem.questions.push(a.reason.slice(0, 160));
+    for (const a of result.alerts ?? []) {
+      if (a.kind !== "question" || !a.reason) continue;
+      mem.questions.push(a.reason.slice(0, 160));
+      this.awaitingAnswer.set(userId, (a.summary || a.reason).slice(0, 500));
+    }
     if (result.handoff?.reason) mem.questions.push(result.handoff.reason.slice(0, 160));
     for (const i of result.interests ?? []) mem.saved.push(i.slice(0, 120));
     mem.questions = [...new Set(mem.questions)].slice(-8);
@@ -338,6 +365,7 @@ export class Bot {
 
     if (result.handoff) {
       this.d.store.pause(userId, this.d.humanPauseHours);
+      void this.d.chatLog?.setNeedsHuman(userId, true);
       const username = await this.d.ig.getUsername(userId);
       await this.d.notify({ account: this.d.accountName, userId, username, ...result.handoff });
     }
@@ -878,6 +906,7 @@ export class Bot {
     for (const b of bubbles) {
       const id = await this.d.ig.sendText(userId, b);
       this.d.store.recordBotMessage(userId, b, id);
+      void this.d.chatLog?.message(userId, "bot", b, { mid: id || undefined, isTest: isTestBuyer(userId) });
     }
     console.log(`[bot] sent reply to ${userId} (${bubbles.length} message${bubbles.length > 1 ? "s" : ""}, ${text.length} chars)`);
     this.d.store.addTurn(userId, { role: "assistant", text: bubbles.join("\n\n") });

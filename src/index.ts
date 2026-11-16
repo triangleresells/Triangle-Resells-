@@ -15,6 +15,7 @@ import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js
 import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
 import { webhookNotifier, webhookText, type TextPoster } from "./handoff.js";
 import { allNotifiers, crmPusher, pushNotifier, pushText } from "./pushalerts.js";
+import { supabaseChatLog } from "./chatlog.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
 import { handlePaidOrder, calendarEditor, webhookCalendar } from "./orders.js";
@@ -87,6 +88,8 @@ const desk = new OrderDesk({
 const shadow = config.shadowMode ? new ShadowLog(config.stateFile ? join(dirname(config.stateFile), "shadow-drafts.jsonl") : undefined) : undefined;
 if (shadow) console.log("[shadow] SHADOW MODE: replies are drafted on /admin/shadow, nothing is sent or booked");
 const realIg = new InstagramClient(config.igAccessToken, config.igApiVersion);
+const chatLog = config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseChatLog(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
+console.log(`[chats] saving DMs to the CRM: ${chatLog ? "on" : "off (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set)"}`);
 const bot = new Bot({
   crm: crm && shadow ? shadowCrm(crm) : crm,
   calendarEdit: shadow ? undefined : calendarEditor(config.calendarWebhookUrl),
@@ -101,6 +104,8 @@ const bot = new Bot({
   keywords: config.keywords,
   publicCommentReplies: config.publicCommentReplies,
   humanPauseHours: config.humanPauseHours,
+  // Chats + Knowledge tabs in the phone CRM (same Supabase key as the phone pushes).
+  chatLog,
   debounceMs: 4000,
   // Waits ~42-58s on a cold DM and ~8-18s in a live back-and-forth, so it doesn't answer like a bot.
   replyTiming: config.humanReplyDelay ? DEFAULT_REPLY_TIMING : undefined,
