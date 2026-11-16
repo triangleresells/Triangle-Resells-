@@ -11,6 +11,20 @@ local until Josh says push. `crm-v1` is NOT live: Render runs `ai-dm-checkout-ca
 - CRM database: stock is reserved when PAID (`crm_settings.reserve_on='paid'`, live since 2026-11-14 02:49Z, from
   migrations another session applied; not in this repo, which stops at 0009). **Josh's final call: keep it.**
 
+## Update 2026-11-15 night (live)
+- LIVE on Render (`ai-dm-checkout-calendar` = `crm-v1` @ 54ee40c), BOT_ENABLED=false. Render env fixed (pasted script
+  text had replaced CRM_API_URL etc.); bad URLs now turn a feature off instead of crashing. HUMAN_PAUSE_MINUTES=5.
+- Phone alerts: bot writes `notifications` (SUPABASE_SERVICE_ROLE_KEY on Render). No Discord.
+- Josh's phone CRM is triangle-crm-q08b.netlify.app (other session's app, same Supabase). venerable-marigold stays as
+  the bot's API only. Chats + Knowledge tabs: migration 0010 applied live (conversations/messages/knowledge_base,
+  app_conversation_silence, app_knowledge_review); bot saves every DM (even while off), honors Take over, proposes
+  team answers to quick-sec questions, uses approved ones.
+- Bot memory fix: THIS CHAT SO FAR block (locked order, real pay info, quick-sec topics, saves). Retests (Sonnet
+  grader): payment doubt gone; full 50: 41/50 no critical. Remaining: small invented product details, saves/holds.
+- Anthropic credit ran out once (org a17fadab...): Josh added credit; suggested auto-reload.
+- Video ideas: Sales = 1 new meetup idea/day (the 5 reposts aren't new ideas).
+- NEXT: Josh decides BOT_ENABLED=true; watch Chats tab first days; keep tuning from real chats.
+
 ## Josh's decisions (2026-11-13, final)
 - Stock reserved when PAID. Two buyers can book the last piece; whoever pays first gets it. When a buyer says
   "I paid" and the piece is gone, Josh's alert says GONE / likely refund (`93f4d76`). Josh refunds by hand.
