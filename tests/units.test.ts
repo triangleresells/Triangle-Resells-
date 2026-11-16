@@ -181,3 +181,19 @@ describe("lock-in guard", () => {
     expect(r.text).toBe("Total $60. All sales final. Cash, Cash App or Zelle?");
   });
 });
+
+describe("Spanish buyers", async () => {
+  const { looksSpanish } = await import("../src/language.js");
+  const { quietNudgeText, followUpText } = await import("../src/bot.js");
+  it("spots Spanish and Spanglish, not English", () => {
+    expect(looksSpanish(["hola cuanto sale la sudadera alo"])).toBe(true);
+    expect(looksSpanish(["q onda wey tienes la playera en M", "xfa"])).toBe(true);
+    expect(looksSpanish(["yo u got the alo hoodie in M bro", "how much"])).toBe(false);
+    expect(looksSpanish(["ok", "M"])).toBe(false);
+  });
+  it("the automatic follow-ups go out in Spanish to Spanish buyers", () => {
+    expect(quietNudgeText("1x Alo Hoodie Black XS", undefined, true)).toMatch(/^Hola, aquí sigo con tu pedido: 1x Alo Hoodie Black XS\./);
+    expect(followUpText("1x Alo Hoodie", true)).toContain("link de pago");
+    expect(quietNudgeText("1x Alo Hoodie")).toMatch(/^Hey, still got you/);
+  });
+});

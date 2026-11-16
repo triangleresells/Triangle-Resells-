@@ -14,6 +14,7 @@ import type { ShipTo } from "./store.js";
 import type { CheckoutApi } from "./stripe.js";
 import { to24h, type Crm } from "./crm.js";
 import { crmContextText } from "./crmsync.js";
+import { looksSpanish } from "./language.js";
 import type { ChatLog } from "./chatlog.js";
 import { isTestBuyer } from "./desk.js";
 import type { CalendarEditor } from "./orders.js";
@@ -107,15 +108,20 @@ export function giftName(item: string): string {
 }
 
 /** Sent once to a buyer who got a quote and went quiet, with the free gift as the hook. */
-export function quietNudgeText(summary: string, gift?: string): string {
+export function quietNudgeText(summary: string, gift?: string, spanish = false): string {
   const order = summary.length > 100 ? `${summary.slice(0, 97)}...` : summary;
+  if (spanish) {
+    const hook = gift ? ` Y cada pedido trae un ${giftName(gift)} gratis.` : "";
+    return `Hola, aquí sigo con tu pedido: ${order}.${hook} Lo confirmamos cuando estés listo.`;
+  }
   const hook = gift ? ` Just so you know, every order comes with a free ${giftName(gift)}.` : "";
   return `Hey, still got you on the ${order}.${hook} I can lock it in whenever you're ready.`;
 }
 
 /** Sent once when a payment link expires unpaid. If they answer, the AI sends a fresh link. */
-export function followUpText(summary: string): string {
+export function followUpText(summary: string, spanish = false): string {
   const order = summary.length > 120 ? `${summary.slice(0, 117)}...` : summary;
+  if (spanish) return `Hola, te escribo por tu pedido (${order}). El link de pago expiró, pero te mando uno nuevo cuando quieras.`;
   return `Hey, just following up on your order (${order}). The link timed out, but I can send you a fresh one whenever you're ready.`;
 }
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -722,7 +728,7 @@ export class Bot {
     }
     const mem = this.memory.get(userId);
     if (mem?.questions.length) {
-      lines.push(`- Questions the team answers in this chat themselves (you already said the quick sec line for them): ${mem.questions.join(" | ")}. Never mention these again in any way: no "it's with Josh", no "I won't guess", no "still waiting", no new alert. If the buyer asks about one AGAIN or keeps pushing on it, call handoff_to_team (josh) with "asking again: <question>" and reply only "alright give me a quick sec bro" (Josh takes over).`);
+      lines.push(`- Questions the team answers in this chat themselves (you already said the quick sec line for them): ${mem.questions.join(" | ")}. Never mention these again in any way: no "it's with Josh", no "I won't guess", no "still waiting", no new alert. If the buyer asks about one AGAIN or keeps pushing on it, call handoff_to_team (josh) with "asking again: <question>" and reply only the quick sec line ("alright give me a quick sec bro", or in Spanish "dame un segundito bro") (Josh takes over).`);
     }
     if (mem?.saved.length) lines.push(`- Already saved with save_interest: ${mem.saved.join(" | ")}. Don't save these again.`);
     return lines.length ? `\n\nTHIS CHAT SO FAR (from earlier messages; trust it)\n${lines.join("\n")}` : "";
@@ -846,7 +852,8 @@ export class Bot {
         this.d.store.markFollowedUp(userId);
         if (this.d.store.isPaused(userId)) continue;
       }
-      const text = link.url ? followUpText(link.summary) : quietNudgeText(link.summary, gift);
+      const spanish = looksSpanish(this.d.store.history(userId).filter((t) => t.role === "user").map((t) => t.text));
+      const text = link.url ? followUpText(link.summary, spanish) : quietNudgeText(link.summary, gift, spanish);
       await this.inOrder(userId, () => this.send(userId, text)).catch((err) =>
         console.error("[bot] follow-up failed:", err),
       );

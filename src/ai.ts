@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Fulfillment, OrderItem } from "./pricing.js";
 import type { ChatTurn, ShipTo } from "./store.js";
+import { looksSpanish } from "./language.js";
 
 export interface AgentReply {
   text: string;
@@ -356,6 +357,7 @@ export function looksReadyToBook(text: string): boolean {
 
 /** What the bot says while Josh looks at something (Josh wants it to read like a person, not a bot). */
 export const QUICK_SEC = "alright give me a quick sec bro";
+export const QUICK_SEC_ES = "dame un segundito bro";
 
 const LOCK_IN_NOTE =
   "(Note from the system, not the customer: your reply sends the order summary or asks to lock it in, but you didn't call submit_order. Rule: once you have item, color, size, qty, pickup/delivery/shipping, the day and time (or the full ship_to address) and the payment method, lock it in IN THAT SAME REPLY. If you have all of that, call submit_order now, then write the DM to send INSTEAD of your last reply: the summary, \"All sales final\", and exactly what submit_order tells you to send. Don't ask permission. If something is truly missing, call nothing and reply with only: MISSING)";
@@ -529,7 +531,8 @@ export class ClaudeAgent implements ReplyEngine {
       if (interests.length === 0) alerts.push({ reason: "Bot told a buyer they're on the list but couldn't save what they want", summary: text.slice(0, 300), kind: "question" });
     }
     if (!text) {
-      text = QUICK_SEC;
+      const theirs = history.filter((t) => t.role === "user").map((t) => t.text);
+      text = looksSpanish(theirs) ? QUICK_SEC_ES : QUICK_SEC;
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
     return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}), ...(interests.length ? { interests } : {}) };
