@@ -177,7 +177,9 @@ export const PAYMENT_ALERT_WINDOW_MS = 6 * 60 * 60_000;
 /** The same alert (same item / question) in one chat within this window is sent to Josh only once. */
 export const ALERT_REPEAT_WINDOW_MS = 12 * 60 * 60_000;
 /** A DM after this long quiet starts a new conversation (for the CRM's DM count). */
-export const NEW_CONVERSATION_MS = 6 * 60 * 60_000;
+export /** How many earlier messages are loaded back when a forgotten buyer returns. */
+const RESTORE_TURNS = 20;
+const NEW_CONVERSATION_MS = 6 * 60 * 60_000;
 
 const FILLER = new Set(["the", "a", "an", "for", "in", "of", "to", "and", "or", "is", "it", "they", "them", "customer", "buyer", "asked", "asks", "wants", "want", "about", "item", "not", "stock", "carried", "we", "do", "dont", "have", "size", "if", "on", "with", "their", "this", "that", "question", "any", "our"]);
 
@@ -278,6 +280,7 @@ export class Bot {
     if (this.d.crm && (!lastFromThem || this.now().getTime() - lastFromThem > NEW_CONVERSATION_MS)) {
       void this.d.crm.recordDm(userId, this.d.store.customer(userId).username).catch((err) => console.error("[bot] CRM DM count failed:", (err as Error).message ?? err));
     }
+    await this.restoreFromChats(userId);
     this.d.store.addTurn(userId, { role: "user", text: caption, ...(images.length ? { images } : {}) });
     void this.d.chatLog?.message(userId, "customer", caption, { mid: msg.mid, username: this.d.store.customer(userId).username, isTest: isTestBuyer(userId) });
     console.log(`[bot] DM from ${userId}${this.d.store.isPaused(userId) ? ` (bot is PAUSED in this chat until ${new Date(this.d.store.pausedUntil(userId)).toISOString()}, not replying)` : ""}`);
@@ -704,6 +707,30 @@ export class Bot {
       console.error("[bot] CRM notes failed:", (err as Error).message ?? err);
       return this.notesCache?.text ?? "";
     }
+  }
+
+  /**
+   * A buyer coming back after the bot forgot the chat (3+ quiet days or a restart without the disk): load their last
+   * messages from the CRM's Chats so the bot remembers what they talked about. Never delays a reply more than 2.5s.
+   */
+  private async restoreFromChats(userId: string): Promise<void> {
+    if (!this.d.chatLog || this.d.store.history(userId).length) return;
+    const rows = await Promise.race([
+      this.d.chatLog.recent(userId, RESTORE_TURNS),
+      new Promise<[]>((r) => setTimeout(() => r([]), 2500).unref?.()),
+    ]);
+    if (!rows.length) return;
+    const day = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });
+    const turns = rows.map((r, i) => {
+      const when = i === 0 || day(r.at) !== day(rows[i - 1].at) ? `[${day(r.at)}] ` : "";
+      return r.role === "customer"
+        ? { role: "user" as const, text: `${when}${r.text}` }
+        : { role: "assistant" as const, text: `${when}${r.role === "agent" ? "[Team member replied] " : ""}${r.text}` };
+    });
+    // Mark where the old chat ends, so the bot knows time passed (old prices, dates and stock may have changed).
+    turns.push({ role: "assistant", text: "[Earlier chat above, loaded from the CRM. Time has passed: re-check the sheet, prices and dates before repeating anything from it.]" });
+    const n = this.d.store.restoreTurns(userId, turns);
+    if (n) console.log(`[bot] ${userId} came back: loaded ${rows.length} earlier message(s) from Chats`);
   }
 
   /**

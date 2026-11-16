@@ -10,7 +10,7 @@ const USER = "buyer-1";
 const dm = (text: string, mid: string): WebhookPayload => ({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: USER }, recipient: { id: OWN }, message: { mid, text } }] }] });
 const echo = (text: string, mid: string): WebhookPayload => ({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: OWN }, recipient: { id: USER }, message: { mid, text, is_echo: true } }] }] });
 
-function fakeLog(silentFor = new Set<string>()) {
+function fakeLog(silentFor = new Set<string>(), older: { role: ChatRole; text: string; at: string }[] = []) {
   const saved: { userId: string; role: ChatRole; text: string }[] = [];
   const proposed: { question: string; answer: string }[] = [];
   const needs: boolean[] = [];
@@ -19,6 +19,7 @@ function fakeLog(silentFor = new Set<string>()) {
     setNeedsHuman: async (_u, v) => void needs.push(v),
     isSilent: async (u) => silentFor.has(u),
     propose: async (_u, question, answer) => void proposed.push({ question, answer }),
+    recent: async () => older,
     approvedText: async () => "\n\nTEAM-APPROVED ANSWERS\n- Q: does the hoodie shrink?\n  A: no, it's pre-shrunk",
   };
   return { log, saved, proposed, needs };
@@ -77,6 +78,31 @@ describe("Chats + Knowledge in the phone CRM", () => {
     // Josh's reply after a handoff is proposed for Knowledge too (with the buyer's question).
     await bot.handle(echo("10pc of bape is $30 each", "team-1"));
     expect(f.proposed).toEqual([{ question: "can you do 40", answer: "10pc of bape is $30 each" }]);
+  });
+});
+
+describe("longer memory: a buyer coming back after the bot forgot the chat", () => {
+  it("loads their earlier messages from Chats (with dates and a 'time has passed' note) before answering", async () => {
+    const f = fakeLog(new Set(), [
+      { role: "customer", text: "how much for the essentials", at: "2026-11-02T18:00:00Z" },
+      { role: "bot", text: "Essentials are $60 and land Monday.", at: "2026-11-02T18:01:00Z" },
+      { role: "agent", text: "I got you on a dark M", at: "2026-11-02T19:00:00Z" },
+    ]);
+    const seen: { role: string; text: string }[][] = [];
+    const sent: string[] = [];
+    const ig: InstagramApi = { sendText: vi.fn(async (_to, t) => (sent.push(t), "b1")), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer123") };
+    const agent: ReplyEngine = { reply: vi.fn(async (h) => (seen.push(h.map((t) => ({ role: t.role, text: t.text }))), { text: "Welcome back!" })) };
+    const bot = new Bot({ ig, agent, store: new Store(), notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 0.1, chatLog: f.log });
+    await bot.handle(dm("yo did the essentials land", "m9"));
+    const h = seen[0];
+    expect(h[0]).toEqual({ role: "user", text: "[Nov 2] how much for the essentials" });
+    expect(h[1].text).toBe("Essentials are $60 and land Monday.");
+    expect(h[2].text).toBe("[Team member replied] I got you on a dark M");
+    expect(h[3].text).toContain("Time has passed");
+    expect(h.at(-1)).toEqual({ role: "user", text: "yo did the essentials land" });
+    // Only once: a chat the bot already remembers isn't reloaded.
+    await bot.handle(dm("u there", "m10"));
+    expect(seen[1].filter((t) => t.text.includes("Nov 2"))).toHaveLength(1);
   });
 });
 

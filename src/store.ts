@@ -168,6 +168,16 @@ export class Store {
     this.changed();
   }
 
+  /** Puts back older turns loaded from the CRM's Chats (a buyer coming back after the bot forgot the chat). Only
+   *  into an empty chat, oldest first, and without counting them as new messages. */
+  restoreTurns(userId: string, turns: ChatTurn[]): number {
+    const c = this.get(userId);
+    if (c.turns.length || !turns.length) return 0;
+    c.turns.push(...turns.slice(-MAX_TURNS));
+    this.changed();
+    return c.turns.length;
+  }
+
   // ---- customer list (for restock blasts) ----
 
   customer(userId: string): Customer {

@@ -14,6 +14,8 @@ export interface ChatLog {
   setNeedsHuman(userId: string, needsHuman: boolean): Promise<void>;
   isSilent(userId: string): Promise<boolean>;
   propose(userId: string, question: string, answer: string, isTest?: boolean): Promise<void>;
+  /** The chat's latest saved messages, oldest first (for a buyer coming back after the bot forgot the chat). */
+  recent(userId: string, limit: number): Promise<{ role: ChatRole; text: string; at: string }[]>;
   /** Approved team answers, formatted for the bot's context ("" if none). */
   approvedText(): Promise<string>;
 }
@@ -88,6 +90,16 @@ export function supabaseChatLog(supabaseUrl: string, serviceKey: string, fetchFn
         headers: headers("return=minimal"),
         body: JSON.stringify({ question: question.slice(0, 500), answer: answer.slice(0, 2000), source_conversation_id: userId, ...(isTest ? { is_test: true } : {}) }),
       }).then(() => undefined, quiet("proposing a knowledge answer"));
+    },
+    async recent(userId, limit) {
+      try {
+        const res = await req(`/messages?conversation_id=eq.${encodeURIComponent(userId)}&select=role,text,created_at&order=created_at.desc&limit=${Math.max(1, Math.min(limit, 100))}`, { method: "GET", headers: headers() });
+        const rows = (await res.json()) as { role: ChatRole; text: string; created_at: string }[];
+        return rows.reverse().map((r) => ({ role: r.role, text: r.text, at: r.created_at }));
+      } catch (err) {
+        quiet("loading old messages")(err);
+        return [];
+      }
     },
     async approvedText() {
       if (knowledge && now() - knowledge.at < KNOWLEDGE_CACHE_MS) return knowledge.text;
