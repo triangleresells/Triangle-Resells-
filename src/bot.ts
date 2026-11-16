@@ -200,6 +200,8 @@ export class Bot {
   private paidAlertAt = new Map<string, number>();
   /** Alerts already sent per chat (key words + time), so the same heads-up doesn't ping Josh on every turn. */
   private alertsSent = new Map<string, { words: Set<string>; at: number }[]>();
+  /** What happened earlier in each chat that the AI can't see (it doesn't keep its tool results between messages). */
+  private memory = new Map<string, { questions: string[]; saved: string[] }>();
 
   constructor(private d: BotDeps) {}
 
@@ -296,7 +298,7 @@ export class Bot {
     // "typing..." while the AI writes, like a person. Best effort.
     void this.d.ig.typingOn?.(userId).catch(() => {});
     const [catalog, busy, crmNote] = await Promise.all([this.catalog(), this.busy(), this.crmContext(userId)]);
-    const schedule = scheduleText(busy, this.now()) + crmNote;
+    const schedule = scheduleText(busy, this.now()) + crmNote + this.chatMemoryText(userId);
     const started = Date.now();
     const result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
     console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
@@ -304,6 +306,13 @@ export class Bot {
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
     await this.send(userId, text);
     if (result.cancelFollowUp || result.handoff) this.d.store.clearPendingLink(userId);
+    const mem = this.memory.get(userId) ?? { questions: [], saved: [] };
+    for (const a of result.alerts ?? []) if (a.kind === "question" && a.reason) mem.questions.push(a.reason.slice(0, 160));
+    if (result.handoff?.reason) mem.questions.push(result.handoff.reason.slice(0, 160));
+    for (const i of result.interests ?? []) mem.saved.push(i.slice(0, 120));
+    mem.questions = [...new Set(mem.questions)].slice(-8);
+    mem.saved = [...new Set(mem.saved)].slice(-8);
+    this.memory.set(userId, mem);
     // Customer list: whatever they asked about or wanted, for restock blasts later.
     for (const item of [...(result.interests ?? []), ...(result.alerts ?? []).map((a) => a.summary)]) this.d.store.addInterest(userId, item);
 
@@ -658,6 +667,34 @@ export class Bot {
       console.error("[bot] CRM notes failed:", (err as Error).message ?? err);
       return this.notesCache?.text ?? "";
     }
+  }
+
+  /**
+   * THIS CHAT SO FAR: the facts from earlier tool calls the AI would otherwise forget. Without it the AI saw its own
+   * "Cash App $104 to $triangleresells" text, couldn't find where it came from, and told buyers to hold off paying.
+   */
+  chatMemoryText(userId: string): string {
+    const lines: string[] = [];
+    const label = this.d.store.latestLabelFor(userId);
+    if (label) {
+      const total = Number(label.total);
+      const payLine = /cash.?app/i.test(label.payment) && this.d.payInfo?.cashApp
+        ? `Cash App $${total} to ${this.d.payInfo.cashApp}`
+        : /zelle/i.test(label.payment) && this.d.payInfo?.zelle
+          ? `Zelle $${total} to ${this.d.payInfo.zelle}`
+          : "";
+      lines.push(`- This buyer's order is LOCKED IN by submit_order (${label.label}): ${label.summary}; ${label.when}; total $${total}; pays by ${label.payment}. Don't call submit_order again for it (reschedule_order / cancel_order change it).`);
+      if (payLine) {
+        lines.push(`- The payment info for it came from the order system and is Josh's REAL info: "${payLine}". If they ask whether it's right, say yes, that's it. Never doubt it, never say it didn't come from the system, never tell them to wait or hold off on paying.`);
+      }
+      if (label.saysPaid) lines.push(`- They already said they paid (${label.saysPaid}) and Josh was told. Don't call payment_sent again. Never say the payment is confirmed: Josh confirms it.`);
+    }
+    const mem = this.memory.get(userId);
+    if (mem?.questions.length) {
+      lines.push(`- Already sent to Josh (you said "alright give me a quick sec bro"): ${mem.questions.join(" | ")}. Don't answer these yourself, don't bring them up again, don't say what Josh is doing, and don't alert the team about them again. Keep helping with everything else.`);
+    }
+    if (mem?.saved.length) lines.push(`- Already saved with save_interest: ${mem.saved.join(" | ")}. Don't save these again.`);
+    return lines.length ? `\n\nTHIS CHAT SO FAR (from earlier messages; trust it)\n${lines.join("\n")}` : "";
   }
 
   private async crmContext(userId: string): Promise<string> {

@@ -850,3 +850,39 @@ describe("meetup reminder buzz (Josh texts them himself)", () => {
     expect(await bot.buzzMeetupReminders()).toBe(0); // once
   });
 });
+
+describe("THIS CHAT SO FAR (the AI forgets its earlier tool results)", () => {
+  it("repeats the locked-in order, its real payment info, what's with Josh and what's saved on every reply", async () => {
+    const seen: string[] = [];
+    const replies: AgentReply[] = [
+      { text: "alright give me a quick sec bro", alerts: [{ reason: "asked if it's authentic", summary: "Alo hoodie", kind: "question" }], interests: ["Essentials hoodie Black L"] },
+      { text: "Yes, that's it." },
+    ];
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (_h, _inv, _t, sched?: string) => {
+        seen.push(sched ?? "");
+        return replies.shift() ?? { text: "ok" };
+      }),
+    };
+    const store = new Store();
+    const ig: InstagramApi = { sendText: vi.fn(async () => "m"), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer123") };
+    const bot = new Bot({
+      ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords, publicCommentReplies: [], humanPauseHours: 12,
+      payInfo: { cashApp: "$triangleresells", zelle: "919-480-7349" },
+    });
+    store.addLabel({ userId: USER, label: "BOOKED", summary: "1x Alo Hoodie Black XS", total: 104, payment: "cash app", when: "pickup 2026-11-16 11:00 AM" });
+
+    expect(bot.chatMemoryText("someone-else")).toBe("");
+    await bot.handle(dm("is this real?", "m1"));
+    await bot.handle(dm("is $triangleresells the right cash app?", "m2"));
+
+    expect(seen[0]).toContain('"Cash App $104 to $triangleresells"');
+    expect(seen[0]).toContain("LOCKED IN by submit_order");
+    expect(seen[0]).not.toContain("Already sent to Josh");
+    // Second message: it now also knows the authenticity question is with Josh and what was saved.
+    expect(seen[1]).toContain("Already sent to Josh");
+    expect(seen[1]).toContain("asked if it's authentic");
+    expect(seen[1]).toContain("Essentials hoodie Black L");
+    expect(seen[1]).toContain("never tell them to wait or hold off on paying");
+  });
+});

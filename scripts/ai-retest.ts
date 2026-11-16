@@ -117,6 +117,10 @@ async function main() {
   }
   const n = Number(process.argv[2] ?? 50);
   const out = process.argv[3] ?? "ai-retest-report.json";
+  // RETEST_ONLY=id1,id2 runs just those scenarios (cheaper focused retests).
+  const only = (process.env.RETEST_ONLY ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const POOL = only.length ? SCENARIOS.filter((x) => only.includes(x.id)) : SCENARIOS;
+  if (only.length && POOL.length !== only.length) throw new Error(`Unknown scenario id in RETEST_ONLY: ${only.filter((o) => !SCENARIOS.some((x) => x.id === o)).join(", ")}`);
   const concurrency = Number(process.env.RETEST_CONCURRENCY ?? 5);
   const judgeModel = process.env.JUDGE_MODEL ?? "claude-opus-5-5";
   const customerModel = process.env.CUSTOMER_MODEL ?? "claude-haiku-5-5";
@@ -131,7 +135,7 @@ async function main() {
   const results: { id: string; run: number; persona: string; transcript: string[]; tools: string[]; grade: { pass?: boolean; violations?: string[]; notes?: string } }[] = [];
 
   async function runOne(i: number) {
-    const sc = SCENARIOS[i % SCENARIOS.length];
+    const sc = POOL[i % POOL.length];
     const transcript: string[] = [];
     const tools: string[] = [];
     const clock = { t: Date.now() };
@@ -156,8 +160,10 @@ async function main() {
       if (r.cancelFollowUp) tools.push("cancel_follow_up()");
       return r;
     };
+    let lastSched = "";
     const inner: ReplyEngine = {
       reply: (h, inv, t?: OrderTools, sched?) => {
+        lastSched = sched ?? "";
         if (!t) return real.reply(h, inv, t, sched);
         const wrapped: OrderTools = {
           quote: (items, f, area) => {
@@ -239,7 +245,7 @@ async function main() {
       messages: [
         {
           role: "user",
-          content: `RULES:\n${config.agentInstructions}\n\nKNOWLEDGE BASE THE BOT SAW (facts from here are NOT invented):\n${config.knowledgeBase}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
+          content: `RULES:\n${config.agentInstructions}\n\nKNOWLEDGE BASE THE BOT SAW (facts from here are NOT invented):\n${config.knowledgeBase}\n\nSTOCK SHEET THE BOT SAW:\n${catalogText}\n\n${VOICE_CHECK}\n\nPICKUP SCHEDULE AND CHAT MEMORY THE BOT SAW ON ITS LAST REPLY (times and facts from here are NOT invented; a time not listed as taken is open):\n${lastSched || "(none)"}\nNOW: ${new Date(clock.t).toLocaleString("en-US", { timeZone: "America/New_York" })} ET\n\nSCENARIO: ${sc.persona}\nEXPECTED: ${sc.expect}\nNote: the automatic quiet-buyer nudge is sent by the system and counts as the bot's message.\n\nTOOL CALLS AND ALERTS:\n${tools.join("\n") || "none"}\n\nCHAT:\n${transcript.join("\n")}`,
         },
       ],
     } as Anthropic.MessageCreateParamsNonStreaming);
@@ -263,7 +269,7 @@ async function main() {
           await runOne(i);
         } catch (err) {
           console.error(`run ${i} crashed:`, err);
-          results.push({ id: SCENARIOS[i % SCENARIOS.length].id, run: i, persona: "", transcript: [], tools: [], grade: { pass: false, violations: [`crashed: ${String(err).slice(0, 120)}`] } });
+          results.push({ id: POOL[i % POOL.length].id, run: i, persona: "", transcript: [], tools: [], grade: { pass: false, violations: [`crashed: ${String(err).slice(0, 120)}`] } });
         }
       }
     }),
