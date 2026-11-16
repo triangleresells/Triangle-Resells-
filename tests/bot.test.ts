@@ -878,9 +878,9 @@ describe("THIS CHAT SO FAR (the AI forgets its earlier tool results)", () => {
 
     expect(seen[0]).toContain('"Cash App $104 to $triangleresells"');
     expect(seen[0]).toContain("LOCKED IN by submit_order");
-    expect(seen[0]).not.toContain("Already sent to Josh");
+    expect(seen[0]).not.toContain("Questions the team answers");
     // Second message: it now also knows the authenticity question is with Josh and what was saved.
-    expect(seen[1]).toContain("Already sent to Josh");
+    expect(seen[1]).toContain("Questions the team answers");
     expect(seen[1]).toContain("asked if it's authentic");
     expect(seen[1]).toContain("Essentials hoodie Black L");
     expect(seen[1]).toContain("never tell them to wait or hold off on paying");
