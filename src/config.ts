@@ -63,6 +63,8 @@ export interface Config {
   /** Team assistant (chat in the CRM): Supabase project URL + PUBLIC anon key, and the CRM's web address. All three = on. */
   supabaseUrl: string;
   supabaseAnonKey: string;
+  /** SECRET service key (same as the CRM's on Netlify): lets the bot write team alerts as phone pushes. Blank = off. */
+  supabaseServiceRoleKey: string;
   crmWebOrigin: string;
   pricing: PricingConfig;
   port: number;
@@ -163,6 +165,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // Accepts the project URL however it was copied from Supabase (with or without "/rest/v1/").
     supabaseUrl: optional(env.SUPABASE_URL).replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, ""),
     supabaseAnonKey: optional(env.SUPABASE_ANON_KEY),
+    supabaseServiceRoleKey: optional(env.SUPABASE_SERVICE_ROLE_KEY),
     crmWebOrigin: optional(env.CRM_WEB_ORIGIN).replace(/\/+$/, ""),
     crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",
     humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",

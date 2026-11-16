@@ -13,7 +13,8 @@ import { describeToken, loadConfig } from "./config.js";
 import { formatCatalog } from "./catalog.js";
 import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js";
 import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
-import { webhookNotifier, webhookText } from "./handoff.js";
+import { webhookNotifier, webhookText, type TextPoster } from "./handoff.js";
+import { allNotifiers, crmPusher, pushNotifier, pushText } from "./pushalerts.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
 import { handlePaidOrder, calendarEditor, webhookCalendar } from "./orders.js";
@@ -50,7 +51,20 @@ void catalog.get(); // warm up, and log right away if the sheet isn't shared wit
 // Josh's calendar: paid pickups plus any time he blocks off. The bot never offers those times.
 const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 
-const notify = webhookNotifier(config.handoffWebhookUrl);
+// Team alerts: phone pushes through the CRM (needs SUPABASE_SERVICE_ROLE_KEY), and/or Discord / Slack (HANDOFF_WEBHOOK_URL).
+const pusher = config.supabaseUrl && config.supabaseServiceRoleKey ? crmPusher(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
+console.log(`[alerts] phone push: ${pusher ? "on" : "off (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set)"}, Discord/Slack: ${config.handoffWebhookUrl ? "on" : "off"}`);
+const notify = pusher
+  ? config.handoffWebhookUrl ? allNotifiers(pushNotifier(pusher), webhookNotifier(config.handoffWebhookUrl)) : pushNotifier(pusher)
+  : webhookNotifier(config.handoffWebhookUrl);
+/** The 10 PM wrap-up: phone push and/or Discord. Fails (so it's retried) only if every target failed. */
+const wrapUpPost: TextPoster = async (text) => {
+  const targets: Promise<void>[] = [];
+  if (pusher) targets.push(pushText(pusher, "wrap_up", "🌙 Daily wrap-up")(text));
+  if (config.handoffWebhookUrl || !pusher) targets.push(webhookText(config.handoffWebhookUrl)(text));
+  const r = await Promise.allSettled(targets);
+  if (r.every((x) => x.status === "rejected")) throw (r[0] as PromiseRejectedResult).reason;
+};
 const calendar = webhookCalendar(config.calendarWebhookUrl);
 // Locked-in orders: stock off BOT STOCK, on the calendar, Josh alerted, sales tracker once paid.
 // Triangle CRM: every locked-in order also becomes a CRM booking; reschedules, cancels and "I paid" go there too.
@@ -108,7 +122,7 @@ if (crm) {
   const notifySync = new NotifySync({ crm, store, post: webhookText(config.handoffWebhookUrl) });
   setInterval(() => void notifySync.tick(), 20 * 1000).unref();
   // 10 PM: what got done today and what's still open (the team approves what was fulfilled).
-  const wrapUp = new WrapUp({ crm, store, post: webhookText(config.handoffWebhookUrl) });
+  const wrapUp = new WrapUp({ crm, store, post: wrapUpPost });
   setInterval(() => void wrapUp.tick(), 5 * 60 * 1000).unref();
   const hooks = new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm);
   let filled = "";
