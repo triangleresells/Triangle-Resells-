@@ -74,6 +74,9 @@ describe("Chats + Knowledge in the phone CRM", () => {
     const { bot } = makeBot(f.log, [{ text: "alright give me a quick sec bro", handoff: { route: "josh", reason: "wants a discount", summary: "asks for $40" } }]);
     await bot.handle(dm("can you do 40", "m1"));
     expect(f.needs).toEqual([true]);
+    // Josh's reply after a handoff is proposed for Knowledge too (with the buyer's question).
+    await bot.handle(echo("10pc of bape is $30 each", "team-1"));
+    expect(f.proposed).toEqual([{ question: "can you do 40", answer: "10pc of bape is $30 each" }]);
   });
 });
 

@@ -366,6 +366,9 @@ export class Bot {
     if (result.handoff) {
       this.d.store.pause(userId, this.d.humanPauseHours);
       void this.d.chatLog?.setNeedsHuman(userId, true);
+      // Learning loop: the team's next message in this chat answers whatever the bot handed over.
+      const lastAsk = [...this.d.store.history(userId)].reverse().find((t) => t.role === "user")?.text;
+      this.awaitingAnswer.set(userId, (lastAsk || result.handoff.summary || result.handoff.reason).slice(0, 500));
       const username = await this.d.ig.getUsername(userId);
       await this.d.notify({ account: this.d.accountName, userId, username, ...result.handoff });
     }
