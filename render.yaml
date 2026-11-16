@@ -87,9 +87,9 @@ services:
         value: claude-sonnet-5-5
       - key: IG_API_VERSION
         value: v23.0
-      # How long the bot stays quiet in a chat after a handoff or after the team types in it.
+      # How long the bot stays quiet in a chat after a handoff or after the team types in it (Josh: 5 minutes).
       - key: HUMAN_PAUSE_MINUTES
-        value: "720"
+        value: "5"
       # While Josh has a chat, a buyer message with no reply from him for this many minutes brings the bot back. 0 = never.
       - key: TAKEOVER_MINUTES
         value: "5"
