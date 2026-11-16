@@ -85,6 +85,19 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return v;
 }
 
+/** A web address setting. Anything that isn't one (e.g. text pasted by mistake) counts as blank, with a clear log line,
+ *  so one bad paste turns that feature off instead of crashing the bot. */
+function webUrl(env: NodeJS.ProcessEnv, name: string): string {
+  const v = (env[name] ?? "").trim().replace(/\/+$/, "");
+  if (!v || NOT_SET.has(v.toLowerCase())) return "";
+  try {
+    const u = new URL(v);
+    if (u.protocol === "https:" || u.protocol === "http:") return v;
+  } catch {}
+  console.error(`[config] ${name} isn't a web address (it should start with https://). Treating it as blank: that feature is OFF. Fix it in Render's Environment page.`);
+  return "";
+}
+
 /** Placeholder words Josh can type in Render for things not set up yet. They count as blank (feature off). */
 const NOT_SET = new Set(["pending", "none", "skip", "na", "n/a", "-", "x", "tbd", "later"]);
 
@@ -160,13 +173,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
     stateFile: env.STATE_FILE?.trim() || "",
     adminKey: optional(env.ADMIN_KEY),
-    crmApiUrl: optional(env.CRM_API_URL),
+    crmApiUrl: webUrl(env, "CRM_API_URL"),
     crmBotApiKey: optional(env.CRM_BOT_API_KEY),
     // Accepts the project URL however it was copied from Supabase (with or without "/rest/v1/").
-    supabaseUrl: optional(env.SUPABASE_URL).replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, ""),
+    supabaseUrl: webUrl(env, "SUPABASE_URL").replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, ""),
     supabaseAnonKey: optional(env.SUPABASE_ANON_KEY),
     supabaseServiceRoleKey: optional(env.SUPABASE_SERVICE_ROLE_KEY),
-    crmWebOrigin: optional(env.CRM_WEB_ORIGIN).replace(/\/+$/, ""),
+    crmWebOrigin: webUrl(env, "CRM_WEB_ORIGIN").replace(/\/+$/, ""),
     crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",
     humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",
     takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,

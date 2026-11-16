@@ -1,6 +1,6 @@
 /**
- * Daily video ideas: fills a day up to each account's goal (Resells 3, Scales 2, Sales 6 incl. a meetup video) with
- * fresh hooks written by Claude, never repeating recent ones. Only fills what's missing, so running it twice is safe.
+ * Daily video ideas: fills a day up to each account's goal with fresh hooks. Josh films 3 for Resells and 2 for Scales;
+ * Sales reposts those same 5 plus ONE meetup video, so Sales only ever needs 1 new idea a day (the meetup). Fresh hooks written by Claude, never repeating recent ones. Only fills what's missing, so running it twice is safe.
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Crm, VideoAccount } from "../crm.js";
@@ -8,7 +8,7 @@ import type { Crm, VideoAccount } from "../crm.js";
 export const ACCOUNTS: Record<VideoAccount, string> = {
   resells: "Triangle Resells: local meetups, supplying other resellers, shipping and bulk orders of streetwear (Essentials, BAPE, Supreme, Spider, Chrome Hearts) and cologne, Raleigh NC.",
   scales: "Triangle Scales: reselling education: vendors, how to start, flipping tips, scaling a resale business.",
-  sales: "Triangle Sales: everything, including reposts from Resells and Scales and at least one meetup video a day (handing orders to buyers in the parking lot).",
+  sales: "Triangle Sales: reposts the day's Resells and Scales videos, plus ONE meetup video a day (handing orders to buyers in the parking lot). Only the meetup video is a new idea.",
 };
 
 export interface NewIdea {
@@ -21,7 +21,9 @@ export interface NewIdea {
 export function missingFor(goals: Record<VideoAccount, number>, ideas: { account: VideoAccount; meetup: boolean }[]) {
   const have = (a: VideoAccount) => ideas.filter((i) => i.account === a).length;
   const need = Object.fromEntries((Object.keys(ACCOUNTS) as VideoAccount[]).map((a) => [a, Math.max(0, (goals[a] ?? 0) - have(a))])) as Record<VideoAccount, number>;
-  const needsMeetup = need.sales > 0 && !ideas.some((i) => i.account === "sales" && i.meetup);
+  // Sales = the 5 reposts + 1 meetup video: the only new Sales idea is the meetup one, whatever the CRM's goal says.
+  const needsMeetup = (goals.sales ?? 0) > 0 && !ideas.some((i) => i.account === "sales" && i.meetup);
+  need.sales = needsMeetup ? 1 : 0;
   return { need, needsMeetup, total: need.resells + need.scales + need.sales };
 }
 

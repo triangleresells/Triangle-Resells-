@@ -94,7 +94,9 @@ describe("video hooks", async () => {
 
   it("only fills what's missing, and Sales needs its meetup video", () => {
     const ideas = [{ account: "resells" as const, meetup: false }, { account: "sales" as const, meetup: false }];
-    expect(missingFor(goals, ideas)).toEqual({ need: { resells: 2, scales: 2, sales: 5 }, needsMeetup: true, total: 9 });
+    // Sales = reposts of the 5 + one meetup video: only the meetup is a new idea.
+    expect(missingFor(goals, ideas)).toEqual({ need: { resells: 2, scales: 2, sales: 1 }, needsMeetup: true, total: 5 });
+    expect(missingFor(goals, [...ideas, { account: "sales" as const, meetup: true }]).need.sales).toBe(0);
     expect(missingFor(goals, [...ideas, { account: "sales" as const, meetup: true }]).needsMeetup).toBe(false);
   });
 
