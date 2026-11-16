@@ -691,7 +691,7 @@ export class Bot {
     }
     const mem = this.memory.get(userId);
     if (mem?.questions.length) {
-      lines.push(`- Questions the team answers in this chat themselves (you already said the quick sec line for them): ${mem.questions.join(" | ")}. Never mention these again in any way: no "it's with Josh", no "I won't guess", no "still waiting", no second quick sec line, no new alert. If the buyer asks about one again, skip it and reply with the next step of the order.`);
+      lines.push(`- Questions the team answers in this chat themselves (you already said the quick sec line for them): ${mem.questions.join(" | ")}. Never mention these again in any way: no "it's with Josh", no "I won't guess", no "still waiting", no new alert. If the buyer asks about one AGAIN or keeps pushing on it, call handoff_to_team (josh) with "asking again: <question>" and reply only "alright give me a quick sec bro" (Josh takes over).`);
     }
     if (mem?.saved.length) lines.push(`- Already saved with save_interest: ${mem.saved.join(" | ")}. Don't save these again.`);
     return lines.length ? `\n\nTHIS CHAT SO FAR (from earlier messages; trust it)\n${lines.join("\n")}` : "";
