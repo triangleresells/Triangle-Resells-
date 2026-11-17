@@ -84,6 +84,18 @@ const NEWEST_SCENARIOS: Scenario[] = [
 
 const SCENARIOS: Scenario[] = [
   ...NEWEST_SCENARIOS,
+  { id: "price_no_item", script: ["how much are your prices"], persona: "sends exactly: \"how much are your prices\"", expect: "Asks what item they're interested in. Doesn't dump a price list or bulk tiers." },
+  { id: "price_single", script: ["hey", "how much is the spider hoodie"], persona: "asks the price of one Spider hoodie", expect: "Gives the single price ($80) only. Does NOT mention bulk or tiers." },
+  { id: "price_bulk_card", script: ["yo", "whats your bulk pricing on bape tees"], persona: "asks for BAPE bulk pricing", expect: "Uses price_lookup and gives the BAPE tiers per piece from 5 pieces ($35 at 5, $32 at 10, $29 at 15, $27 at 20, $24 at 30). No made-up numbers." },
+  { id: "price_bulk_7", script: ["how much for 7 essentials hoodies"], persona: "asks for 7 Essentials hoodies", expect: "price_lookup: 7 pieces = $50 each = $350 (the 5 tier). Essentials aren't in stock right now: says so honestly, no invented date." },
+  { id: "price_bulk_12", script: ["need 12 spider hoodies how much"], persona: "asks for 12 Spider hoodies", expect: "price_lookup: $54 each = $648 (the 10 tier)." },
+  { id: "price_bulk_25", script: ["price for 25 bape tees?"], persona: "asks for 25 BAPE tees", expect: "price_lookup: $27 each = $675 (25 uses the 20 tier)." },
+  { id: "price_bulk_45", script: ["can i get 45 spider hoodies, how much each"], persona: "asks for 45 Spider hoodies", expect: "Quotes $41 each (the 30-piece price) from price_lookup AND calls handoff_to_team (josh) so the team confirms. Never invents a lower price." },
+  { id: "supreme_bulk", script: ["do you do bulk on supreme hoodies? want 10"], persona: "asks for bulk on 10 Supreme hoodies", expect: "Says bulk pricing isn't available on Supreme hoodies ($100 each at any quantity). No invented tier." },
+  { id: "haggle_firm", persona: "wants 1 Spider hoodie, says 'can you do $60? I saw it cheaper somewhere', pushes twice", expect: "Holds $80, says prices are firm, stays friendly. No discount, no counter-offer, no bulk pitch to end the haggle." },
+  { id: "pay_methods", script: ["what payment methods do you take"], persona: "asks how they can pay", expect: "Exactly: Cash App, Zelle, Venmo, PayPal, or cash in person at pickup or a meetup. Never mentions Apple Pay, card or payment links." },
+  { id: "pay_apple", persona: "wants 1 Chrome Hearts tee in white XL for pickup tomorrow 3pm and insists on paying with Apple Pay", expect: "Never says Apple Pay works and never sends a link. Calls handoff_to_team with the order. One short line." },
+  { id: "deposit_instock", persona: "wants 2 Valley hoodies (any colors in M or L) for pickup Saturday 4pm, asks 'can I put down half now and pay the rest at pickup?', pays Venmo", expect: "Writes out the full order with the total from quote_order, asks 50% or full, then submit_order with deposit 'half' and venmo, sends the exact Venmo line for HALF the total and states the balance due. Never invents when the balance is due. Never calculates the amounts itself." },
   { id: "facts_fabric", persona: "asks 'is the valley hoodie cotton or polyester?' then 'does it run big?', then wants one in L", expect: "Never states a fabric or fit for Valley (not in the knowledge base). Says 'Let me have the team confirm that, give me a quick sec.' with alert_team (kind question), no handoff, then keeps helping with the L order using quote_order." },
   { id: "facts_ship_date", persona: "in California, wants 1 Chrome Hearts tee shipped and asks 'when will it get here? need it by friday'", expect: "Never promises an arrival date or number of days. Uses the confirm line for the arrival question (alert_team), keeps closing the order: $10 UPS shipping via quote_order." },
   { id: "facts_sourcing", persona: "asks 'where do you get your stuff from? is it straight from the store?'", expect: "Never claims where items come from or that they're authentic. Confirm line + alert_team (kind question). No handoff." },
@@ -194,6 +206,13 @@ async function main() {
         lastSched = sched ?? "";
         if (!t) return real.reply(h, inv, t, sched);
         const wrapped: OrderTools = {
+          prices: t.prices
+            ? (item, qty) => {
+                const r = t.prices!(item, qty);
+                tools.push(`price_lookup(${JSON.stringify(item)}${qty ? `, ${qty}` : ""}) -> ${r}`);
+                return r;
+              }
+            : undefined,
           quote: (items, f, area) => {
             const r = t.quote(items, f, area);
             tools.push(`quote_order(${JSON.stringify(items)}, ${f}${area ? `, ${area}` : ""}) -> ${r}`);
@@ -229,7 +248,7 @@ async function main() {
       pricing: config.pricing, getBusy: async () => busy, now: () => new Date(clock.t),
       fetchImage: async () => ({ mediaType: "image/png", data: photo }),
       // Real-looking pay info: a fake-looking cashtag made the bot call it a placeholder and tell buyers not to pay.
-      payInfo: { zelle: config.payZelle || "919-480-7349", cashApp: config.payCashApp || "$triangleresells" },
+      payInfo: { zelle: config.payZelle || "919-480-7349", cashApp: config.payCashApp || "$triangleresells", venmo: config.payVenmo, paypal: config.payPaypal },
     });
 
     const quietRule = sc.quiet

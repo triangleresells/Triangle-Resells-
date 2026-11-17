@@ -32,6 +32,9 @@ export interface Config {
   /** What the bot sends Zelle / Cash App buyers, e.g. "919-480-7349 (Josh ...)" and "$TriangleResells". Blank = Josh sends it. */
   payZelle: string;
   payCashApp: string;
+  /** Venmo / PayPal handles from config/payments.json (public, not secrets). */
+  payVenmo: string;
+  payPaypal: string;
   handoffWebhookUrl: string;
   humanPauseHours: number;
   /** Stripe payment links. Off unless STRIPE_ENABLED=true AND a key is set. Right now buyers pay cash, Cash App or Apple Pay. */
@@ -136,6 +139,15 @@ function validClock(v: string | undefined, fallback: string, name: string): stri
   return fallback;
 }
 
+function paymentHandles(): { payVenmo: string; payPaypal: string } {
+  try {
+    const j = JSON.parse(readConfigFile("payments.json")) as { venmo?: string; paypal?: string };
+    return { payVenmo: j.venmo?.trim() ?? "", payPaypal: j.paypal?.trim() ?? "" };
+  } catch {
+    return { payVenmo: "", payPaypal: "" };
+  }
+}
+
 export function describeToken(t: string): string {
   if (!t || NOT_SET.has(t.toLowerCase())) return "NOT SET (still a placeholder)";
   if (t.length < 50) return `looks too short (${t.length} characters), probably cut off when copying`;
@@ -190,6 +202,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trackerSheetId: optional(env.TRACKER_SHEET_ID) || "1ks_DjoGUucVHgzf7mhx9P1B1HTySaNxWbGGsteQ1eGI",
     payZelle: env.PAY_ZELLE?.trim() || "",
     payCashApp: env.PAY_CASHAPP?.trim() || "$triangleresells",
+    ...paymentHandles(),
     handoffWebhookUrl: optional(env.HANDOFF_WEBHOOK_URL),
     // HUMAN_PAUSE_MINUTES wins if set (e.g. 5); otherwise HUMAN_PAUSE_HOURS; default 12 hours.
     humanPauseHours: Number(env.HUMAN_PAUSE_MINUTES) > 0 ? Number(env.HUMAN_PAUSE_MINUTES) / 60 : Number(env.HUMAN_PAUSE_HOURS) || 12,

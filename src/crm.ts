@@ -18,7 +18,7 @@ export interface CrmBookingInput {
   time?: string | null;
   customer: { ig_user_id?: string; ig_handle?: string | null; name?: string | null; phone?: string | null };
   items: CrmItem[];
-  payment_method: "cash" | "cash_app" | "zelle" | "stripe" | "apple_pay";
+  payment_method: "cash" | "cash_app" | "zelle" | "stripe" | "apple_pay" | "venmo" | "paypal";
   fulfillment: "pickup" | "delivery" | "ship";
   sale_price: number;
   delivery_fee?: number;
@@ -214,6 +214,7 @@ export function to24h(t?: string): string | null {
 /** The bot's payment words -> the CRM's. */
 export function crmPayment(p: string): CrmBookingInput["payment_method"] {
   const k = p.toLowerCase().replace(/[\s-]+/g, "_");
-  if (k === "cash" || k === "cash_app" || k === "zelle" || k === "stripe" || k === "apple_pay") return k;
+  if (k === "cash" || k === "cash_app" || k === "zelle" || k === "stripe" || k === "apple_pay" || k === "venmo" || k === "paypal") return k;
+  if (k === "cashapp") return "cash_app";
   return "apple_pay";
 }

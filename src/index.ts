@@ -16,6 +16,7 @@ import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
 import { webhookNotifier, webhookText, type TextPoster } from "./handoff.js";
 import { allNotifiers, crmPusher, pushNotifier, pushText } from "./pushalerts.js";
 import { supabaseChatLog } from "./chatlog.js";
+import { supabaseDeposits } from "./deposits.js";
 import { HealthClock, SendWatch, supabaseHealthDb } from "./health.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
@@ -123,7 +124,9 @@ const bot = new Bot({
   quietNudgeMinutes: config.quietNudgeMinutes,
   takeoverMinutes: config.takeoverMinutes,
   desk: shadow ? shadowDesk(shadow) : desk,
-  payInfo: { zelle: config.payZelle, cashApp: config.payCashApp },
+  payInfo: { zelle: config.payZelle, cashApp: config.payCashApp, venmo: config.payVenmo, paypal: config.payPaypal },
+  // 50% deposits -> the CRM's deposits table (not in shadow mode: nothing leaves the bot there).
+  recordDeposit: !shadow && config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseDeposits(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined,
 });
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
@@ -225,6 +228,8 @@ createServer(bot, {
     labels: { all: () => store.allLabels(), markPaid: (id) => desk.markPaid(id), done: (id) => desk.done(id), doneAll: () => desk.doneAll(), cancel: (id) => desk.cancel(id) },
   },
   onPaidOrder: async (order) => {
+    // A card payment landed: tell the whole team right away (phone push).
+    void pusher?.({ type: "payment", title: `💳 Card payment: $${order.total}`, body: `${order.summary}`.slice(0, 300), priority: "high", conversation_id: order.igUserId, dedupe_key: `card:${order.igUserId}:${order.total}:${Math.floor(Date.now() / 600000)}` }).catch((err) => console.error("[push] card payment push failed:", err));
     await bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "), order.fulfillment);
     return handlePaidOrder(order, {
       sendDm: (id, text) => bot.sendDm(id, text),

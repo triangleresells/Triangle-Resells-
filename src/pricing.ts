@@ -11,6 +11,54 @@ export interface PricingConfig {
   delivery?: DeliveryConfig;
   /** FREEBIES_ENABLED=true. Off: FREEBIE rows on the sheet are ignored everywhere (no gifts quoted or pitched). */
   freebiesEnabled?: boolean;
+  /** Josh's bulk rules (config/pricing.json). */
+  bulkRules?: BulkRules;
+}
+
+export interface BulkRules {
+  /** Bulk starts at this many pieces (Josh: 5). Below it, the single price each. */
+  minPieces?: number;
+  /** Price list -> top tier. Above it: quote the top tier and hand off to josh so the team confirms. */
+  confirmAbove?: Record<string, number>;
+  /** Price lists with no bulk pricing at all (Supreme hoodies). */
+  noBulk?: string[];
+}
+
+const sameList = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+export function confirmAboveFor(cfg: PricingConfig, list: string): number | undefined {
+  const k = Object.keys(cfg.bulkRules?.confirmAbove ?? {}).find((x) => sameList(x, list));
+  return k ? cfg.bulkRules!.confirmAbove![k] : undefined;
+}
+export function hasNoBulk(cfg: PricingConfig, list: string): boolean {
+  return (cfg.bulkRules?.noBulk ?? []).some((x) => sameList(x, list));
+}
+
+/**
+ * The price card for one price list: the single price, the bulk tiers (per piece), and for `qty` the exact price each.
+ * This is what the bot may say for "how much" / "bulk prices", for any item (in stock, sold out or in the restock).
+ */
+export function priceCard(cfg: PricingConfig, list: string, displayName: string, qty?: number): string {
+  const table = findTable(cfg.tables, list);
+  if (!table) return `No prices for ${displayName}. Hand off to josh, never make up a price.`;
+  const single = tierPrice(table, 1);
+  const min = cfg.bulkRules?.minPieces ?? 5;
+  const top = confirmAboveFor(cfg, list);
+  const tiers = Object.keys(table).map(Number).filter((n) => n >= min).sort((a, b) => a - b);
+  const out = [`${displayName}: $${single} each (single price).`];
+  if (hasNoBulk(cfg, list) || !tiers.length) {
+    out.push(`No bulk pricing on ${displayName}: $${single} each at any quantity. If asked, say bulk pricing isn't available on these.`);
+  } else {
+    out.push(
+      `Bulk (per piece, ${min}+ pieces; colors and sizes on this list count together): ${tiers.map((t) => `${t}+ $${table[String(t)]}`).join(", ")}.` +
+        (top ? ` Over ${top} pieces: quote the ${top}-piece price and call handoff_to_team (josh) so the team confirms.` : ""),
+    );
+  }
+  if (qty && qty > 0) {
+    const each = hasNoBulk(cfg, list) ? single : tierPrice(table, qty);
+    const over = top && qty > top ? ` That's above the ${top}-piece top tier: tell them $${each} each and call handoff_to_team (josh) so the team confirms.` : "";
+    out.push(`${qty} pieces: $${each} each = $${each * qty} for the items (before any shipping or delivery fee).${over}`);
+  }
+  return out.join(" ");
 }
 
 export interface DeliveryConfig {
@@ -141,8 +189,12 @@ export function quoteOrder(cfg: PricingConfig, items: OrderItem[], fulfillment: 
   const unit = new Map<string, number>();
   for (const [list, count] of pieces) {
     const t = findTable(cfg.tables, list);
-    const price = t ? tierPrice(t, count) : NaN;
+    const price = t ? (hasNoBulk(cfg, list) ? tierPrice(t, 1) : tierPrice(t, count)) : NaN;
     if (!Number.isFinite(price)) problems.push(`No prices for price list ${list}. Hand off to josh`);
+    const top = confirmAboveFor(cfg, list);
+    if (top && count > top && Number.isFinite(price)) {
+      problems.push(`${count} pieces of ${list} is above the ${top}-piece top tier: tell them $${price} each (the ${top}-piece price) and call handoff_to_team (josh) so the team confirms`);
+    }
     unit.set(list, price);
   }
 

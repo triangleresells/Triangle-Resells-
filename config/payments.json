@@ -1,0 +1,5 @@
+{
+  "_note": "Public payment handles the bot sends after an order is locked in (Josh, Nov 17 2026). Not secrets. Cash App and Zelle come from PAY_CASHAPP / PAY_ZELLE on Render.",
+  "venmo": "@joshua-cervantes-51",
+  "paypal": "paypal.me/joshuacervantes551"
+}

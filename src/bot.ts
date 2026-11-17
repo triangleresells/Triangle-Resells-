@@ -3,8 +3,9 @@ import type { KeywordRule } from "./config.js";
 import type { Notifier } from "./handoff.js";
 import { splitMessage, type InstagramApi } from "./instagram.js";
 import { isBareKeyword, matchKeyword } from "./keywords.js";
-import { freebiesOf } from "./catalog.js";
-import { describeQuote, quoteOrder, type PricingConfig, type Quote } from "./pricing.js";
+import { freebiesOf, priceListFor } from "./catalog.js";
+import { balanceDue, halfOf, type DepositRecorder } from "./deposits.js";
+import { describeQuote, priceCard, quoteOrder, type PricingConfig, type Quote } from "./pricing.js";
 import { matchCustomers } from "./customers.js";
 import type { ChatImage, Customer, OrderLabel, Store } from "./store.js";
 import { addDays, deliveryProblem, etParts, etToDate, parseTime, pickupProblem, PICKUP_OPEN_MIN, scheduleText, SHIP_CUTOFF_MIN, type BusyBlock } from "./schedule.js";
@@ -62,7 +63,9 @@ export interface BotDeps {
   /** Moves / deletes the Google Calendar events the bot made (reschedule / cancel). */
   calendarEdit?: CalendarEditor;
   /** What the bot sends buyers to pay. Unset = Josh sends it himself. */
-  payInfo?: { zelle?: string; cashApp?: string };
+  payInfo?: PayInfo;
+  /** Saves a 50% deposit to the CRM's deposits table when the buyer says it's sent. Optional. */
+  recordDeposit?: DepositRecorder;
   /** Chats + Knowledge in the team's phone CRM (every DM, Take over, approved answers). Optional. */
   chatLog?: ChatLog;
   /** Failed-send alerts (one per outage) and the "Sorry for the wait!" catch-up after it. Optional. */
@@ -490,13 +493,22 @@ export class Bot {
         return pricing;
       }
     };
-    tools.submitOrder = async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea, payment, shipTo) => {
+    tools.prices = (item, qty) => {
+      const hit = priceListFor(pricing.stock ?? [], pricing.tables, item);
+      if (!hit) return `"${item}" isn't on the price sheet. Don't make up a price: say we don't have it right now, or use QUICK SEC if you're not sure what they mean.`;
+      return `${priceCard(pricing, hit.list, hit.name, qty)} Status: ${hit.status}.`;
+    };
+    tools.submitOrder = async (items, fulfillment, fulfillDate, fulfillTime, deliveryArea, payment, shipTo, deposit = "full") => {
       // Payment rules first, so the AI can fix them with the buyer.
+      // Apple Pay / card aren't taken in DMs until Stripe is on (Josh): the team takes it from here.
+      if (payment === "apple_pay" && !this.d.checkout) {
+        return { ok: false, error: "Apple Pay isn't set up in DMs: hand the chat to the team (they sort out the payment)", handoff: true };
+      }
       if (payment === "apple_pay" && this.d.checkout) {
         return { ok: false, error: "Card and Apple Pay go through the payment link: use create_checkout_link instead", fixable: true };
       }
       if (payment === "cash" && fulfillment === "ship") {
-        return { ok: false, error: "Shipped orders are paid up front (Cash App, Zelle or the card link), not cash", fixable: true };
+        return { ok: false, error: "Shipped orders are paid up front (Cash App, Zelle, Venmo or PayPal), not cash", fixable: true };
       }
       if (payment === "cash" && fulfillment === "delivery") {
         return { ok: false, error: "Cash orders are pickup at the warehouse. If they can pick up, switch to pickup. If they have no ride, Josh handles cash deliveries himself", handoff: true };
@@ -509,7 +521,7 @@ export class Bot {
       if (payment === "cash" && /^\d{4}-\d{2}-\d{2}$/.test(fulfillDate ?? "") && fulfillDate > etParts(this.now()).date) {
         return {
           ok: false,
-          error: "Cash is only for a pickup today. For a later day they pay first (Cash App or Zelle) and we hold it once Josh confirms the payment. Or they can come today with cash",
+          error: "Cash is only for a pickup today. For a later day they pay first (Cash App, Zelle, Venmo or PayPal) and we hold it once Josh confirms the payment. Or they can come today with cash",
           fixable: true,
         };
       }
@@ -572,7 +584,20 @@ export class Bot {
           shipping: r.q.shipping || undefined,
         });
       }
-      return { ok: true, total: r.q.total, summary, freebies: r.q.freebies, note: r.note, payText: payTextFor(payment, r.q.total, this.d.payInfo) };
+      // 50% deposit: they pay half now (cash is paid in full in person, so no deposit on cash).
+      const half = deposit === "half" && payment !== "cash" ? halfOf(r.q.total) : undefined;
+      if (half !== undefined) {
+        const label = this.d.store.latestLabelFor(userId);
+        if (label) this.d.store.updateLabel(label.id, { deposit: half });
+      }
+      return {
+        ok: true,
+        total: r.q.total,
+        summary: half !== undefined ? `${summary}; 50% deposit $${half} now, balance $${balanceDue(r.q.total, half)}` : summary,
+        freebies: r.q.freebies,
+        note: r.note,
+        payText: payTextFor(payment, r.q.total, this.d.payInfo, half),
+      };
     };
     tools.paymentSent = async (method, note) => {
       // The AI can't see its earlier tool calls, so it calls payment_sent again on every "thanks". One alert per chat
@@ -584,8 +609,25 @@ export class Bot {
       }
       this.paidAlertAt.set(userId, nowMs);
       const label = this.d.store.latestLabelFor(userId);
+      const firstClaim = !!label && !label.saysPaid;
       if (label) this.d.store.updateLabel(label.id, { saysPaid: `${method.replace("_", " ")}: ${note}`.slice(0, 200) });
       const username = await this.d.ig.getUsername(userId).catch(() => undefined);
+      // A 50% deposit order: the deposit goes in the CRM's deposits (with the balance due). Josh still confirms it.
+      if (firstClaim && label?.deposit !== undefined && this.d.recordDeposit) {
+        await this.d
+          .recordDeposit({
+            igUserId: userId,
+            username,
+            items: label.summary,
+            pieces: (label.lines ?? []).reduce((n, l) => n + l.qty, 0) || 1,
+            orderTotal: label.total,
+            deposit: label.deposit,
+            payment: method === "other" ? label.payment : method,
+            bookingId: label.crmId,
+            isTest: isTestBuyer(userId),
+          })
+          .catch((err) => console.error("[bot] deposit not saved to the CRM:", (err as Error).message ?? err));
+      }
       // Stock is held when PAID, not at booking: someone else may have paid for the last piece first. Check now so
       // Josh knows before he confirms (he refunds that buyer). Only for orders that aren't holding stock yet.
       let soldOut = "";
@@ -603,7 +645,9 @@ export class Bot {
           paused: false,
           reason: soldOut
             ? `⚠️ Says they paid $${label!.total}, but the piece is GONE (someone else paid first): CHECK YOUR APP, likely a refund`
-            : `💸 Says they paid${label ? ` $${label.total}` : ""} by ${method.replace("_", " ")}: CHECK YOUR APP`,
+            : label?.deposit !== undefined
+              ? `💸 Says they paid the 50% DEPOSIT $${label.deposit} (of $${label.total}, balance $${balanceDue(label.total, label.deposit)}) by ${method.replace("_", " ")}: CHECK YOUR APP`
+              : `💸 Says they paid${label ? ` $${label.total}` : ""} by ${method.replace("_", " ")}: CHECK YOUR APP`,
           summary: `${note}${label ? `. Order: ${label.summary}` : ""}.${soldOut ? ` Stock now: ${soldOut}.` : ""} Screenshots can be faked: only mark it paid (in the CRM, or /admin if the CRM is off) once the money is actually in.`,
         })
         .catch((err) => console.error("[bot] payment alert failed:", err));
@@ -758,11 +802,7 @@ export class Bot {
     const label = this.d.store.latestLabelFor(userId);
     if (label) {
       const total = Number(label.total);
-      const payLine = /cash.?app/i.test(label.payment) && this.d.payInfo?.cashApp
-        ? `Cash App $${total} to ${this.d.payInfo.cashApp}`
-        : /zelle/i.test(label.payment) && this.d.payInfo?.zelle
-          ? `Zelle $${total} to ${this.d.payInfo.zelle}`
-          : "";
+      const payLine = payLineFor(label.payment, label.deposit ?? total, this.d.payInfo);
       lines.push(`- This buyer's order is LOCKED IN by submit_order (${label.label}): ${label.summary}; ${label.when}; total $${total}; pays by ${label.payment}. Don't call submit_order again for it (reschedule_order / cancel_order change it).`);
       if (payLine) {
         lines.push(`- The payment info for it came from the order system and is Josh's REAL info: "${payLine}". If they ask whether it's right, say yes, that's it. Never doubt it, never say it didn't come from the system, never tell them to wait or hold off on paying.`);
@@ -1068,12 +1108,30 @@ export class Bot {
   }
 }
 
-/** What the bot tells the buyer right after an order is locked in. */
-export function payTextFor(payment: string, total: number, info?: { zelle?: string; cashApp?: string }): string {
+export interface PayInfo {
+  zelle?: string;
+  cashApp?: string;
+  venmo?: string;
+  paypal?: string;
+}
+
+/** "Cash App $70 to $triangleresells" etc. Exactly what the buyer is told to send ("" if that handle isn't set). */
+export function payLineFor(payment: string, amount: number, info?: PayInfo): string {
+  const p = payment.toLowerCase().replace(/[_ ]/g, "");
+  if (p === "cashapp" && info?.cashApp) return `Cash App $${amount} to ${info.cashApp}`;
+  if (p === "zelle" && info?.zelle) return `Zelle $${amount} to ${info.zelle}`;
+  if (p === "venmo" && info?.venmo) return `Venmo $${amount} to ${info.venmo}`;
+  if (p === "paypal" && info?.paypal) return `PayPal $${amount}: ${info.paypal}`;
+  return "";
+}
+
+/** What the bot tells the buyer right after an order is locked in. `deposit` = a 50% deposit order (pay that now). */
+export function payTextFor(payment: string, total: number, info?: PayInfo, deposit?: number): string {
   if (payment === "cash") return "Write ONE short text: it's booked, cash at pickup, and Josh will send the pickup spot before the day. Don't give out any address.";
-  if (payment === "zelle" && info?.zelle) return `Write ONE short text with the payment info exactly: "Zelle $${total} to ${info.zelle}". Ask them to send a screenshot here once it's sent. Never say it's paid until Josh confirms.`;
-  if (payment === "cash_app" && info?.cashApp) return `Write ONE short text with the payment info exactly: "Cash App $${total} to ${info.cashApp}". Ask them to send a screenshot here once it's sent. Never say it's paid until Josh confirms.`;
-  return `Write ONE short text: Josh will send the ${payment.replace("_", " ")} info right here to lock it in.`;
+  const line = payLineFor(payment, deposit ?? total, info);
+  const dep = deposit !== undefined ? ` It's the 50% deposit: say the balance due is $${balanceDue(total, deposit)} (don't say when it's due; if they ask, QUICK SEC).` : "";
+  if (line) return `Write ONE short text with the payment info exactly: "${line}".${dep} Ask them to send a screenshot here once it's sent. Never say it's paid until Josh confirms.`;
+  return `Write ONE short text: Josh will send the ${payment.replace("_", " ")} info right here to lock it in.${dep}`;
 }
 
 function describeAttachments(msg: NonNullable<MessagingEvent["message"]>): string {

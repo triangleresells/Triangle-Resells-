@@ -17,11 +17,13 @@ export interface AgentReply {
   interests?: string[];
 }
 
-export type PaymentMethod = "cash" | "cash_app" | "zelle" | "apple_pay";
+export type PaymentMethod = "cash" | "cash_app" | "zelle" | "venmo" | "paypal" | "apple_pay";
 
 /** Order actions the AI can take for the customer it's talking to. Prices always come from the warehouse sheet. */
 export interface OrderTools {
   quote(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): string;
+  /** Single price + bulk tiers for any item (in stock, sold out or in the restock), and the price each for `qty`. */
+  prices?(item: string, qty?: number): string;
   /** Cash, Cash App or Zelle (and Apple Pay when Stripe is off): lock in the order. Stock comes off the sheet, label BOOKED. */
   submitOrder?(
     items: OrderItem[],
@@ -31,6 +33,8 @@ export interface OrderTools {
     deliveryArea: string | undefined,
     payment: PaymentMethod,
     shipTo?: ShipTo,
+    /** "half" = a 50% deposit now, the rest later. Default full. */
+    deposit?: "full" | "half",
   ): Promise<
     | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string; alreadyBooked?: boolean }
     | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
@@ -119,6 +123,19 @@ export const TOOLS = [
     },
   },
   {
+    name: "price_lookup",
+    description:
+      "The price card for ONE item: its single price, the bulk tiers per piece (5+ pieces) and, with qty, the exact price each. Works for in-stock, sold-out and restock items. Use it whenever they ask a price or bulk prices. Never do price math yourself. For a real order total (shipping, delivery, mixed items), use quote_order.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        item: { type: "string", description: "The item as the buyer means it, e.g. 'Essentials hoodie', 'Spider hoodie', 'BAPE tee'." },
+        qty: { type: "integer", description: "How many pieces, if they said. Leave out for the price card only." },
+      },
+      required: ["item"],
+    },
+  },
+  {
     name: "quote_order",
     description:
       "Get the exact price for an order. Always use this before telling the customer any total. Never do price math yourself.",
@@ -150,7 +167,7 @@ export const TOOLS = [
   {
     name: "submit_order",
     description:
-      "Lock in a confirmed order paid by cash, Cash App or Zelle. Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery), the payment method, and for shipping the full name and address are all settled, and after you sent the order summary and said all sales are final. The items come off the stock sheet, the order goes on Josh's calendar, and Josh is alerted. The chat keeps going.",
+      "Lock in a confirmed order paid by cash, Cash App, Zelle, Venmo or PayPal (full amount or a 50% deposit). Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery), the payment method, and for shipping the full name and address are all settled, and after you sent the order summary and said all sales are final. The items come off the stock sheet, the order goes on Josh's calendar, and Josh is alerted. The chat keeps going.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -159,7 +176,8 @@ export const TOOLS = [
         fulfill_date: { type: "string", description: "YYYY-MM-DD of the pickup, delivery or ship day." },
         fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Blank for shipping." },
         delivery_area: DELIVERY_AREA_SCHEMA,
-        payment: { type: "string", enum: ["cash", "cash_app", "zelle", "apple_pay"], description: "How they'll pay. Card and Apple Pay go through create_checkout_link when it's offered." },
+        payment: { type: "string", enum: ["cash", "cash_app", "zelle", "venmo", "paypal", "apple_pay"], description: "How they'll pay. Apple Pay and card aren't taken in DMs right now (apple_pay hands the chat to the team)." },
+        deposit: { type: "string", enum: ["full", "half"], description: "full = they pay 100% now (default). half = a 50% deposit now, only when THEY chose the deposit." },
         ship_to: {
           type: "object",
           description: "Shipping only (required for ship): the buyer's full name and address, exactly as they gave it.",
@@ -203,11 +221,11 @@ export const TOOLS = [
   {
     name: "payment_sent",
     description:
-      "Call when the buyer says they sent the money or sends a payment screenshot (Cash App or Zelle). It tells Josh to check his app. It does NOT confirm the payment: only Josh confirms.",
+      "Call when the buyer says they sent the money or sends a payment screenshot (Cash App, Zelle, Venmo or PayPal). It tells Josh to check his app. It does NOT confirm the payment: only Josh confirms.",
     input_schema: {
       type: "object" as const,
       properties: {
-        method: { type: "string", enum: ["cash_app", "zelle", "other"] },
+        method: { type: "string", enum: ["cash_app", "zelle", "venmo", "paypal", "other"] },
         note: { type: "string", description: "What they said or what the screenshot shows (amount, name, time)." },
       },
       required: ["method", "note"],
@@ -323,7 +341,7 @@ const EFFORT = { effort: "low" } as const;
 /** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
 export function toolsFor(tools?: OrderTools) {
   return TOOLS.filter((t) =>
-    t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : t.name === "payment_sent" ? !!tools?.paymentSent : t.name === "reschedule_order" ? !!tools?.rescheduleOrder : t.name === "cancel_order" ? !!tools?.cancelOrder : true,
+    t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : t.name === "payment_sent" ? !!tools?.paymentSent : t.name === "reschedule_order" ? !!tools?.rescheduleOrder : t.name === "cancel_order" ? !!tools?.cancelOrder : t.name === "price_lookup" ? !!tools?.prices : true,
   );
 }
 
@@ -534,6 +552,8 @@ export class ClaudeAgent implements ReplyEngine {
             content = "Ordering isn't available right now. Hand off to the team.";
           } else if (block.name === "quote_order") {
             content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
+          } else if (block.name === "price_lookup" && tools.prices) {
+            content = tools.prices(String(input.item ?? ""), Number.isFinite(Number(input.qty)) && Number(input.qty) > 0 ? Math.floor(Number(input.qty)) : undefined);
           } else if (block.name === "reschedule_order" && tools.rescheduleOrder) {
             content = await tools.rescheduleOrder(String(input.date ?? ""), input.time ? String(input.time) : undefined);
           } else if (block.name === "cancel_order" && tools.cancelOrder) {
@@ -542,7 +562,7 @@ export class ClaudeAgent implements ReplyEngine {
             content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
           } else if (block.name === "submit_order" && tools.submitOrder) {
             ordered = true;
-            const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to);
+            const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to, input.deposit === "half" ? "half" : "full");
             if (r.ok && r.alreadyBooked) {
               content = `This exact order was ALREADY locked in earlier in this chat (total $${r.total}). Nothing new was booked. Don't say it just got locked in, don't send a correction, and don't resend the summary or payment info unless they ask.`;
             } else if (r.ok) {

@@ -147,6 +147,39 @@ export type Match =
   | { ok: true; rows: StockRow[]; available: number }
   | { ok: false; problem: string };
 
+/**
+ * Which price list an item is on, for price questions about ANY item (in stock, sold out or incoming).
+ * "Essentials" (hoodies and sweatpants) -> ESSENTIALS, "spider hoodie" -> SPIDER HOODIES.
+ */
+export function priceListFor(
+  rows: StockRow[],
+  tables: Record<string, Record<string, number>>,
+  item: string,
+): { list: string; name: string; status: "in stock" | "restock (incoming, not in stock yet)" | "sold out" | "not on the sheet" } | undefined {
+  let hit = itemRows(rows, item);
+  let list = hit[0]?.priceList;
+  let name = hit[0]?.item;
+  if (!list) {
+    const w = ` ${norm(item)} `;
+    const key = Object.keys(tables).find((k) => {
+      const first = norm(k).split(" ")[0];
+      return first.length > 2 && (w.includes(` ${first} `) || w.includes(` ${first.replace(/s$/, "")} `));
+    });
+    if (!key) return undefined;
+    list = key;
+    name = key;
+    hit = rows.filter((r) => norm(r.priceList) === norm(key));
+  }
+  const status = hit.some((r) => r.status === "for_sale" && r.qty > 0)
+    ? "in stock"
+    : hit.some((r) => norm(r.rawStatus) === "incoming")
+      ? "restock (incoming, not in stock yet)"
+      : hit.length
+        ? "sold out"
+        : "not on the sheet";
+  return { list, name: name ?? list, status };
+}
+
 /** Which item name on the sheet the buyer means: exact, then without "(B tier)" etc, then one unique partial match. */
 function itemRows(rows: StockRow[], wanted: string): StockRow[] {
   const w = norm(wanted);

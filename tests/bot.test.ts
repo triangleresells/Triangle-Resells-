@@ -333,7 +333,8 @@ describe("pickup spot and no-bulk items (Nov 6)", () => {
     expect(valley.groups[0].unitPrice).toBe(58);
     expect(quoteOrder(pricing, [{ product: "Chrome Hearts Hat", variant: "White/Black", qty: 10 }], "pickup").groups[0].unitPrice).toBe(21);
     expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").total).toBe(40);
-    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(36);
+    // Josh, Nov 17 2026: BAPE bulk starts at 5 pieces, so 3 pieces is still the single price.
+    expect(quoteOrder(pricing, [{ product: "BAPE Tee (B tier)", variant: "Black/Green/Pink", size: "S", qty: 2 }, { product: "BAPE Tee (B tier)", variant: "Black/Green", size: "M", qty: 1 }], "pickup").groups[0].unitPrice).toBe(40);
     expect(quoteOrder(pricing, [{ product: "YSL Y EDP", qty: 3 }], "pickup").groups[0].unitPrice).toBe(50);
   });
 });

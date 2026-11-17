@@ -63,6 +63,8 @@ export interface OrderLabel {
   logged?: boolean;
   /** Buyer said they sent the money (Cash App / Zelle). Josh still has to check. */
   saysPaid?: string;
+  /** A 50% deposit order: what they pay now (the rest is the balance due). */
+  deposit?: number;
   /** The matching booking in the Triangle CRM. */
   crmId?: string;
   /** Josh was buzzed to text a meetup reminder before the bot's 24-hour window closed (the buyer's last message time it was for). */

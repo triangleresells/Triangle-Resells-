@@ -17,7 +17,7 @@ export function to12h(t: string | null | undefined): string | undefined {
   return `${h % 12 || 12}:${m[2]} ${h < 12 ? "AM" : "PM"}`;
 }
 
-const PAYMENT_WORDS: Record<string, string> = { cash: "cash", cash_app: "cash app", zelle: "zelle", stripe: "stripe", apple_pay: "apple pay" };
+const PAYMENT_WORDS: Record<string, string> = { cash: "cash", cash_app: "cash app", zelle: "zelle", stripe: "stripe", apple_pay: "apple pay", venmo: "venmo", paypal: "paypal" };
 
 export const linesOf = (b: CrmBookingFull): OrderLine[] =>
   b.items.map((i) => ({ name: i.item, variant: i.color ?? undefined, size: i.size, qty: i.qty, unitPrice: i.unit_price ?? undefined }));
