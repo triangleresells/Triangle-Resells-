@@ -62,9 +62,28 @@ interface Scenario {
   quiet?: boolean;
   /** Customer opens with a photo of an item. */
   photo?: boolean;
+  /** Exact customer texts, sent in order (no customer AI). */
+  script?: string[];
 }
 
+const NEWEST = "Answers ONLY the newest message, about exactly what was asked. Never says it's correcting a last/previous text, never refers to a message the buyer didn't get, and doesn't bring up dates, restocks or topics the buyer didn't ask about.";
+/** Josh's real test chat (Nov 17 2026) and 10 like it. */
+const NEWEST_SCENARIOS: Scenario[] = [
+  ["newest_josh", ["Hello", "Do you have any essentials available?"], "Answers about Essentials only (in stock or not)."],
+  ["newest_yo_ess", ["yo", "u got essentials?"], "Answers about Essentials only."],
+  ["newest_ess_m", ["Hi", "Any Essentials hoodies in M?"], "Answers about Essentials hoodies in M only."],
+  ["newest_ess_pants", ["hey", "how much are the essentials sweatpants"], "Answers the Essentials sweatpants price/availability only."],
+  ["newest_ch_hats", ["Hello", "Do you have any Chrome Hearts hats?"], "Answers about Chrome Hearts hats only, from the sheet."],
+  ["newest_alo_colors", ["sup", "what colors the alo hoodie come in"], "Lists the Alo hoodie colors from the sheet only."],
+  ["newest_ship_tx", ["Hello", "Do you ship to Texas?"], "Says yes, UPS shipping ($10). Nothing about restocks."],
+  ["newest_spider", ["hey bro", "is the spider hoodie still available"], "Answers about the Spider hoodie only, from the sheet."],
+  ["newest_bleu", ["Hello", "How much is the Bleu de Chanel?"], "Gives the Bleu de Chanel price via quote_order only."],
+  ["newest_es_ess", ["hola", "tienen essentials?"], "Answers in Spanish, about Essentials only."],
+  ["newest_bape", ["Good morning", "Do you have any BAPE tees?"], "Answers about BAPE tees only."],
+].map(([id, script, exp]) => ({ id: id as string, persona: `sends exactly: ${(script as string[]).map((m) => JSON.stringify(m)).join(" then ")}`, script: script as string[], expect: `${NEWEST} ${exp}` }));
+
 const SCENARIOS: Scenario[] = [
+  ...NEWEST_SCENARIOS,
   { id: "zelle_pickup_screenshot", persona: "wants 2 black Chrome Hearts hats, pickup tomorrow at 5pm, pays Zelle. After getting the Zelle info, says 'sent it, here's the screenshot'", photo: true, expect: "Quotes from quote_order, says all sales final, submit_order with zelle and pickup, sends the exact Zelle info from submit_order ($ total to 919-480-7349) and asks for a screenshot. On the screenshot: calls payment_sent and says Josh will confirm. NEVER says paid/received/confirmed." },
   { id: "ship_full_address", persona: "lives in Atlanta GA, wants 1 YSL Y EDP shipped, pays Cash App; gives name and street first, then city/state/zip only when asked", expect: "Quotes $60 + $10 shipping via quote_order. Collects full name, street, city, state and zip before submit_order (ship_to filled). Sends the exact Cash App info from submit_order. Never offers cash for shipping." },
   { id: "cash_no_ride", persona: "in Garner, wants 1 Spider hoodie, wants to pay cash, says they don't have a car and asks if it can be dropped off", expect: "Offers pickup first. When they say no ride + cash, does NOT book a cash delivery: hands off to josh. Clean voice, one question at a time." },
@@ -217,8 +236,13 @@ async function main() {
     let wentQuiet = false;
     for (let turn = 0; turn < 9; turn++) {
       // Room for the model's thinking: at 150 it sometimes spent it all and the customer never said anything.
-      const c = await client.messages.create({ model: customerModel, max_tokens: 2000, output_config: { effort: "low" }, system: customerSystem, messages: convo });
-      const msg = c.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+      let msg: string;
+      if (sc.script) {
+        msg = sc.script[turn] ?? "END";
+      } else {
+        const c = await client.messages.create({ model: customerModel, max_tokens: 2000, output_config: { effort: "low" }, system: customerSystem, messages: convo });
+        msg = c.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+      }
       if (!msg || msg === "END") break;
       const before = transcript.length;
       if (msg === "SILENT" && !wentQuiet) {

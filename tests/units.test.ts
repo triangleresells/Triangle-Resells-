@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemBlocks, buildSystemPrompt, ClaudeAgent, claimsSaved, looksReadyToBook, toApiMessages, type OrderTools } from "../src/ai.js";
+import { buildSystemBlocks, buildSystemPrompt, ClaudeAgent, claimsSaved, dropCorrection, looksReadyToBook, phantomCorrection, toApiMessages, type OrderTools } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
 import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
@@ -195,5 +195,98 @@ describe("Spanish buyers", async () => {
     expect(quietNudgeText("1x Alo Hoodie Black XS", undefined, true)).toMatch(/^Hola, aquí sigo con tu pedido: 1x Alo Hoodie Black XS\./);
     expect(followUpText("1x Alo Hoodie", true)).toContain("link de pago");
     expect(quietNudgeText("1x Alo Hoodie")).toMatch(/^Hey, still got you/);
+  });
+});
+
+describe("answers the newest message (no phantom corrections)", () => {
+  function agentWith(responses: object[]) {
+    const agent = new ClaudeAgent("k", "m", "rules", "kb");
+    const calls: any[] = [];
+    (agent as any).client = { messages: { create: async (req: any) => (calls.push(structuredClone(req)), responses.shift()) } };
+    return { agent, calls };
+  }
+  const text = (t: string) => ({ content: [{ type: "text", text: t }], stop_reason: "end_turn" });
+  const withTool = (draft: string) => ({
+    content: [{ type: "text", text: draft }, { type: "tool_use", id: "q1", name: "quote_order", input: { items: [{ product: "Essentials Hoodie", qty: 1 }], fulfillment: "pickup" } }],
+    stop_reason: "tool_use",
+  });
+  const tools: OrderTools = { quote: () => "Essentials Hoodie is INCOMING, not in stock yet." };
+  // Josh's real test chat, Nov 17 2026.
+  const joshChat = [
+    { role: "user" as const, text: "Hello" },
+    { role: "assistant" as const, text: "Hey, welcome to Triangle Resells. What are you looking for today?" },
+    { role: "user" as const, text: "Do you have any essentials available" },
+  ];
+
+  it("root cause: an unsent draft before a tool call is hidden from the AI, and only the final text is sent", async () => {
+    const { agent, calls } = agentWith([withTool("Yes, Essentials land this week."), text("Not in stock right now.")]);
+    const r = await agent.reply(joshChat, "", tools);
+    expect(r.text).toBe("Not in stock right now.");
+    const assistantTurn = calls[1].messages.at(-2);
+    expect(assistantTurn.role).toBe("assistant");
+    expect(assistantTurn.content.some((b: any) => b.type === "text")).toBe(false);
+    expect(JSON.stringify(calls[1].messages)).not.toContain("land this week");
+    expect(JSON.stringify(calls[1].messages.at(-1))).toContain("nothing from this reply has been sent yet");
+  });
+
+  it("an empty final round falls back to the latest draft only, never several drafts joined", async () => {
+    const { agent } = agentWith([withTool("Draft one."), withTool("We don't have Essentials in right now."), text("")]);
+    const r = await agent.reply(joshChat, "", tools);
+    expect(r.text).toBe("We don't have Essentials in right now.");
+  });
+
+  it("Josh's exact chat: the 'correct my last text' reply is rewritten into a direct answer", async () => {
+    const { agent, calls } = agentWith([
+      text('Sorry, I need to correct my last text: the new batch lands Monday and Tuesday, not just "this week."'),
+      text("We don't have any Essentials in stock right now."),
+    ]);
+    const r = await agent.reply(joshChat, "", tools);
+    expect(r.text).toBe("We don't have any Essentials in stock right now.");
+    expect(calls[1].tool_choice).toEqual({ type: "none" });
+  });
+
+  it("if the rewrite still corrects a phantom text, that sentence is cut", async () => {
+    const { agent } = agentWith([
+      text("Sorry, I need to correct my last text: it lands Monday. We're out of Essentials right now."),
+      text("Correction: my last text was wrong, it's Tuesday."),
+    ]);
+    const r = await agent.reply(joshChat, "", tools);
+    expect(r.text).toBe("We're out of Essentials right now.");
+  });
+
+  const opener = (u: string, b: string, q: string) => [
+    { role: "user" as const, text: u },
+    { role: "assistant" as const, text: b },
+    { role: "user" as const, text: q },
+  ];
+  it.each([
+    ["Josh's chat", joshChat, 'Sorry, I need to correct my last text: the new batch lands Monday and Tuesday, not just "this week."'],
+    ["first message", [{ role: "user" as const, text: "Do you have any essentials available?" }], "Quick correction to my last message: Essentials are $60."],
+    ["yo + essentials", opener("yo", "Hey, what can I get you?", "u got essentials?"), "Correcting my previous text, the restock is next week."],
+    ["hi + hoodie size", opener("Hi", "Hey! What are you looking for?", "Any Essentials hoodies in M?"), "My last message was wrong, it lands Tuesday."],
+    ["sweatpants price", opener("hey", "Hey, what you need?", "how much are the essentials sweatpants"), "Scratch that, they're $55."],
+    ["CH hats", opener("Hello", "Hey, welcome in.", "Do you have any Chrome Hearts hats?"), "I misspoke earlier, the hats are $25."],
+    ["Alo colors", opener("sup", "What's good, what you looking for?", "what colors the alo hoodie come in"), "Correction: the Alo restock is Friday."],
+    ["shipping", opener("Hello", "Hey! What can I help you find?", "Do you ship to Texas?"), "Let me fix my last text: shipping is $15."],
+    ["spider", opener("hey bro", "Hey, what you need?", "is the spider hoodie still available"), "Update to my earlier message: Spider lands Monday."],
+    ["fragrance", opener("Hello", "Hey there.", "How much is the Bleu de Chanel?"), "Sorry, my previous text was a typo, it's $70."],
+    ["spanish", opener("hola", "Hola, ¿qué buscas?", "tienen essentials?"), "Correction: my last text said this week, it's next week."],
+    ["BAPE", opener("Good morning", "Morning! What can I get you?", "Do you have any BAPE tees?"), "Correcting my last message: BAPE lands Tuesday Nov 17."],
+  ])("flags a phantom correction (%s)", (_name, history, reply) => {
+    expect(phantomCorrection(reply, history)).toBe(true);
+  });
+
+  it("allows a real correction of a detail that is in a text the bot actually sent", () => {
+    const history = opener("how much for the valley hoodie", "The Valley hoodie is $65.", "ok");
+    expect(phantomCorrection("Correction to my last text: the Valley hoodie is $60, not $65.", history)).toBe(false);
+  });
+
+  it("ignores normal replies", () => {
+    expect(phantomCorrection("We don't have Essentials in stock right now.", joshChat)).toBe(false);
+    expect(phantomCorrection("Got you, I'll update the order to size L.", joshChat)).toBe(false);
+  });
+
+  it("dropCorrection keeps the real answer", () => {
+    expect(dropCorrection("Sorry, I need to correct my last text: it lands Monday. We're out right now.")).toBe("We're out right now.");
   });
 });

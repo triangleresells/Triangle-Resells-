@@ -359,6 +359,39 @@ export function looksReadyToBook(text: string): boolean {
 export const QUICK_SEC = "alright give me a quick sec bro";
 export const QUICK_SEC_ES = "dame un segundito bro";
 
+const UNSENT_NOTE =
+  "(Note from the system, not the customer: nothing from this reply has been sent yet. Your next text is the whole DM: answer their NEWEST message first, using the tool results above. Don't refer to a draft or a \"last text\" they never got.)";
+
+const CORRECTION_NOTE =
+  "(Note from the system, not the customer: your reply corrects an earlier text, but the buyer never got a text saying that. Don't correct or mention earlier texts. Write the DM again: answer their NEWEST message directly, and don't bring up dates, restocks or topics they didn't ask about.)";
+
+const CORRECTION_RE =
+  /\b(correct(ion|ing)?|fix(ing)?|update)\b[^.!?\n]{0,25}\b(my|the|that)\s+(last|previous|earlier|other)\s+(text|message|msg|dm|reply)|\b(last|previous|earlier)\s+(text|message|msg|dm)\b[^.!?\n]{0,25}\b(wrong|mistake|incorrect|typo)|\bscratch that\b|\bI misspoke\b|^\s*correction\s*:/im;
+const FACT_RE = /\$\d+|\b\d+\b|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(today|tonight|tomorrow|this week|next week)\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/gi;
+
+/**
+ * The reply says it's correcting an earlier text, but no text the buyer actually got says that. Allowed only when an
+ * earlier bot message in THIS chat exists and contains one of the facts (price, number, day, date) being corrected.
+ */
+export function phantomCorrection(text: string, history: ChatTurn[]): boolean {
+  if (!CORRECTION_RE.test(text)) return false;
+  const sent = history.filter((t) => t.role === "assistant" && !t.text.startsWith("[")).map((t) => t.text.toLowerCase());
+  if (!sent.length) return true;
+  const facts = [...new Set((text.match(FACT_RE) ?? []).map((f) => f.toLowerCase()))];
+  if (!facts.length) return false;
+  return !facts.some((f) => sent.some((s) => s.includes(f)));
+}
+
+/** Last resort: cut the sentences that talk about correcting an earlier text. */
+export function dropCorrection(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((sentence) => !CORRECTION_RE.test(sentence)).join(" "))
+    .filter((l) => l.trim())
+    .join("\n")
+    .trim();
+}
+
 const LOCK_IN_NOTE =
   "(Note from the system, not the customer: your reply sends the order summary or asks to lock it in, but you didn't call submit_order. Rule: once you have item, color, size, qty, pickup/delivery/shipping, the day and time (or the full ship_to address) and the payment method, lock it in IN THAT SAME REPLY. If you have all of that, call submit_order now, then write the DM to send INSTEAD of your last reply: the summary, \"All sales final\", and exactly what submit_order tells you to send. Don't ask permission. If something is truly missing, call nothing and reply with only: MISSING)";
 
@@ -383,7 +416,8 @@ export class ClaudeAgent implements ReplyEngine {
     const interests: string[] = [];
     const alerts: NonNullable<AgentReply["alerts"]> = [];
     let finalTexts: string[] = [];
-    const allTexts: string[] = [];
+    // The latest round that had text: a fallback only. Drafts from different rounds are never joined together.
+    let lastTexts: string[] = [];
 
     let ordered = false;
     const run = async (rounds: number, offered = toolsFor(tools)) => {
@@ -458,17 +492,20 @@ export class ClaudeAgent implements ReplyEngine {
           }
           toolResults.push({ type: "tool_result", tool_use_id: block.id, content });
         }
-        allTexts.push(...texts);
+        if (texts.length) lastTexts = texts;
         finalTexts = texts;
 
         if (res.stop_reason !== "tool_use" || toolResults.length === 0) break;
-        messages.push({ role: "assistant", content: res.content });
-        messages.push({ role: "user", content: toolResults });
+        // Only the LAST round's text is sent. A draft written before a tool call never reaches the buyer, so it must
+        // not stay in the AI's view as if it had: that's how the bot "corrected its last text" to a buyer who had only
+        // said "Hello" (it corrected its own unsent draft after reading a tool result). The tool calls stay.
+        messages.push({ role: "assistant", content: res.content.filter((b) => b.type !== "text") });
+        messages.push({ role: "user", content: [...toolResults, { type: "text", text: UNSENT_NOTE }] });
       }
     };
     await run(MAX_ROUNDS);
 
-    let text = (finalTexts.length ? finalTexts : allTexts).join("\n").replace(/\*\*/g, "").trim();
+    let text = (finalTexts.length ? finalTexts : lastTexts).join("\n").replace(/\*\*/g, "").trim();
     if (text && !handoff && !ordered && tools?.submitOrder && looksReadyToBook(text)) {
       // The reply sends the order summary ("All sales final") or asks "Should I lock it in?" without booking it.
       // The rule is to lock it in in that same reply, so give the AI one more go with only the booking tools.
@@ -505,6 +542,25 @@ export class ClaudeAgent implements ReplyEngine {
       } catch (err) {
         console.error("[ai] retry for an empty reply failed:", err);
       }
+    }
+    if (text && phantomCorrection(text, history)) {
+      // It "corrects" a text the buyer never got. Ask once for a plain answer to their newest message instead.
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages: withNote(messages, CORRECTION_NOTE),
+          tools: toolsFor(tools),
+          tool_choice: { type: "none" },
+        });
+        const again = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();
+        if (again && !phantomCorrection(again, history)) text = again;
+      } catch (err) {
+        console.error("[ai] retry for a phantom correction failed:", err);
+      }
+      if (phantomCorrection(text, history)) text = dropCorrection(text);
     }
     if (text && !handoff && interests.length === 0 && claimsSaved(text)) {
       // The reply tells the buyer they're saved / on the list, but save_interest wasn't called, so Josh would never
