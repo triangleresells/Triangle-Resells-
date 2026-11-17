@@ -37,18 +37,39 @@ export class InstagramClient implements InstagramApi {
   private sendPath = "/me/messages";
   private resolved?: Promise<void>;
   private accountId?: string;
+  /** The token from IG_ACCESS_TOKEN (this.token becomes the Page token once resolved). */
+  private readonly configuredToken: string;
 
   constructor(
     private token: string,
     apiVersion: string,
     private fetchFn: typeof fetch = fetch,
   ) {
+    this.configuredToken = token;
     this.facebook = token.startsWith("EAA");
     this.base = this.facebook ? `https://graph.facebook.com/${apiVersion}` : `https://graph.instagram.com/${apiVersion}`;
   }
 
   setAccountId(id: string): void {
     this.accountId ??= id;
+  }
+
+  /**
+   * When the configured access token expires (YYYY-MM-DD, UTC), asked from Meta's debug_token. Undefined if it never
+   * expires (a system user token) or Meta can't say. Facebook-style (EAA) tokens only. Never logs the token.
+   */
+  async tokenExpiry(): Promise<string | undefined> {
+    if (!this.facebook) return undefined;
+    try {
+      const res = await this.fetchFn(`${this.base}/debug_token?input_token=${encodeURIComponent(this.configuredToken)}`, {
+        headers: { Authorization: `Bearer ${this.configuredToken}` },
+      });
+      const body = (await res.json().catch(() => ({}))) as { data?: { expires_at?: number } };
+      const at = body.data?.expires_at;
+      return at ? new Date(at * 1000).toISOString().slice(0, 10) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Facebook-style tokens only: work out which token and path can send Instagram DMs. Runs once. */

@@ -102,3 +102,13 @@ services:
       # A buyer who got a price and went quiet gets ONE nudge after this many minutes. 0 = off.
       - key: QUIET_NUDGE_MINUTES
         value: "90"
+      # Bot health push to Josh, Chema and Diego: daily summary time and time zone.
+      - key: HEALTH_TIMEZONE
+        value: America/New_York
+      - key: DAILY_SUMMARY_AT
+        value: "00:00"
+      # Instagram token expiry (YYYY-MM-DD). Blank = the bot reads it from Meta. Warning goes out 3 days before.
+      - key: IG_TOKEN_EXPIRES_ON
+        sync: false
+      - key: TOKEN_ALERT_TIMES
+        value: "09:00,18:00"

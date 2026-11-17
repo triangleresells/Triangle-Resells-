@@ -16,6 +16,7 @@ import { to24h, type Crm } from "./crm.js";
 import { crmContextText } from "./crmsync.js";
 import { looksSpanish } from "./language.js";
 import type { ChatLog } from "./chatlog.js";
+import type { SendWatch } from "./health.js";
 import { isTestBuyer } from "./desk.js";
 import type { CalendarEditor } from "./orders.js";
 
@@ -64,6 +65,8 @@ export interface BotDeps {
   payInfo?: { zelle?: string; cashApp?: string };
   /** Chats + Knowledge in the team's phone CRM (every DM, Take over, approved answers). Optional. */
   chatLog?: ChatLog;
+  /** Failed-send alerts (one per outage) and the "Sorry for the wait!" catch-up after it. Optional. */
+  sendWatch?: SendWatch;
   /** Clock, for tests. */
   now?: () => Date;
 }
@@ -180,6 +183,10 @@ export const ALERT_REPEAT_WINDOW_MS = 12 * 60 * 60_000;
 export /** How many earlier messages are loaded back when a forgotten buyer returns. */
 const RESTORE_TURNS = 20;
 const NEW_CONVERSATION_MS = 6 * 60 * 60_000;
+/** After an outage, only buyers whose last message is newer than this get the catch-up (Instagram's 24h, minus 10 min). */
+const CATCH_UP_WINDOW_MS = 24 * 60 * 60_000 - 10 * 60_000;
+const CATCH_UP_NOTE =
+  "\n\n(Note from the system: this buyer waited because your earlier reply failed to send. The system adds \"Sorry for the wait!\" at the start of your reply, so don't apologize yourself. Answer their latest question directly, nothing more.)";
 
 const FILLER = new Set(["the", "a", "an", "for", "in", "of", "to", "and", "or", "is", "it", "they", "them", "customer", "buyer", "asked", "asks", "wants", "want", "about", "item", "not", "stock", "carried", "we", "do", "dont", "have", "size", "if", "on", "with", "their", "this", "that", "question", "any", "our"]);
 
@@ -309,7 +316,7 @@ export class Bot {
     await this.inOrder(userId, () => this.replyTo(userId, text));
   }
 
-  private async replyTo(userId: string, latestText: string): Promise<void> {
+  private async replyTo(userId: string, latestText: string, opts: { apology?: boolean } = {}): Promise<void> {
     if (this.d.store.isPaused(userId)) return;
     // "Take over" tapped in the phone CRM: a team member has this chat, the bot stays quiet until released.
     if (this.d.chatLog && (await this.d.chatLog.isSilent(userId))) {
@@ -323,20 +330,27 @@ export class Bot {
 
     const rule = matchKeyword(latestText, this.d.keywords);
     if (rule && isBareKeyword(latestText, rule)) {
-      await this.send(userId, rule.reply);
+      // A failed send is logged by SendWatch and dropped.
+      await this.send(userId, opts.apology ? this.withApology(userId, rule.reply) : rule.reply).catch(() => {});
       return;
     }
 
     // "typing..." while the AI writes, like a person. Best effort.
     void this.d.ig.typingOn?.(userId).catch(() => {});
     const [catalog, busy, crmNote, approved] = await Promise.all([this.catalog(), this.busy(), this.crmContext(userId), this.d.chatLog?.approvedText() ?? ""]);
-    const schedule = scheduleText(busy, this.now()) + crmNote + approved + this.chatMemoryText(userId);
+    const schedule = scheduleText(busy, this.now()) + crmNote + approved + this.chatMemoryText(userId) + (opts.apology ? CATCH_UP_NOTE : "");
     const started = Date.now();
     const result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
     console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
-    await this.send(userId, text);
+    if (opts.apology) text = this.withApology(userId, text);
+    // Instagram rejected it: the reply is dropped (no retry queue). SendWatch logged it and alerted the team once.
+    const delivered = await this.send(userId, text).then(
+      () => true,
+      (err) => (console.error(`[bot] reply to ${userId} not delivered:`, (err as Error).message ?? err), false),
+    );
+    if (delivered && opts.apology) void this.d.sendWatch?.caughtUp(userId);
     if (result.cancelFollowUp || result.handoff) this.d.store.clearPendingLink(userId);
     const mem = this.memory.get(userId) ?? { questions: [], saved: [] };
     for (const a of result.alerts ?? []) {
@@ -931,6 +945,46 @@ export class Bot {
     return this.d.enabled ? this.d.enabled() : true;
   }
 
+  /** "Sorry for the wait!" at the start of a reply after an outage (Spanish chats get it in Spanish). */
+  private withApology(userId: string, text: string): string {
+    const spanish = looksSpanish(this.d.store.history(userId).filter((t) => t.role === "user").map((t) => t.text));
+    if (/^\s*(sorry for the wait|¡?perd[oó]n por la espera)/i.test(text)) return text;
+    return `${spanish ? "¡Perdón por la espera!" : "Sorry for the wait!"} ${text.trimStart()}`;
+  }
+
+  /**
+   * After an outage: answer each buyer whose reply was dropped, if they're still inside Instagram's 24-hour window
+   * (10 min margin) and nobody answered them since. Outside the window nothing is sent (Instagram would reject it).
+   */
+  private async catchUp(userIds: string[]): Promise<void> {
+    for (const userId of userIds) {
+      if (!this.canCatchUp(userId)) continue;
+      const last = [...this.d.store.history(userId)].reverse().find((t) => t.role === "user");
+      await this.inOrder(userId, () => this.replyTo(userId, last?.text ?? "", { apology: true })).catch((err) =>
+        console.error(`[bot] catch-up for ${userId} failed:`, (err as Error).message ?? err),
+      );
+    }
+  }
+
+  private canCatchUp(userId: string): boolean {
+    const c = this.d.store.customer(userId);
+    if (!c.lastMessageAt || this.now().getTime() - c.lastMessageAt > CATCH_UP_WINDOW_MS) return false;
+    if (this.d.store.isPaused(userId)) return false;
+    const h = this.d.store.history(userId);
+    return h.length > 0 && h[h.length - 1].role === "user"; // still waiting on us
+  }
+
+  /**
+   * Every few minutes during an outage: try the newest dropped chat still inside the window. If that send works, the
+   * outage ends and everyone else is caught up too. If it fails, nothing new is alerted (one alert per outage).
+   */
+  async retryAfterOutage(): Promise<void> {
+    const w = this.d.sendWatch;
+    if (!w?.inOutage() || !this.isOn()) return;
+    const next = w.droppedBuyers().find((u) => this.canCatchUp(u));
+    if (next) await this.catchUp([next]);
+  }
+
   private async send(userId: string, text: string): Promise<void> {
     if (!this.isOn()) {
       console.log(`[bot] OFF: did not send a message to ${userId}`);
@@ -940,10 +994,24 @@ export class Bot {
     const bubbles = toBubbles(text);
     // Record before sending: Instagram's echo of this message can arrive before the send call returns.
     for (const b of bubbles) for (const part of splitMessage(b)) this.d.store.recordBotMessage(userId, part);
+    const sent: string[] = [];
     for (const b of bubbles) {
-      const id = await this.d.ig.sendText(userId, b);
+      let id: string | undefined;
+      try {
+        id = await this.d.ig.sendText(userId, b);
+      } catch (err) {
+        await this.d.sendWatch?.failed(userId, err, isTestBuyer(userId));
+        // Whatever did go out is still part of the chat; the rest is dropped.
+        if (sent.length) this.d.store.addTurn(userId, { role: "assistant", text: sent.join("\n\n") });
+        throw err;
+      }
+      sent.push(b);
       this.d.store.recordBotMessage(userId, b, id);
       void this.d.chatLog?.message(userId, "bot", b, { mid: id || undefined, isTest: isTestBuyer(userId) });
+      if (sent.length === 1 && this.d.sendWatch) {
+        // Sending works: if that ends an outage, answer the buyers whose replies were dropped.
+        void this.d.sendWatch.succeeded().then((back) => this.catchUp(back.filter((u) => u !== userId)));
+      }
     }
     console.log(`[bot] sent reply to ${userId} (${bubbles.length} message${bubbles.length > 1 ? "s" : ""}, ${text.length} chars)`);
     this.d.store.addTurn(userId, { role: "assistant", text: bubbles.join("\n\n") });

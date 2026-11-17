@@ -51,6 +51,14 @@ export interface Config {
   quietNudgeMinutes: number;
   /** Josh has the chat but the buyer waited this long with no reply: the bot takes over. 0 = never. */
   takeoverMinutes: number;
+  /** Bot health: time zone for the daily summary and token alerts (HEALTH_TIMEZONE, default America/New_York). */
+  healthTimezone: string;
+  /** When the daily health push goes out, HH:MM (DAILY_SUMMARY_AT, default 00:00 = covers the day that just ended). */
+  dailySummaryAt: string;
+  /** The Instagram token's expiry date, YYYY-MM-DD (IG_TOKEN_EXPIRES_ON). Blank = read it from Meta. */
+  igTokenExpiresOn: string;
+  /** Token warning times on the day 3 days before expiry (TOKEN_ALERT_TIMES, default 09:00,18:00). */
+  tokenAlertTimes: string[];
   /** Wait ~42-58s before answering a cold DM (8-18s mid-conversation). HUMAN_REPLY_DELAY=false turns it off (4s debounce only). */
   humanReplyDelay: boolean;
   /** Password for the /admin customer list page. Blank = page off. */
@@ -108,6 +116,26 @@ export function optional(v: string | undefined): string {
 }
 
 /** What kind of Instagram token is set, without revealing it (for Render's logs). */
+function validTimeZone(v: string | undefined): string {
+  const tz = v?.trim() || "America/New_York";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    console.error(`[config] HEALTH_TIMEZONE "${tz}" isn't a time zone, using America/New_York`);
+    return "America/New_York";
+  }
+}
+
+function validClock(v: string | undefined, fallback: string, name: string): string {
+  const t = v?.trim() ?? "";
+  if (!t) return fallback;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+  if (m && Number(m[1]) < 24 && Number(m[2]) < 60) return `${m[1].padStart(2, "0")}:${m[2]}`;
+  console.error(`[config] ${name} "${t}" isn't HH:MM${fallback ? `, using ${fallback}` : ", ignored"}`);
+  return fallback;
+}
+
 export function describeToken(t: string): string {
   if (!t || NOT_SET.has(t.toLowerCase())) return "NOT SET (still a placeholder)";
   if (t.length < 50) return `looks too short (${t.length} characters), probably cut off when copying`;
@@ -183,6 +211,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",
     humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",
     takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,
+    healthTimezone: validTimeZone(env.HEALTH_TIMEZONE),
+    dailySummaryAt: validClock(env.DAILY_SUMMARY_AT, "00:00", "DAILY_SUMMARY_AT"),
+    igTokenExpiresOn: /^\d{4}-\d{2}-\d{2}$/.test(env.IG_TOKEN_EXPIRES_ON?.trim() ?? "") ? env.IG_TOKEN_EXPIRES_ON!.trim() : "",
+    tokenAlertTimes: (env.TOKEN_ALERT_TIMES?.trim() || "09:00,18:00").split(",").map((t) => validClock(t, "", "TOKEN_ALERT_TIMES")).filter(Boolean),
     quietNudgeMinutes: env.QUIET_NUDGE_MINUTES?.trim() ? Math.max(0, Number(env.QUIET_NUDGE_MINUTES) || 0) : 90,
     botEnabled: /^(true|on|yes|1)$/i.test(env.BOT_ENABLED?.trim() ?? ""),
     shadowMode: /^(true|on|yes|1)$/i.test(env.SHADOW_MODE?.trim() ?? ""),

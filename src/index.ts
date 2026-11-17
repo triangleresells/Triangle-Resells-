@@ -16,6 +16,7 @@ import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
 import { webhookNotifier, webhookText, type TextPoster } from "./handoff.js";
 import { allNotifiers, crmPusher, pushNotifier, pushText } from "./pushalerts.js";
 import { supabaseChatLog } from "./chatlog.js";
+import { HealthClock, SendWatch, supabaseHealthDb } from "./health.js";
 import { InstagramClient } from "./instagram.js";
 import { createServer } from "./server.js";
 import { handlePaidOrder, calendarEditor, webhookCalendar } from "./orders.js";
@@ -90,6 +91,10 @@ if (shadow) console.log("[shadow] SHADOW MODE: replies are drafted on /admin/sha
 const realIg = new InstagramClient(config.igAccessToken, config.igApiVersion);
 const chatLog = config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseChatLog(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
 console.log(`[chats] saving DMs to the CRM: ${chatLog ? "on" : "off (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set)"}`);
+// Reliability: failed sends -> bot_send_log + ONE push per outage; "Sorry for the wait!" catch-up after it.
+const accountSlug = config.accountName.toLowerCase().replace(/[^a-z0-9]/g, "");
+const healthDb = config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseHealthDb(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
+const sendWatch = shadow ? undefined : new SendWatch({ account: accountSlug, db: healthDb, push: pusher });
 const bot = new Bot({
   crm: crm && shadow ? shadowCrm(crm) : crm,
   calendarEdit: shadow ? undefined : calendarEditor(config.calendarWebhookUrl),
@@ -106,6 +111,7 @@ const bot = new Bot({
   humanPauseHours: config.humanPauseHours,
   // Chats + Knowledge tabs in the phone CRM (same Supabase key as the phone pushes).
   chatLog,
+  sendWatch,
   debounceMs: 4000,
   // Waits ~42-58s on a cold DM and ~8-18s in a live back-and-forth, so it doesn't answer like a bot.
   replyTiming: config.humanReplyDelay ? DEFAULT_REPLY_TIMING : undefined,
@@ -168,6 +174,25 @@ setInterval(() => void bot.takeOverStalled().catch((err) => console.error("[bot]
 setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();
 // 1 hour before the bot loses the right to DM a buyer with a meetup coming up: buzz Josh to text the reminder himself.
 setInterval(() => void bot.buzzMeetupReminders().catch((err) => console.error("[bot] reminder buzz failed:", err)), 5 * 60 * 1000).unref();
+
+// During an outage: every 10 min, try the newest dropped chat (inside the 24h window). Success ends the outage.
+setInterval(() => void bot.retryAfterOutage().catch((err) => console.error("[bot] outage retry failed:", err)), 10 * 60 * 1000).unref();
+// Daily health push (DAILY_SUMMARY_AT, default midnight) and the token warning 3 days before it expires.
+if (healthDb && pusher) {
+  let expiry: { at: number; value?: string } | undefined;
+  const tokenExpiry = async () => {
+    if (config.igTokenExpiresOn) return config.igTokenExpiresOn;
+    if (!expiry || Date.now() - expiry.at > 12 * 60 * 60 * 1000) expiry = { at: Date.now(), value: await realIg.tokenExpiry() };
+    return expiry.value;
+  };
+  const clock = new HealthClock({ account: accountSlug, db: healthDb, push: pusher, tz: config.healthTimezone, summaryAt: config.dailySummaryAt, tokenExpiry, tokenAlertTimes: config.tokenAlertTimes });
+  setInterval(() => void clock.tick(), 60 * 1000).unref();
+  void tokenExpiry().then((d) =>
+    console.log(`[health] daily summary at ${config.dailySummaryAt} ${config.healthTimezone}; Instagram token ${d ? `expires ${d}${config.igTokenExpiresOn ? " (IG_TOKEN_EXPIRES_ON)" : " (read from Meta)"}, warning on ${d} minus 3 days at ${config.tokenAlertTimes.join(" and ")}` : "expiry unknown or never expires"}`),
+  );
+} else {
+  console.log("[health] daily summary and token warnings off (needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)");
+}
 
 createServer(bot, {
   appSecret: config.igAppSecret,
