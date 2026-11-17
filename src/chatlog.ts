@@ -14,6 +14,10 @@ export interface ChatLog {
   setNeedsHuman(userId: string, needsHuman: boolean): Promise<void>;
   isSilent(userId: string): Promise<boolean>;
   propose(userId: string, question: string, answer: string, isTest?: boolean): Promise<void>;
+  /** A question the bot couldn't answer (or handed off): logged right away as pending with an empty answer. Returns its id. */
+  logQuestion(userId: string, question: string, isTest?: boolean): Promise<string | undefined>;
+  /** The team answered a logged question in the chat: fill in its answer (still pending until approved). */
+  answer(id: string, answer: string): Promise<void>;
   /** The chat's latest saved messages, oldest first (for a buyer coming back after the bot forgot the chat). */
   recent(userId: string, limit: number): Promise<{ role: ChatRole; text: string; at: string }[]>;
   /** Approved team answers, formatted for the bot's context ("" if none). */
@@ -91,6 +95,29 @@ export function supabaseChatLog(supabaseUrl: string, serviceKey: string, fetchFn
         body: JSON.stringify({ question: question.slice(0, 500), answer: answer.slice(0, 2000), source_conversation_id: userId, ...(isTest ? { is_test: true } : {}) }),
       }).then(() => undefined, quiet("proposing a knowledge answer"));
     },
+    async logQuestion(userId, question, isTest) {
+      if (!question.trim()) return undefined;
+      try {
+        const res = await req(`/knowledge_base`, {
+          method: "POST",
+          headers: headers("return=representation"),
+          body: JSON.stringify({ question: question.slice(0, 500), answer: "", source_conversation_id: userId, ...(isTest ? { is_test: true } : {}) }),
+        });
+        const rows = (await res.json()) as { id: string }[];
+        return rows[0]?.id;
+      } catch (err) {
+        quiet("logging an unanswered question")(err);
+        return undefined;
+      }
+    },
+    async answer(id, answer) {
+      if (!answer.trim()) return;
+      await req(`/knowledge_base?id=eq.${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: headers("return=minimal"),
+        body: JSON.stringify({ answer: answer.slice(0, 2000) }),
+      }).then(() => undefined, quiet("saving the team's answer"));
+    },
     async recent(userId, limit) {
       try {
         const res = await req(`/messages?conversation_id=eq.${encodeURIComponent(userId)}&select=role,text,created_at&order=created_at.desc&limit=${Math.max(1, Math.min(limit, 100))}`, { method: "GET", headers: headers() });
@@ -104,7 +131,7 @@ export function supabaseChatLog(supabaseUrl: string, serviceKey: string, fetchFn
     async approvedText() {
       if (knowledge && now() - knowledge.at < KNOWLEDGE_CACHE_MS) return knowledge.text;
       try {
-        const res = await req(`/knowledge_base?status=eq.approved&is_test=eq.false&select=question,answer&order=created_at.desc&limit=100`, { method: "GET", headers: headers() });
+        const res = await req(`/knowledge_base?status=eq.approved&is_test=eq.false&answer=neq.&select=question,answer&order=created_at.desc&limit=100`, { method: "GET", headers: headers() });
         const rows = (await res.json()) as { question: string; answer: string }[];
         const text = rows.length
           ? `\n\nTEAM-APPROVED ANSWERS (Josh approved these; use them, they count like the knowledge base)\n${rows.map((r) => `- Q: ${r.question}\n  A: ${r.answer}`).join("\n")}`

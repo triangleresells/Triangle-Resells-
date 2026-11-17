@@ -392,6 +392,82 @@ export function dropCorrection(text: string): string {
     .trim();
 }
 
+/** What the bot says for a question only the team can answer (Josh, Nov 17 2026). The chat keeps going. */
+export const CONFIRM_LINE = "Let me have the team confirm that, give me a quick sec.";
+export const CONFIRM_LINE_ES = "Déjame confirmarlo con el equipo, dame un segundito.";
+
+export type ClaimKind = "fabric" | "fit" | "authenticity" | "sourcing" | "delivery_date" | "refund" | "restock_date";
+export interface Claim {
+  kind: ClaimKind;
+  /** The words that make the claim. */
+  phrase: string;
+  sentence: string;
+}
+
+/** A sentence that defers to the team ("let me have the team confirm") makes no claim. */
+const HEDGE_RE = /\b(confirm|check(ing)? (on|with)|find out|not sure|don'?t know|quick sec|segundito|verify|ask (josh|the team))\b/i;
+const DAY = String.raw`(mon|tues|wednes|thurs|fri|satur|sun)day`;
+/**
+ * Facts the bot must never make up. `always` = never allowed, whatever the sources say (policy). Otherwise the claim
+ * is allowed only when the knowledge base, the sheet, the team's notes/answers or a tool result says the same thing.
+ */
+const CLAIM_RULES: { kind: ClaimKind; re: RegExp; always?: boolean; when?: RegExp }[] = [
+  { kind: "authenticity", always: true, re: /\b(authentic|genuine|legit|replicas?|1:1|reps?|auténtic[oa]s?|original(es)?)\b|\b(it'?s|they'?re|these are|all|100%|son)\s+(real|legit|authentic|genuine|originales)\b/i },
+  { kind: "sourcing", always: true, re: /\b(sourced|straight from (the )?(brand|store|factory|supplier)|from (the )?(official|brand|retail) stores?|retail receipts?|stockx|goat|bought (them |it )?(from|at) (the )?(store|mall|outlet))\b/i },
+  { kind: "refund", always: true, re: /\b(full refund|money back|refundable|guarantee[ds]?|(we|i)('ll| will| can| could)\s+(refund|exchange|swap|take (it|them) back)|you can (return|exchange|swap)|returns? (are|is) (ok|fine|accepted|allowed))\b/i },
+  // Shipping arrival dates differ by region: never promised. (A booked local delivery/pickup day is fine.)
+  { kind: "delivery_date", always: true, when: /\b(ship|ships|shipped|shipping|ups|package|mail|tracking)\b/i,
+    re: new RegExp(String.raw`\b(arrives?|arriving|get (it|them)|have (it|them)|delivered|there)\b[^.!?\n]{0,30}\b(by|on|in|within)\b[^.!?\n]{0,15}\b(${DAY}|tomorrow|\d+\s*(-|to)?\s*\d*\s*(business\s+)?days?)\b`, "i") },
+  { kind: "restock_date", re: new RegExp(String.raw`\b(restock|new batch|batch|coming (in|back)|landing|lands|land|drops?|back in stock|arriv\w+)\b[^.!?\n]{0,40}\b(${DAY}|tomorrow|this week|next week|soon|\d{1,2}/\d{1,2})\b`, "i") },
+  { kind: "fabric", re: /\b(cotton|polyester|poly blend|fleece|french terry|nylon|spandex|elastane|wool|cashmere|linen|silk|leather|suede|heavyweight|lightweight|midweight|\d{3}\s?gsm|algod[oó]n)\b/i },
+  { kind: "fit", re: /\b(runs? (a size |one size |half a size )?(small|big|large|up|down|true)|true to size|tts|oversized|boxy|cropped fit|slim[- ]fit|relaxed fit|regular fit|fits? (big|small|large|true|loose|tight|snug|like a)|queda (grande|chic[oa]))\b/i },
+];
+const NOT_NAMES = new Set(["I", "I'll", "I'm", "We", "The", "They", "It", "It's", "They're", "These", "Yes", "No", "Hey", "And", "But", "So", "Our", "All", "Each", "Pickup", "Shipping"]);
+
+/** Claims in the reply that nothing backs. `sources` = knowledge base, sheet, schedule/notes and tool results. */
+export function unbackedClaims(text: string, sources: string): Claim[] {
+  const lines = sources.toLowerCase().split("\n");
+  const out: Claim[] = [];
+  for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+    // A question ("Is it cotton?") or a line that defers to the team states nothing.
+    if (!sentence.trim() || sentence.trim().endsWith("?") || HEDGE_RE.test(sentence)) continue;
+    for (const rule of CLAIM_RULES) {
+      const m = rule.re.exec(sentence);
+      if (!m || (rule.when && !rule.when.test(sentence))) continue;
+      const phrase = m[0];
+      if (rule.kind === "restock_date") {
+        // Backed when that day/date is on a restock line of the sources ("INCOMING RESTOCK (landing Monday ...)").
+        const when = (new RegExp(String.raw`${DAY}|tomorrow|this week|next week|soon|\d{1,2}/\d{1,2}`, "i").exec(phrase)?.[0] ?? "").toLowerCase();
+        if (when && lines.some((l) => l.includes(when) && /restock|incoming|landing|new batch|expected/.test(l))) continue;
+      } else if (!rule.always) {
+        const p = phrase.toLowerCase();
+        const candidates = lines.filter((l) => l.includes(p));
+        // A fit/fabric note about one brand doesn't cover another: the brand named here must be on the same line.
+        const names = sentence.split(/\s+/).map((w) => w.replace(/[^\w']/g, "")).filter((w) => /^[A-Z]/.test(w) && !NOT_NAMES.has(w));
+        if (candidates.length && (!names.length || candidates.some((l) => names.some((n) => l.includes(n.toLowerCase()))))) continue;
+      }
+      out.push({ kind: rule.kind, phrase, sentence: sentence.trim() });
+    }
+  }
+  return out;
+}
+
+/** Last resort: cut the sentences with unbacked claims. */
+export function dropClaims(text: string, claims: Claim[]): string {
+  const bad = new Set(claims.map((c) => c.sentence));
+  return text
+    .split("\n")
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((s) => !bad.has(s.trim())).join(" "))
+    .filter((l) => l.trim())
+    .join("\n")
+    .trim();
+}
+
+const claimsNote = (claims: Claim[], spanish: boolean) =>
+  `(Note from the system, not the customer: your reply states things nothing backs up (not in the knowledge base, the stock sheet or a tool result): ${claims
+    .map((c) => `[${c.kind}] "${c.sentence}"`)
+    .join("; ")}. Never state those. Write the DM again without them. If the buyer did NOT ask about that, just leave it out. Only if they asked about exactly that, answer every other part, and for that part say exactly: "${spanish ? CONFIRM_LINE_ES : CONFIRM_LINE}". All sales are final: never offer a refund, exchange or guarantee. Never promise when a shipment arrives.)`;
+
 const LOCK_IN_NOTE =
   "(Note from the system, not the customer: your reply sends the order summary or asks to lock it in, but you didn't call submit_order. Rule: once you have item, color, size, qty, pickup/delivery/shipping, the day and time (or the full ship_to address) and the payment method, lock it in IN THAT SAME REPLY. If you have all of that, call submit_order now, then write the DM to send INSTEAD of your last reply: the summary, \"All sales final\", and exactly what submit_order tells you to send. Don't ask permission. If something is truly missing, call nothing and reply with only: MISSING)";
 
@@ -418,6 +494,8 @@ export class ClaudeAgent implements ReplyEngine {
     let finalTexts: string[] = [];
     // The latest round that had text: a fallback only. Drafts from different rounds are never joined together.
     let lastTexts: string[] = [];
+    // What tools told the AI this reply (prices, booking results): facts from here are backed.
+    const toolTexts: string[] = [];
 
     let ordered = false;
     const run = async (rounds: number, offered = toolsFor(tools)) => {
@@ -444,6 +522,7 @@ export class ClaudeAgent implements ReplyEngine {
           } else if (block.name === "alert_team") {
             alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? ""), kind: input.kind === "question" ? "question" : "stock" });
             content =
+              (input.kind === "question" ? `Team alerted (the chat keeps going). For that question, say exactly: "${CONFIRM_LINE}" (Spanish: "${CONFIRM_LINE_ES}"). ` : "") +
               "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
           } else if (block.name === "save_interest") {
             if (input.item) interests.push(String(input.item));
@@ -491,6 +570,7 @@ export class ClaudeAgent implements ReplyEngine {
             content = "Unknown tool.";
           }
           toolResults.push({ type: "tool_result", tool_use_id: block.id, content });
+          toolTexts.push(content);
         }
         if (texts.length) lastTexts = texts;
         finalTexts = texts;
@@ -561,6 +641,36 @@ export class ClaudeAgent implements ReplyEngine {
         console.error("[ai] retry for a phantom correction failed:", err);
       }
       if (phantomCorrection(text, history)) text = dropCorrection(text);
+    }
+    // Pre-send check: no fabric, fit, authenticity, sourcing, shipping date, refund or restock date that nothing backs.
+    const sources = [this.knowledgeBase, inventory, schedule ?? "", ...toolTexts].join("\n");
+    const claims = text ? unbackedClaims(text, sources) : [];
+    if (claims.length) {
+      const theirs = history.filter((t) => t.role === "user").map((t) => t.text);
+      const spanish = looksSpanish(theirs);
+      console.log(`[ai] blocked unbacked claim(s): ${claims.map((c) => `${c.kind} "${c.phrase}"`).join(", ")}`);
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages: withNote(messages, claimsNote(claims, spanish)),
+          tools: toolsFor(tools),
+          tool_choice: { type: "none" },
+        });
+        const again = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();
+        if (again) text = again;
+      } catch (err) {
+        console.error("[ai] retry for unbacked claims failed:", err);
+      }
+      const still = unbackedClaims(text, sources);
+      if (still.length) text = dropClaims(text, still) || (spanish ? CONFIRM_LINE_ES : CONFIRM_LINE);
+      // The team answers it, and their answer can become an approved Knowledge answer.
+      if (!alerts.some((a) => a.kind === "question") && !handoff) {
+        const kinds = [...new Set(claims.map((c) => c.kind.replace("_", " ")))].join(", ");
+        alerts.push({ reason: `Buyer needs a ${kinds} answer the bot doesn't have`, summary: (theirs.at(-1) ?? "").slice(0, 300), kind: "question" });
+      }
     }
     if (text && !handoff && interests.length === 0 && claimsSaved(text)) {
       // The reply tells the buyer they're saved / on the list, but save_interest wasn't called, so Josh would never

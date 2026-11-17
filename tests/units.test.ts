@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildSystemBlocks, buildSystemPrompt, ClaudeAgent, claimsSaved, dropCorrection, looksReadyToBook, phantomCorrection, toApiMessages, type OrderTools } from "../src/ai.js";
+import { buildSystemBlocks, buildSystemPrompt, ClaudeAgent, claimsSaved, CONFIRM_LINE, CONFIRM_LINE_ES, dropCorrection, unbackedClaims, looksReadyToBook, phantomCorrection, toApiMessages, type OrderTools } from "../src/ai.js";
 import { formatAlert } from "../src/handoff.js";
 import { splitMessage } from "../src/instagram.js";
 import { parsePricesCsv, parseStockCsv } from "../src/catalog.js";
@@ -288,5 +288,91 @@ describe("answers the newest message (no phantom corrections)", () => {
 
   it("dropCorrection keeps the real answer", () => {
     expect(dropCorrection("Sorry, I need to correct my last text: it lands Monday. We're out right now.")).toBe("We're out right now.");
+  });
+});
+
+describe("no invented facts (pre-send check)", () => {
+  const KB = [
+    "- Sizing: Essentials runs a size up (an Essentials XS fits like a small). BAPE, Supreme, Alo and Spider are true to size.",
+    "- \"Returns / exchanges?\" All sales are final.",
+  ].join("\n");
+
+  it.each([
+    ["authenticity", "Yes, they're 100% authentic."],
+    ["authenticity", "These are real, all legit."],
+    ["authenticity", "Sí, son originales."],
+    ["sourcing", "We get them straight from the brand."],
+    ["sourcing", "They come with retail receipts."],
+    ["refund", "If it doesn't fit we can exchange it."],
+    ["refund", "You'll get your money back if anything's wrong."],
+    ["refund", "Quality is guaranteed."],
+    ["delivery_date", "Shipped UPS, it'll arrive by Friday."],
+    ["delivery_date", "With shipping you'll get it in 2-3 business days."],
+    ["fabric", "The Valley hoodie is 100% cotton, heavyweight."],
+    ["fit", "The Valley hoodie runs small."],
+    ["fit", "Godspeed tees are true to size."],
+    ["restock_date", "The new batch lands next week."],
+  ])("blocks an unbacked %s claim: %s", (kind, text) => {
+    expect(unbackedClaims(text, KB).map((c) => c.kind)).toContain(kind);
+  });
+
+  it.each([
+    "Essentials runs a size up, so an XS fits like a small.",
+    "Alo is true to size.",
+    "All sales are final, no returns or refunds.",
+    "Let me have the team confirm that, give me a quick sec.",
+    "Is it cotton? Let me check with the team on that.",
+    "Locked in for Saturday 2 PM pickup. Cash at pickup.",
+    "Delivery to Durham Saturday afternoon is $10.",
+    "Black XS and Gray M, $70 each.",
+  ])("lets a backed or harmless line through: %s", (text) => {
+    expect(unbackedClaims(text, KB)).toEqual([]);
+  });
+
+  it("a fit note for one brand doesn't cover another", () => {
+    expect(unbackedClaims("Valley is true to size.", KB).map((c) => c.kind)).toEqual(["fit"]);
+  });
+
+  it("a fact a tool returned counts as backed", () => {
+    expect(unbackedClaims("It ships UPS, it'll arrive in 3 days.", KB + "\nquote_order: UPS ground, arrives in 3 days")).toHaveLength(1); // still never promised
+    expect(unbackedClaims("The Gia set is cotton.", KB + "\nGia Set (cotton), $90")).toEqual([]);
+  });
+
+  function agentWith(responses: object[], kb = KB) {
+    const agent = new ClaudeAgent("k", "m", "rules", kb);
+    const calls: any[] = [];
+    (agent as any).client = { messages: { create: async (req: any) => (calls.push(structuredClone(req)), responses.shift()) } };
+    return { agent, calls };
+  }
+  const text = (t: string) => ({ content: [{ type: "text", text: t }], stop_reason: "end_turn" });
+
+  it("rewrites an invented fabric claim into the confirm line and alerts the team (chat keeps going)", async () => {
+    const { agent, calls } = agentWith([text("Yeah it's 100% cotton, heavyweight. $65."), text("It's $65. Let me have the team confirm that, give me a quick sec.")]);
+    const r = await agent.reply([{ role: "user", text: "is the valley hoodie cotton? how much" }], "Valley Hoodie Black L $65");
+    expect(r.text).toBe("It's $65. Let me have the team confirm that, give me a quick sec.");
+    expect(r.handoff).toBeUndefined();
+    expect(r.alerts?.[0]).toMatchObject({ kind: "question", summary: "is the valley hoodie cotton? how much" });
+    expect(JSON.stringify(calls[1].messages)).toContain("nothing backs up");
+  });
+
+  it("if the rewrite still invents it, those sentences are cut (or the confirm line is sent)", async () => {
+    const { agent } = agentWith([text("They're 100% authentic."), text("Yes, all legit.")]);
+    const r = await agent.reply([{ role: "user", text: "are these real?" }], "");
+    expect(r.text).toBe(CONFIRM_LINE);
+  });
+
+  it("Spanish buyers get the Spanish confirm line", async () => {
+    const { agent } = agentWith([text("Sí, son originales."), text("Sí, son originales.")]);
+    const r = await agent.reply([{ role: "user", text: "hola son originales las playeras?" }], "");
+    expect(r.text).toBe(CONFIRM_LINE_ES);
+  });
+});
+
+describe("restock dates are backed only by a restock line", () => {
+  it("allows the day on the restock line, blocks any other", () => {
+    const src = "INCOMING RESTOCK (landing Monday Nov 16 and Tuesday Nov 17, 2026)";
+    expect(unbackedClaims("The restock is landing Monday and Tuesday.", src)).toEqual([]);
+    expect(unbackedClaims("The restock is landing Friday.", src).map((c) => c.kind)).toEqual(["restock_date"]);
+    expect(unbackedClaims("The restock is landing Monday.", "Pickup Monday 10am-10pm").map((c) => c.kind)).toEqual(["restock_date"]);
   });
 });

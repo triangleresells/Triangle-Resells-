@@ -16,6 +16,7 @@ windows never create the same thing twice.
 |---|---|---|
 | `conversations`, `messages`, `knowledge_base` | 0010 | Chats + Knowledge tabs: every DM, Take over, approved answers |
 | `app_conversation_silence()`, `app_knowledge_review()` | 0010 | Take over / Release, Approve / Reject from the app |
+| `knowledge_base` rows with `answer = ''` | (no schema change, Nov 17 2026) | A question the bot couldn't answer or handed off, logged right away as `pending`. The team's reply in the chat fills in `answer`. **CRM app: show these as "waiting for an answer" and don't allow Approve while `answer` is empty.** The bot ignores approved rows with an empty answer. |
 | `bot_send_log` | 0011 | Every Instagram send that failed, outage start/end, "Sorry for the wait!" catch-ups |
 | `bot_daily_health(day, tz, account)` | 0011 | Numbers for the bot's daily health push (service key only) |
 

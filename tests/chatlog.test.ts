@@ -12,6 +12,7 @@ const echo = (text: string, mid: string): WebhookPayload => ({ object: "instagra
 
 function fakeLog(silentFor = new Set<string>(), older: { role: ChatRole; text: string; at: string }[] = []) {
   const saved: { userId: string; role: ChatRole; text: string }[] = [];
+  // Knowledge rows, in order. A logged question starts with answer "" (pending) until the team answers in the chat.
   const proposed: { question: string; answer: string }[] = [];
   const needs: boolean[] = [];
   const log: ChatLog = {
@@ -19,6 +20,8 @@ function fakeLog(silentFor = new Set<string>(), older: { role: ChatRole; text: s
     setNeedsHuman: async (_u, v) => void needs.push(v),
     isSilent: async (u) => silentFor.has(u),
     propose: async (_u, question, answer) => void proposed.push({ question, answer }),
+    logQuestion: async (_u, question) => String(proposed.push({ question, answer: "" }) - 1),
+    answer: async (id, answer) => void (proposed[Number(id)].answer = answer),
     recent: async () => older,
     approvedText: async () => "\n\nTEAM-APPROVED ANSWERS\n- Q: does the hoodie shrink?\n  A: no, it's pre-shrunk",
   };
@@ -60,6 +63,9 @@ describe("Chats + Knowledge in the phone CRM", () => {
     const f = fakeLog();
     const { bot } = makeBot(f.log, [{ text: "alright give me a quick sec bro", alerts: [{ reason: "fabric question", summary: "Is the Valley hoodie cotton?", kind: "question" }] }]);
     await bot.handle(dm("is the valley hoodie cotton?", "m1"));
+    await new Promise((r) => setTimeout(r, 0));
+    // Logged for the Knowledge tab right away, before anyone answers.
+    expect(f.proposed).toEqual([{ question: "Is the Valley hoodie cotton?", answer: "" }]);
     await bot.handle(echo("yes 100% cotton, heavyweight", "team-1"));
     await new Promise((r) => setTimeout(r, 0));
     expect(f.proposed).toEqual([{ question: "Is the Valley hoodie cotton?", answer: "yes 100% cotton, heavyweight" }]);

@@ -222,7 +222,8 @@ export class Bot {
   /** What happened earlier in each chat that the AI can't see (it doesn't keep its tool results between messages). */
   private memory = new Map<string, { questions: string[]; saved: string[] }>();
   /** The last question the bot passed to the team in each chat, waiting for a team member's answer (learning loop). */
-  private awaitingAnswer = new Map<string, string>();
+  /** A question the bot passed to the team, per chat, and its Knowledge row (logged right away, answer filled in later). */
+  private awaitingAnswer = new Map<string, { question: string; id: Promise<string | undefined> }>();
 
   constructor(private d: BotDeps) {}
 
@@ -269,7 +270,8 @@ export class Bot {
         const q = this.awaitingAnswer.get(userId);
         if (q && text.trim().length > 2) {
           this.awaitingAnswer.delete(userId);
-          void log.propose(userId, q, text, isTestBuyer(userId));
+          // The question was logged when the bot passed it on: fill in the team's answer. Not logged: propose both.
+          void q.id.then((id) => (id ? log.answer(id, text) : log.propose(userId, q.question, text, isTestBuyer(userId))));
         }
       }
       console.log(`[bot] team replied to ${userId} from the inbox; bot paused ${Math.round(this.d.humanPauseHours * 60)} min in that chat`);
@@ -356,7 +358,7 @@ export class Bot {
     for (const a of result.alerts ?? []) {
       if (a.kind !== "question" || !a.reason) continue;
       mem.questions.push(a.reason.slice(0, 160));
-      this.awaitingAnswer.set(userId, (a.summary || a.reason).slice(0, 500));
+      this.awaitQuestion(userId, (a.summary || a.reason).slice(0, 500));
     }
     if (result.handoff?.reason) mem.questions.push(result.handoff.reason.slice(0, 160));
     for (const i of result.interests ?? []) mem.saved.push(i.slice(0, 120));
@@ -391,7 +393,7 @@ export class Bot {
       void this.d.chatLog?.setNeedsHuman(userId, true);
       // Learning loop: the team's next message in this chat answers whatever the bot handed over.
       const lastAsk = [...this.d.store.history(userId)].reverse().find((t) => t.role === "user")?.text;
-      this.awaitingAnswer.set(userId, (lastAsk || result.handoff.summary || result.handoff.reason).slice(0, 500));
+      this.awaitQuestion(userId, (lastAsk || result.handoff.summary || result.handoff.reason).slice(0, 500));
       const username = await this.d.ig.getUsername(userId);
       await this.d.notify({ account: this.d.accountName, userId, username, ...result.handoff });
     }
@@ -769,7 +771,7 @@ export class Bot {
     }
     const mem = this.memory.get(userId);
     if (mem?.questions.length) {
-      lines.push(`- Questions the team answers in this chat themselves (you already said the quick sec line for them): ${mem.questions.join(" | ")}. Never mention these again in any way: no "it's with Josh", no "I won't guess", no "still waiting", no new alert. If the buyer asks about one AGAIN or keeps pushing on it, call handoff_to_team (josh) with "asking again: <question>" and reply only the quick sec line ("alright give me a quick sec bro", or in Spanish "dame un segundito bro") (Josh takes over).`);
+      lines.push(`- Questions the team answers in this chat themselves (you already said the confirm line for them): ${mem.questions.join(" | ")}. Never mention these again in any way: no "it's with Josh", no "I won't guess", no "still waiting", no new alert. If the buyer asks about one AGAIN or keeps pushing on it, call handoff_to_team (josh) with "asking again: <question>" and reply only the quick sec line ("alright give me a quick sec bro", or in Spanish "dame un segundito bro") (Josh takes over).`);
     }
     if (mem?.saved.length) lines.push(`- Already saved with save_interest: ${mem.saved.join(" | ")}. Don't save these again.`);
     return lines.length ? `\n\nTHIS CHAT SO FAR (from earlier messages; trust it)\n${lines.join("\n")}` : "";
@@ -939,6 +941,14 @@ export class Bot {
   /** DMs a customer from outside a conversation (e.g. a payment confirmation). */
   async sendDm(userId: string, text: string): Promise<void> {
     await this.inOrder(userId, () => this.send(userId, text));
+  }
+
+  /** Logs the question to the Knowledge tab now (pending, no answer yet); the team's reply in the chat fills it in. */
+  private awaitQuestion(userId: string, question: string): void {
+    const prev = this.awaitingAnswer.get(userId);
+    if (prev?.question === question) return;
+    const id = this.d.chatLog ? this.d.chatLog.logQuestion(userId, question, isTestBuyer(userId)).catch(() => undefined) : Promise.resolve(undefined);
+    this.awaitingAnswer.set(userId, { question, id });
   }
 
   private isOn(): boolean {
