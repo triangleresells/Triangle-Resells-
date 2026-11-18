@@ -345,7 +345,16 @@ export class Bot {
     const [catalog, busy, crmNote, approved] = await Promise.all([this.catalog(), this.busy(), this.crmContext(userId), this.d.chatLog?.approvedText() ?? ""]);
     const schedule = scheduleText(busy, this.now()) + crmNote + approved + this.chatMemoryText(userId) + (opts.apology ? CATCH_UP_NOTE : "");
     const started = Date.now();
-    const result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
+    let result: Awaited<ReturnType<ReplyEngine["reply"]>>;
+    try {
+      result = await this.d.agent.reply(this.d.store.history(userId), catalog.text, this.orderTools(userId, catalog.pricing), schedule);
+    } catch (err) {
+      // The AI is down (out of credit, key, overloaded): same as a failed send. One alert per outage, and the buyer is
+      // answered with "Sorry for the wait!" once replies work again (inside the 24h window).
+      console.error(`[bot] AI failed for ${userId}:`, (err as Error).message ?? err);
+      await this.d.sendWatch?.failed(userId, err, isTestBuyer(userId), "ai");
+      return;
+    }
     console.log(`[bot] AI answered ${userId} in ${Date.now() - started}ms${result.handoff ? ` (handoff: ${result.handoff.reason})` : ""}`);
     let text = result.text;
     if (result.checkoutUrl && !text.includes(result.checkoutUrl)) text = `${text}\n${result.checkoutUrl}`;
@@ -1021,7 +1030,10 @@ export class Bot {
     if (!c.lastMessageAt || this.now().getTime() - c.lastMessageAt > CATCH_UP_WINDOW_MS) return false;
     if (this.d.store.isPaused(userId)) return false;
     const h = this.d.store.history(userId);
-    return h.length > 0 && h[h.length - 1].role === "user"; // still waiting on us
+    if (!h.length || h[h.length - 1].role !== "user") return false; // not waiting on us
+    // A team member is handling this chat (their reply is the latest one on our side): a bot apology would barge in.
+    const lastOurs = [...h].reverse().find((t) => t.role === "assistant");
+    return !lastOurs?.text.includes("[Team member replied]");
   }
 
   /**
@@ -1030,7 +1042,9 @@ export class Bot {
    */
   async retryAfterOutage(): Promise<void> {
     const w = this.d.sendWatch;
-    if (!w?.inOutage() || !this.isOn()) return;
+    if (!w || !this.isOn()) return;
+    await w.ready();
+    if (!w.inOutage()) return;
     const next = w.droppedBuyers().find((u) => this.canCatchUp(u));
     if (next) await this.catchUp([next]);
   }

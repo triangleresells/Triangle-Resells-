@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentReply, ReplyEngine } from "../src/ai.js";
 import { Bot, type WebhookPayload } from "../src/bot.js";
-import { addDays, HealthClock, healthText, isRecipientError, localClock, SendWatch, type DayHealth, type HealthDb, type SendLogKind } from "../src/health.js";
+import { addDays, HealthClock, healthText, isRecipientError, isSystemicAiError, localClock, SendWatch, type DayHealth, type HealthDb, type SendLogKind } from "../src/health.js";
 import type { InstagramApi } from "../src/instagram.js";
 import type { PushRow } from "../src/pushalerts.js";
 import { Store } from "../src/store.js";
@@ -158,6 +158,103 @@ describe("Bot: drop, alert, catch up after the outage", () => {
     t.fix();
     await t.bot.retryAfterOutage();
     expect(t.sent[0].text.startsWith("¡Perdón por la espera!")).toBe(true);
+  });
+});
+
+describe("Bot: the AI itself fails (Nov 17: out of credit, 15h of silence, no alert)", () => {
+  const CREDIT = Object.assign(new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}'), { status: 400 });
+  function setup(db = fakeDb()) {
+    const clock = { t: Date.parse("2026-11-17T15:00:00Z") };
+    let aiDown: Error | undefined = CREDIT;
+    const sent: { to: string; text: string }[] = [];
+    const ig: InstagramApi = {
+      sendText: vi.fn(async (to, text) => (sent.push({ to, text }), `mid-${sent.length}`)),
+      sendPrivateReply: async () => "x",
+      replyToComment: async () => {},
+      getUsername: async () => "buyer",
+    };
+    const agent: ReplyEngine = {
+      reply: vi.fn(async (history): Promise<AgentReply> => {
+        if (aiDown) throw aiDown;
+        return { text: `Answer to: ${[...history].reverse().find((t) => t.role === "user")!.text}` };
+      }),
+    };
+    const pushes: PushRow[] = [];
+    const sendWatch = new SendWatch({ account: "triangleresells", db: db.db, push: async (p) => void pushes.push(p), now: () => clock.t });
+    const store = new Store(() => clock.t);
+    const bot = new Bot({
+      ig, agent, store, notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords: [],
+      publicCommentReplies: [], humanPauseHours: 12, sendWatch, now: () => new Date(clock.t),
+    });
+    const dm = (from: string, text: string): WebhookPayload => ({
+      object: "instagram",
+      entry: [{ id: OWN, messaging: [{ sender: { id: from }, recipient: { id: OWN }, message: { mid: `${from}-${text}-${clock.t}`, text } }] }],
+    });
+    return { bot, clock, sent, rows: db.rows, pushes, dm, store, setAi: (e?: Error) => (aiDown = e) };
+  }
+
+  it("out of credit: ONE urgent push that says what to do, then 'Sorry for the wait!' once the AI is back", async () => {
+    const t = setup();
+    await t.bot.handle(t.dm("a", "how much is the spider hoodie"));
+    await t.bot.handle(t.dm("b", "do you ship to texas"));
+    expect(t.sent).toHaveLength(0);
+    const alerts = t.pushes.filter((p) => p.type === "bot_outage");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].priority).toBe("urgent");
+    expect(alerts[0].title).toMatch(/AI isn't answering/);
+    expect(alerts[0].body).toMatch(/credit/);
+    expect(t.rows.filter((r) => r.kind === "send_failed")).toHaveLength(2);
+
+    t.setAi(undefined); // credit added
+    t.clock.t += 60_000;
+    await t.bot.retryAfterOutage();
+    await vi.waitFor(() => expect(t.sent.map((s) => s.to).sort()).toEqual(["a", "b"]));
+    expect(t.sent.find((s) => s.to === "a")!.text).toBe("Sorry for the wait! Answer to: how much is the spider hoodie");
+    expect(t.pushes.filter((p) => p.title.includes("answering again"))).toHaveLength(1);
+  });
+
+  it("never barges into a chat the team took over during the outage", async () => {
+    const t = setup();
+    await t.bot.handle(t.dm("a", "do you have the purple hoodie"));
+    await t.bot.handle(t.dm("b", "how much for 2"));
+    // the team answers "a" from the Instagram inbox; the buyer says "bet"
+    t.clock.t += 60_000;
+    await t.bot.handle({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: OWN }, recipient: { id: "a" }, message: { mid: "team-1", text: "yes $80, come by", is_echo: true } }] }] });
+    t.clock.t += 13 * 60 * 60_000; // past the team pause, still inside 24h
+    await t.bot.handle(t.dm("a", "bet")); // the AI is still down: she stays waiting too
+    t.setAi(undefined);
+    await t.bot.retryAfterOutage();
+    await vi.waitFor(() => expect(t.sent.map((s) => s.to)).toEqual(["b"]));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(t.sent.map((s) => s.to)).toEqual(["b"]);
+  });
+
+  it("an AI error about one chat (not credit, key or overload) is logged only: no outage push", async () => {
+    const t = setup();
+    t.setAi(Object.assign(new Error("400 messages: text content blocks must be non-empty"), { status: 400 }));
+    await t.bot.handle(t.dm("a", "hi"));
+    expect(t.pushes).toHaveLength(0);
+    expect(t.rows).toHaveLength(0);
+  });
+
+  it("after a restart mid-outage: no second alert, and the buyers from the log are still caught up", async () => {
+    const db = fakeDb(Date.parse("2026-11-17T14:00:00Z"));
+    db.db.droppedSince = async () => [{ userId: "a", at: Date.parse("2026-11-17T14:30:00Z") }];
+    const t = setup(db);
+    // the restored chat: the buyer's question is the last turn
+    t.store.addTurn("a", { role: "user", text: "is the valley hoodie still available" });
+    t.setAi(undefined);
+    await t.bot.retryAfterOutage();
+    await vi.waitFor(() => expect(t.sent).toEqual([{ to: "a", text: "Sorry for the wait! Answer to: is the valley hoodie still available" }]));
+    expect(t.pushes.filter((p) => p.title.includes("🚨"))).toHaveLength(0);
+  });
+
+  it("which AI errors mean the AI is down for everyone", () => {
+    expect(isSystemicAiError(CREDIT)).toBe(true);
+    expect(isSystemicAiError(Object.assign(new Error("overloaded"), { status: 529 }))).toBe(true);
+    expect(isSystemicAiError(Object.assign(new Error("invalid x-api-key"), { status: 401 }))).toBe(true);
+    expect(isSystemicAiError(new Error("Connection error."))).toBe(true);
+    expect(isSystemicAiError(Object.assign(new Error("messages: roles must alternate"), { status: 400 }))).toBe(false);
   });
 });
 

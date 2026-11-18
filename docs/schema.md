@@ -32,7 +32,7 @@ windows never create the same thing twice.
 | is_test | boolean | |
 | created_at | timestamptz | |
 
-`send_failed` = Instagram rejected the bot (token, permissions, Instagram down): it counts toward an outage.
+`send_failed` = the reply never reached the buyer: Instagram rejected it (token, permissions, Instagram down), or the AI was down for everyone (out of credit, bad key, overloaded; `error` starts with `AI:`). It counts toward an outage. After a restart, the open outage's `send_failed` rows tell the bot whom to catch up.
 `recipient_rejected` = rejected for one buyer only (outside the 24h window, blocked): logged, no alert.
 
 ### `bot_daily_health(p_day date, p_tz text, p_account text)` returns jsonb

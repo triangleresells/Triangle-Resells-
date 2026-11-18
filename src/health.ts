@@ -28,6 +28,8 @@ export interface HealthDb {
   log(row: { account: string; kind: SendLogKind; ig_user_id?: string; error?: string; is_test?: boolean }): Promise<void>;
   /** When the latest outage started, if it hasn't ended (so a restart doesn't alert twice). */
   openOutageSince(account: string): Promise<number | undefined>;
+  /** Buyers whose reply failed since the outage started (so a restart still catches them up). */
+  droppedSince?(account: string, since: number): Promise<{ userId: string; at: number }[]>;
   dayHealth(day: string, tz: string, account?: string): Promise<DayHealth>;
 }
 
@@ -63,6 +65,19 @@ export function supabaseHealthDb(supabaseUrl: string, serviceKey: string, fetchF
         return undefined;
       }
     },
+    async droppedSince(account, since) {
+      try {
+        const res = await req(
+          `/bot_send_log?account=eq.${encodeURIComponent(account)}&kind=eq.send_failed&is_test=eq.false&ig_user_id=not.is.null&created_at=gte.${encodeURIComponent(new Date(since).toISOString())}&select=ig_user_id,created_at&order=created_at.asc&limit=1000`,
+          { method: "GET", headers: headers() },
+        );
+        const rows = (await res.json()) as { ig_user_id: string; created_at: string }[];
+        return rows.map((r) => ({ userId: r.ig_user_id, at: Date.parse(r.created_at) }));
+      } catch (err) {
+        console.error("[health] reading dropped buyers failed:", (err as Error).message ?? err);
+        return [];
+      }
+    },
     async dayHealth(day, tz, account) {
       const res = await req("/rpc/bot_daily_health", { method: "POST", headers: headers(), body: JSON.stringify({ p_day: day, p_tz: tz, p_account: account ?? null }) });
       return (await res.json()) as DayHealth;
@@ -78,6 +93,17 @@ export function isRecipientError(message: string): boolean {
   const code = Number(/"code"\s*:\s*(\d+)/.exec(message)?.[1]);
   const sub = Number(/"error_subcode"\s*:\s*(\d+)/.exec(message)?.[1]);
   return (code === 10 && sub === 2018278) || code === 551 || sub === 2018001 || sub === 2534014 || sub === 1545041;
+}
+
+/**
+ * An AI error that means the AI is down for EVERYONE (out of credit, bad key, overloaded, network), not a problem with
+ * one conversation. Those start an outage; anything else is logged only.
+ */
+export function isSystemicAiError(err: unknown): boolean {
+  const status = Number((err as { status?: unknown })?.status);
+  const msg = String((err as Error)?.message ?? err);
+  if (status === 401 || status === 402 || status === 403 || status === 429 || status >= 500) return true;
+  return /credit balance|billing|overloaded|rate.?limit|ECONN|ETIMEDOUT|ENOTFOUND|fetch failed|socket hang up|timed? ?out|Connection error/i.test(msg);
 }
 
 /**
@@ -100,9 +126,17 @@ export class SendWatch {
   private restore(): Promise<void> {
     this.restored ??= (async () => {
       const since = await this.d.db?.openOutageSince(this.d.account);
-      if (since !== undefined && this.outageSince === undefined) this.outageSince = since;
+      if (since !== undefined && this.outageSince === undefined) {
+        this.outageSince = since;
+        for (const r of (await this.d.db?.droppedSince?.(this.d.account, since)) ?? []) this.dropped.set(r.userId, r.at);
+      }
     })();
     return this.restored;
+  }
+
+  /** Waits for the restart restore (an outage still open in the log, and its waiting buyers). */
+  ready(): Promise<void> {
+    return this.restore();
   }
 
   inOutage(): boolean {
@@ -114,10 +148,19 @@ export class SendWatch {
     return [...this.dropped].sort((a, b) => b[1] - a[1]).map(([u]) => u);
   }
 
-  async failed(userId: string, err: unknown, isTest = false): Promise<void> {
+  /**
+   * A reply didn't reach the buyer. source "send": the channel (Instagram) rejected it. source "ai": the AI failed before
+   * there was anything to send (out of credit, key, overloaded); only errors that hit everyone count as an outage.
+   */
+  async failed(userId: string, err: unknown, isTest = false, source: "send" | "ai" = "send"): Promise<void> {
     await this.restore();
-    const error = String((err as Error)?.message ?? err).slice(0, 500);
-    if (isRecipientError(error)) {
+    const raw = String((err as Error)?.message ?? err).slice(0, 480);
+    const error = source === "ai" ? `AI: ${raw}` : raw;
+    if (source === "ai" && !isSystemicAiError(err)) {
+      console.error(`[health] AI failed for one chat (${userId}), not an outage: ${raw.slice(0, 200)}`);
+      return;
+    }
+    if (source === "send" && isRecipientError(error)) {
       await this.d.db?.log({ account: this.d.account, kind: "recipient_rejected", ig_user_id: userId, error, is_test: isTest });
       return;
     }
@@ -129,8 +172,15 @@ export class SendWatch {
     await this.d.db?.log({ account: this.d.account, kind: "outage_started", ig_user_id: userId, error });
     await this.d.push?.({
       type: "bot_outage",
-      title: `🚨 @${this.d.account}: Instagram is rejecting the bot's replies`,
-      body: `Buyers aren't getting answers. Instagram said: ${error.slice(0, 220)}\nUsually the access token: check it in Meta, then update IG_ACCESS_TOKEN on Render. You get this once per outage.`,
+      ...(source === "ai"
+        ? {
+            title: `🚨 @${this.d.account}: the AI isn't answering, buyers get no replies`,
+            body: `The AI said: ${raw.slice(0, 200)}\nIf it says credit: console.anthropic.com → Billing → add credit (keep auto-reload on). You get this once per outage; waiting buyers are answered when it's back.`,
+          }
+        : {
+            title: `🚨 @${this.d.account}: Instagram is rejecting the bot's replies`,
+            body: `Buyers aren't getting answers. Instagram said: ${error.slice(0, 220)}\nUsually the access token: check it in Meta, then update IG_ACCESS_TOKEN on Render. You get this once per outage.`,
+          }),
       priority: "urgent",
       dedupe_key: `outage:${this.d.account}:${this.outageSince}`,
     }).catch((e) => console.error("[health] outage push failed:", (e as Error).message ?? e));
@@ -148,7 +198,7 @@ export class SendWatch {
     await this.d.db?.log({ account: this.d.account, kind: "outage_ended", error: `lasted ${mins} min, ${back.length} buyer(s) to catch up` });
     await this.d.push?.({
       type: "bot_outage",
-      title: `✅ @${this.d.account}: the bot can send again`,
+      title: `✅ @${this.d.account}: the bot is answering again`,
       body: `Down about ${mins} min. ${back.length ? `Answering ${back.length} buyer(s) still inside Instagram's 24h window.` : ""} Check Chats for anyone older than 24h: only you can reach them.`,
       priority: "normal",
       dedupe_key: `outage-end:${this.d.account}:${since}`,
