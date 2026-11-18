@@ -5,3 +5,19 @@ dist/
 !.env.example
 *.log
 .DS_Store
+data/
+*.tmp
+
+# Google service account keys and other credential files: never commit
+*service-account*.json
+*serviceaccount*.json
+*-key.json
+*credentials*.json
+google-*.json
+# Retest reports (contain full test chats)
+ai-retest-report*.json
+# Any other JSON dropped in the repo root (Google downloads keys as <project>-<id>.json)
+/*.json
+!/package.json
+!/package-lock.json
+!/tsconfig.json

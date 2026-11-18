@@ -1,0 +1,279 @@
+import { describe, expect, it, vi } from "vitest";
+import { OrderDesk, SalesLog, StockKeeper, trackerTab, type SheetIO } from "../src/desk.js";
+import { Bot, payTextFor, type WebhookPayload } from "../src/bot.js";
+import type { OrderTools, ReplyEngine } from "../src/ai.js";
+import type { HandoffAlert } from "../src/handoff.js";
+import type { InstagramApi } from "../src/instagram.js";
+import { loadPricing } from "../src/config.js";
+import { Store } from "../src/store.js";
+
+const STOCK = [
+  ["BOT STOCK - the DM bot reads this tab."],
+  ["Category", "Brand", "Item", "Color", "Size", "Qty", "Price List", "Status", "Notes", "Cost"],
+  ["Hat", "Chrome Hearts", "Chrome Hearts Hat", "Black", "One Size", "5", "CHROME HEARTS HATS", "FOR SALE", "", "15"],
+  ["Tee", "BAPE", "BAPE Tee", "Black (1F80120036)", "", "", "BAPE TEES", "INCOMING", "", "14"],
+  ["Fragrance", "", "YSL Y EDP", "", "", "9", "FRAGRANCES", "FOR SALE", "", "10.75"],
+];
+
+function fakeSheets(rows = STOCK.map((r) => [...r])) {
+  const writes: { range: string; values: (string | number)[][]; sheetId?: string }[] = [];
+  const io: SheetIO = {
+    tabs: vi.fn(async () => [rows]),
+    ranges: vi.fn(async () => [[["11/1/2026"], ["11/2/2026"]]]),
+    write: vi.fn(async (data, sheetId) => {
+      for (const d of data) {
+        writes.push({ ...d, sheetId });
+        const m = d.range.match(/^'BOT STOCK'!F(\d+)$/);
+        if (m) rows[Number(m[1]) - 1][5] = String(d.values[0][0]);
+      }
+    }),
+  };
+  return { io, writes, rows };
+}
+
+describe("stock keeper", () => {
+  it("takes sold pieces off BOT STOCK and puts them back on cancel", async () => {
+    const f = fakeSheets();
+    const keeper = new StockKeeper(f.io);
+    expect(await keeper.adjust([{ name: "Chrome Hearts Hat", variant: "Black", qty: 3 }, { name: "YSL Y EDP", qty: 1 }], -1)).toEqual([]);
+    expect(f.writes.map((w) => [w.range, w.values[0][0]])).toEqual([
+      ["'BOT STOCK'!F3", 2],
+      ["'BOT STOCK'!F5", 8],
+    ]);
+    await keeper.adjust([{ name: "Chrome Hearts Hat", variant: "Black", qty: 3 }], 1);
+    expect(f.rows[2][5]).toBe("5");
+  });
+
+  it("never sells INCOMING rows and reports what it couldn't find", async () => {
+    const f = fakeSheets();
+    const problems = await new StockKeeper(f.io).adjust([{ name: "BAPE Tee", variant: "Black (1F80120036)", size: "M", qty: 1 }], -1);
+    expect(problems[0]).toContain("not found");
+  });
+});
+
+describe("sales log", () => {
+  it("writes a pickup into the local table on the right month tab, skipping Profit", async () => {
+    const f = fakeSheets();
+    await new SalesLog(f.io, "TRACKER").log({
+      date: new Date("2026-11-12T20:00:00Z"),
+      username: "kbventuresco",
+      products: "6x Chrome Hearts Hat Black",
+      cost: 90,
+      itemsTotal: 120,
+      payment: "zelle",
+      fulfillment: "pickup",
+      notes: "Bot order",
+    });
+    expect(trackerTab(new Date("2026-11-12T20:00:00Z"))).toBe("Nov 2026");
+    expect(f.writes[0]).toMatchObject({ range: "'Nov 2026'!AD8:AI8", sheetId: "TRACKER", values: [["11/12/2026", "Bot", "@kbventuresco", "6x Chrome Hearts Hat Black", 90, 120]] });
+    expect(f.writes[1].range).toBe("'Nov 2026'!AK8:AN8");
+  });
+
+  it("writes a shipped order with the address into the online table", async () => {
+    const f = fakeSheets();
+    await new SalesLog(f.io, "T").log({
+      date: new Date("2026-11-12T20:00:00Z"),
+      products: "1x YSL Y EDP",
+      cost: 10.75,
+      itemsTotal: 60,
+      shipping: 10,
+      payment: "cash app",
+      fulfillment: "ship",
+      notes: "",
+      shipTo: { name: "Jay Smith", street: "1 Main St", city: "Atlanta", state: "GA", zip: "30301" },
+    });
+    expect(f.writes[0].values[0]).toEqual(["11/12/2026", "Instagram", "", "1x YSL Y EDP", 10.75, 70, "", 10]);
+    expect(f.writes[1].values[0]).toContain("Jay Smith");
+    expect(f.writes[1].values[0]).toContain("30301");
+  });
+});
+
+describe("order desk", () => {
+  it("booked: BOOKED holds no stock; paid takes it off once; cancel puts it back", async () => {
+    const f = fakeSheets();
+    const store = new Store();
+    const alerts: HandoffAlert[] = [];
+    const cal = vi.fn(async () => {});
+    const { parseStockCsv } = await import("../src/catalog.js");
+    const desk = new OrderDesk({
+      store,
+      notify: async (a) => void alerts.push(a),
+      accountName: "Triangle Resells",
+      stock: new StockKeeper(f.io),
+      sales: new SalesLog(f.io, "T"),
+      calendar: cal,
+      stockRows: async () => parseStockCsv(f.rows),
+    });
+    const label = await desk.booked({
+      userId: "u1",
+      lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }],
+      items: "2x Chrome Hearts Hat Black",
+      itemsTotal: 58,
+      total: 58,
+      payment: "zelle",
+      fulfillment: "pickup",
+      fulfillDate: "2026-11-13",
+      fulfillTime: "3:00 PM",
+      freebies: ["1 free Baccarat Rouge"],
+    });
+    expect(label).toMatchObject({ label: "BOOKED", cost: 30, stockHeld: false });
+    // Unpaid bookings don't hold stock: still 5.
+    expect(f.rows[2][5]).toBe("5");
+    expect((cal.mock.calls[0] as any)[0].title).toContain("BOOKED");
+    expect(alerts[0].reason).toContain("BOOKED $58");
+    expect(await desk.markPaid(label.id)).toBe(true);
+    expect(f.rows[2][5]).toBe("3");
+    expect(await desk.markPaid(label.id)).toBe(false);
+    expect(f.rows[2][5]).toBe("3");
+    // Paid is not fulfilled: nothing in the sales tracker yet.
+    expect(f.writes.filter((w) => w.sheetId === "T")).toHaveLength(0);
+    expect(await desk.cancel(label.id)).toEqual({ ok: true, wasLogged: false });
+    expect(f.rows[2][5]).toBe("5");
+  });
+
+  it("an unpaid booking cancelled (no-show) puts nothing back; cash handed over at Done takes it off; old orders still return stock", async () => {
+    const f = fakeSheets();
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "Triangle Resells", stock: new StockKeeper(f.io), sales: new SalesLog(f.io, "T") });
+    const b = { userId: "u1", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 1 }], items: "1x Chrome Hearts Hat Black", itemsTotal: 30, total: 30, payment: "cash", fulfillment: "pickup" as const, fulfillDate: "2026-11-13", fulfillTime: "3:00 PM", freebies: [] };
+    const noShow = (await desk.booked(b)) as any;
+    expect(await desk.cancel(noShow.id)).toEqual({ ok: true, wasLogged: false });
+    expect(f.rows[2][5]).toBe("5");
+    const cash = (await desk.booked(b)) as any;
+    expect(await desk.done(cash.id)).toBe(true);
+    expect(f.rows[2][5]).toBe("4");
+    // An order saved before this rule (no stockHeld) had its stock taken at booking: cancel still returns it.
+    const old = store.addLabel({ userId: "u2", label: "BOOKED", summary: "1x Chrome Hearts Hat Black", total: 30, payment: "cash", when: "pickup", lines: b.lines });
+    await desk.cancel(old.id);
+    expect(f.rows[2][5]).toBe("5");
+  });
+});
+
+describe("the sales tracker gets a sale when it's Done (fulfilled), once", () => {
+  it("Done logs it; a second Done does nothing", async () => {
+    const writes: { range: string; sheetId?: string }[] = [];
+    const io = { tabs: async () => [[]], ranges: async () => [[]], write: async (d: { range: string }[], sheetId?: string) => void writes.push(...d.map((x) => ({ ...x, sheetId }))) };
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "Triangle Resells", sales: new SalesLog(io as any, "T"), now: () => new Date("2026-11-14T20:00:00Z") });
+    const label = store.addLabel({ userId: "u1", label: "BOOKED", summary: "1x Chrome Hearts Hat Black", total: 35, payment: "cash", when: "pickup 2026-11-14 3:00 PM", fulfillment: "pickup" });
+    await desk.markPaid(label.id);
+    expect(writes).toHaveLength(0);
+    expect(await desk.done(label.id)).toBe(true);
+    expect(writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"))).toHaveLength(1);
+    expect(await desk.done(label.id)).toBe(false);
+  });
+
+  it("end-of-day close logs only PAID orders the CRM doesn't own", async () => {
+    const writes: { range: string; sheetId?: string }[] = [];
+    const io = { tabs: async () => [[]], ranges: async () => [[]], write: async (d: { range: string }[], sheetId?: string) => void writes.push(...d.map((x) => ({ ...x, sheetId }))) };
+    const store = new Store();
+    const desk = new OrderDesk({ store, notify: async () => {}, accountName: "Triangle Resells", sales: new SalesLog(io as any, "T"), now: () => new Date("2026-11-14T20:00:00Z") });
+    const base = { summary: "1x Chrome Hearts Hat Black", total: 35, payment: "cash", when: "pickup 2026-11-14 3:00 PM", fulfillment: "pickup" as const };
+    store.addLabel({ ...base, userId: "paid", label: "PAID" });
+    const unpaid = store.addLabel({ ...base, userId: "noshow", label: "BOOKED" });
+    const inCrm = store.addLabel({ ...base, userId: "crm", label: "PAID", crmId: "11111111-1111-1111-1111-111111111111" });
+    expect(await desk.doneAll()).toBe(1);
+    expect(writes.filter((w) => w.sheetId === "T" && w.range.includes("AD"))).toHaveLength(1);
+    expect(store.allLabels().map((l) => l.id).sort()).toEqual([unpaid.id, inCrm.id].sort());
+  });
+});
+
+describe("bot payment rules", () => {
+  const OWN = "17840000000000000";
+  const dm = (text: string, mid: string): WebhookPayload => ({ object: "instagram", entry: [{ id: OWN, messaging: [{ sender: { id: "u1" }, recipient: { id: OWN }, message: { mid, text } }] }] });
+
+  async function run(call: (t: OrderTools) => Promise<unknown>, extra: Partial<ConstructorParameters<typeof Bot>[0]> = {}) {
+    let out: unknown;
+    const agent: ReplyEngine = { reply: vi.fn(async (_h, _i, tools?: OrderTools) => ((out = await call(tools!)), { text: "ok" })) };
+    const ig: InstagramApi = { sendText: vi.fn(async () => "m"), sendPrivateReply: vi.fn(async () => "m"), replyToComment: vi.fn(async () => {}), getUsername: vi.fn(async () => "buyer") };
+    const alerts: HandoffAlert[] = [];
+    const booked = vi.fn(async () => ({}) as any);
+    const store = new Store();
+    const bot = new Bot({
+      ig, agent, store, notify: async (a) => void alerts.push(a), getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [],
+      humanPauseHours: 12, pricing: loadPricing(), now: () => new Date("2026-11-05T19:00:00Z"), desk: { booked, stripePaid: vi.fn() },
+      payInfo: { zelle: "919-480-7349", cashApp: "$TriangleResells" },
+      ...extra,
+    });
+    await bot.handle(dm("yo", "m1"));
+    return { out: out as any, alerts, booked, store };
+  }
+  const hats = [{ product: "Chrome Hearts Hat", variant: "Black", qty: 2 }];
+
+  it("sends cash deliveries to Josh and keeps shipped orders prepaid", async () => {
+    expect((await run((t) => t.submitOrder!(hats, "delivery", "2026-11-06", "4:00 PM", "Garner", "cash"))).out).toMatchObject({ ok: false, handoff: true });
+    expect((await run((t) => t.submitOrder!(hats, "ship", "2026-11-06", undefined, undefined, "cash"))).out).toMatchObject({ ok: false, fixable: true });
+  });
+
+  it("won't book a shipped order without the full address", async () => {
+    const r = await run((t) => t.submitOrder!(hats, "ship", "2026-11-06", undefined, undefined, "zelle", { name: "Jay", street: "1 Main", city: "", state: "GA", zip: "" }));
+    expect(r.out.error).toContain("city, zip");
+  });
+
+  it("books a Zelle pickup with the exact lines and hands the buyer the Zelle info", async () => {
+    const r = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "zelle"));
+    expect(r.out).toMatchObject({ ok: true });
+    expect(r.out.payText).toContain("919-480-7349");
+    expect(r.booked.mock.calls[0]).toMatchObject([{ lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }], payment: "zelle", fulfillment: "pickup" }]);
+  });
+
+  it("'I sent it' alerts Josh to check, flags the order, and never confirms", async () => {
+    const r = await run((t) => t.paymentSent!("zelle", "screenshot shows $58 to Josh"));
+    expect(r.out).toContain("Never say the payment is confirmed");
+    expect(r.alerts[0].reason).toContain("CHECK YOUR APP");
+  });
+
+  it("only alerts Josh once when the buyer keeps saying they paid", async () => {
+    const r = await run(async (t) => {
+      await t.paymentSent!("cash_app", "sent $70");
+      await t.paymentSent!("cash_app", "thanks!");
+      return t.paymentSent!("cash_app", "have a good one");
+    });
+    expect(r.alerts).toHaveLength(1);
+    expect(r.out).toContain("ALREADY told");
+  });
+
+  it("cash is for a pickup today only: a later day must be paid first", async () => {
+    // now = 2026-11-05 2:00 PM ET
+    const later = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "cash"));
+    expect(later.out).toMatchObject({ ok: false, fixable: true });
+    expect(later.out.error).toContain("pay first");
+    expect(later.booked).not.toHaveBeenCalled();
+    const today = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-05", "4:00 PM", undefined, "cash"));
+    expect(today.out).toMatchObject({ ok: true });
+  });
+
+  it("re-reads live stock before locking in (unpaid bookings don't hold pieces, so the count must be current)", async () => {
+    const p = loadPricing();
+    const lastOne = { ...p, stock: (p.stock ?? []).map((r) => (r.item === "Chrome Hearts Hat" && r.color === "Black" ? { ...r, qty: 1 } : r)) };
+    const freshCatalog = vi.fn(async () => ({ pricing: lastOne }));
+    const r = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "zelle"), { freshCatalog });
+    expect(freshCatalog).toHaveBeenCalled();
+    expect(r.out).toMatchObject({ ok: false, fixable: true });
+    expect(r.out.error).toMatch(/Only 1 of/);
+    expect(r.booked).not.toHaveBeenCalled();
+    // A failed fresh read falls back to the last copy instead of blocking the sale.
+    const down = await run((t) => t.submitOrder!(hats, "pickup", "2026-11-06", "4:00 PM", undefined, "zelle"), { freshCatalog: async () => { throw new Error("sheet down"); } });
+    expect(down.out).toMatchObject({ ok: true });
+  });
+
+  it("'I paid' for a piece someone else paid for first: Josh's alert says it's gone (likely a refund)", async () => {
+    const p = loadPricing();
+    const gone = { ...p, stock: (p.stock ?? []).map((r) => (r.item === "Chrome Hearts Hat" && r.color === "Black" ? { ...r, qty: 0 } : r)) };
+    const store = new Store();
+    store.addLabel({ userId: "u1", label: "BOOKED", summary: "2x Chrome Hearts Hat Black", total: 58, payment: "zelle", when: "pickup 2026-11-06 4:00 PM", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }], crmId: "11111111-1111-1111-1111-111111111111" });
+    const r = await run((t) => t.paymentSent!("zelle", "sent $58"), { store, freshCatalog: async () => ({ pricing: gone }) });
+    expect(r.alerts[0].reason).toContain("GONE");
+    expect(r.alerts[0].reason).toContain("refund");
+    // Still in stock: the normal alert.
+    const store2 = new Store();
+    store2.addLabel({ userId: "u1", label: "BOOKED", summary: "2x Chrome Hearts Hat Black", total: 58, payment: "zelle", when: "pickup 2026-11-06 4:00 PM", lines: [{ name: "Chrome Hearts Hat", variant: "Black", qty: 2 }], crmId: "11111111-1111-1111-1111-111111111111" });
+    const ok = await run((t) => t.paymentSent!("zelle", "sent $58"), { store: store2, freshCatalog: async () => ({ pricing: p }) });
+    expect(ok.alerts[0].reason).not.toContain("GONE");
+  });
+
+  it("cash orders get no payment info", () => {
+    expect(payTextFor("cash", 58)).toContain("cash at pickup");
+    expect(payTextFor("cash_app", 58, { cashApp: "$X" })).toContain("Cash App $58 to $X");
+  });
+});

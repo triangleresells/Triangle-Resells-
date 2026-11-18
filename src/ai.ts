@@ -1,65 +1,493 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { ChatTurn } from "./store.js";
+import type { Fulfillment, OrderItem } from "./pricing.js";
+import type { ChatTurn, ShipTo } from "./store.js";
+import { looksSpanish } from "./language.js";
 
 export interface AgentReply {
   text: string;
   handoff?: { route: "team" | "josh"; reason: string; summary: string };
+  /** Set when the bot made a Stripe link in this reply. The bot makes sure it reaches the customer. */
+  checkoutUrl?: string;
+  /** Heads-up alerts for the team. Unlike a handoff, the bot keeps selling in the chat. */
+  /** kind "question" = a QUICK SEC question the buyer is waiting on; those always reach Josh, never deduped. */
+  alerts?: { reason: string; summary: string; kind?: "stock" | "question" }[];
+  /** The customer said they don't want the order, so don't follow up on the unpaid link. */
+  cancelFollowUp?: boolean;
+  /** Items this customer wants (saved to the customer list for restock blasts). */
+  interests?: string[];
+}
+
+export type PaymentMethod = "cash" | "cash_app" | "zelle" | "venmo" | "paypal" | "apple_pay";
+
+/** Order actions the AI can take for the customer it's talking to. Prices always come from the warehouse sheet. */
+export interface OrderTools {
+  quote(items: OrderItem[], fulfillment: Fulfillment, deliveryArea?: string): string;
+  /** Single price + bulk tiers for any item (in stock, sold out or in the restock), and the price each for `qty`. */
+  prices?(item: string, qty?: number): string;
+  /** Cash, Cash App or Zelle (and Apple Pay when Stripe is off): lock in the order. Stock comes off the sheet, label BOOKED. */
+  submitOrder?(
+    items: OrderItem[],
+    fulfillment: Fulfillment,
+    fulfillDate: string,
+    fulfillTime: string | undefined,
+    deliveryArea: string | undefined,
+    payment: PaymentMethod,
+    shipTo?: ShipTo,
+    /** "half" = a 50% deposit now, the rest later. Default full. */
+    deposit?: "full" | "half",
+  ): Promise<
+    | { ok: true; total: number; summary: string; freebies: string[]; note?: string; payText?: string; alreadyBooked?: boolean }
+    | { ok: false; error: string; fixable?: boolean; handoff?: boolean }
+  >;
+  /** Buyer says they sent the money (or sent a screenshot). Tells Josh to check. Never confirms anything. */
+  paymentSent?(method: string, note: string): Promise<string>;
+  /** Move this buyer's locked-in order to another day / time. Returns what to tell the AI. */
+  rescheduleOrder?(date: string, time: string | undefined): Promise<string>;
+  /** Cancel this buyer's locked-in, unpaid order (stock goes back). Returns what to tell the AI. */
+  cancelOrder?(reason: string): Promise<string>;
+  /** Stripe payment link. Only when STRIPE_ENABLED=true. */
+  checkout?(
+    items: OrderItem[],
+    fulfillment: Fulfillment,
+    fulfillDate: string,
+    fulfillTime?: string,
+    deliveryArea?: string,
+  ): Promise<{ ok: true; url: string; total: number; summary: string; note?: string } | { ok: false; error: string; fixable?: boolean }>;
 }
 
 export interface ReplyEngine {
-  reply(history: ChatTurn[], inventory: string): Promise<AgentReply>;
+  reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply>;
 }
 
-const HANDOFF_TOOL = {
-  name: "handoff_to_team",
-  description:
-    "Pause the bot in this chat and alert a human on the Triangle team. Use it for the cases listed under HANDOFF in your instructions.",
-  input_schema: {
-    type: "object" as const,
+const ITEMS_SCHEMA = {
+  type: "array",
+  description: "Every PAID item in the order, one entry per item + color + size. Never include free gifts: any gift is added automatically.",
+  items: {
+    type: "object",
     properties: {
-      route: {
-        type: "string",
-        enum: ["team", "josh"],
-        description: "josh for refunds, chargebacks, complaints, bulk/wholesale, and collabs. team for everything else.",
-      },
-      reason: { type: "string", description: "Short reason, e.g. 'ready to buy', 'bulk order', 'upset customer'." },
-      summary: {
-        type: "string",
-        description: "One or two lines the team can act on: item, size, state, quantities, email, etc.",
-      },
+      product: { type: "string", description: "Item name exactly as on the stock sheet, e.g. Alo Hoodie, Chrome Hearts Tee, Bleu de Chanel EDP." },
+      variant: { type: "string", description: "Color exactly as on the stock sheet, e.g. Gray, Black/Pink. Blank for fragrances and bags." },
+      size: { type: "string", description: "Size as on the stock sheet: XS, S, M, L, XL, a waist size like 32, or blank for fragrances, hats and bags." },
+      qty: { type: "integer", minimum: 1 },
     },
-    required: ["route", "reason", "summary"],
+    required: ["product", "qty"],
   },
-};
+} as const;
 
-export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string): string {
-  const parts = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
+const FULFILLMENT_SCHEMA = {
+  type: "string",
+  enum: ["pickup", "ship", "delivery"],
+  description:
+    "pickup = buyer comes to the warehouse. ship = UPS anywhere in the US. delivery = Josh drops it off locally (fee by drive time, max 1 hour; also use it for meeting halfway, with the meeting town as delivery_area).",
+} as const;
+
+const DELIVERY_AREA_SCHEMA = {
+  type: "string",
+  description: "Delivery only: the town or area, e.g. Durham, Knightdale, Clayton. For meeting halfway, the meeting town.",
+} as const;
+
+export const TOOLS = [
+  {
+    name: "handoff_to_team",
+    description:
+      "Pause the bot in this chat and alert a human on the Triangle team. Use it for the cases listed under HANDOFF in your instructions.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        route: {
+          type: "string",
+          enum: ["team", "josh"],
+          description: "josh for complaints, refunds, known bulk buyers, collabs, and price exceptions. team for everything else.",
+        },
+        reason: { type: "string", description: "Short reason, e.g. 'cash buyer', 'upset customer'." },
+        summary: {
+          type: "string",
+          description: "One or two lines the team can act on: items, sizes, quantities, pickup or ship, etc.",
+        },
+      },
+      required: ["route", "reason", "summary"],
+    },
+  },
+  {
+    name: "alert_team",
+    description:
+      "Send Josh an instant heads-up WITHOUT pausing the chat. Use it when a customer asks for something we don't have in stock, don't carry, or haven't priced, and for QUICK SEC questions you can't answer yourself (are they real, pics, measurements, anything not in the sheet or knowledge base): put their exact question in the summary. Keep selling after. It does NOT save the customer to the restock list: call save_interest for that too.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        kind: { type: "string", enum: ["stock", "question"], description: "stock = they want something we don't have or haven't priced. question = a QUICK SEC question they're waiting on Josh to answer." },
+        reason: { type: "string", description: "e.g. 'asked for item not in stock', 'asked for unpriced item', 'asked if it's real'." },
+        summary: { type: "string", description: "Start with exactly what they asked for (brand, item, size, color, how many) or their exact question. Context after that." },
+      },
+      required: ["kind", "reason", "summary"],
+    },
+  },
+  {
+    name: "price_lookup",
+    description:
+      "The price card for ONE item: its single price, the bulk tiers per piece (5+ pieces) and, with qty, the exact price each. Works for in-stock, sold-out and restock items. Use it whenever they ask a price or bulk prices. Never do price math yourself. For a real order total (shipping, delivery, mixed items), use quote_order.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        item: { type: "string", description: "The item as the buyer means it, e.g. 'Essentials hoodie', 'Spider hoodie', 'BAPE tee'." },
+        qty: { type: "integer", description: "How many pieces, if they said. Leave out for the price card only." },
+      },
+      required: ["item"],
+    },
+  },
+  {
+    name: "quote_order",
+    description:
+      "Get the exact price for an order. Always use this before telling the customer any total. Never do price math yourself.",
+    input_schema: {
+      type: "object" as const,
+      properties: { items: ITEMS_SCHEMA, fulfillment: FULFILLMENT_SCHEMA, delivery_area: DELIVERY_AREA_SCHEMA },
+      required: ["items", "fulfillment"],
+    },
+  },
+  {
+    name: "create_checkout_link",
+    description:
+      "Make a branded Stripe payment link for the confirmed order. Only call it once items, sizes, stock, pickup or ship, and the date are all settled, and after you told them all sales are final.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        items: ITEMS_SCHEMA,
+        fulfillment: FULFILLMENT_SCHEMA,
+        fulfill_date: {
+          type: "string",
+          description: "YYYY-MM-DD the buyer picks up, it's delivered, or the day it ships. Can be a later day: they pay now and we hold it.",
+        },
+        fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Leave blank for shipping." },
+        delivery_area: DELIVERY_AREA_SCHEMA,
+      },
+      required: ["items", "fulfillment", "fulfill_date"],
+    },
+  },
+  {
+    name: "submit_order",
+    description:
+      "Lock in a confirmed order paid by cash, Cash App, Zelle, Venmo or PayPal (full amount or a 50% deposit). Only call it once items, sizes, pickup/delivery/ship, the day (and time for pickup or delivery), the payment method, and for shipping the full name and address are all settled, and after you sent the order summary and said all sales are final. The items come off the stock sheet, the order goes on Josh's calendar, and Josh is alerted. The chat keeps going.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        items: ITEMS_SCHEMA,
+        fulfillment: FULFILLMENT_SCHEMA,
+        fulfill_date: { type: "string", description: "YYYY-MM-DD of the pickup, delivery or ship day." },
+        fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Blank for shipping." },
+        delivery_area: DELIVERY_AREA_SCHEMA,
+        payment: { type: "string", enum: ["cash", "cash_app", "zelle", "venmo", "paypal", "apple_pay"], description: "How they'll pay. Apple Pay and card aren't taken in DMs right now (apple_pay hands the chat to the team)." },
+        deposit: { type: "string", enum: ["full", "half"], description: "full = they pay 100% now (default). half = a 50% deposit now, only when THEY chose the deposit AND the order is 5+ pieces (bulk). Under 5 pieces is always full." },
+        ship_to: {
+          type: "object",
+          description: "Shipping only (required for ship): the buyer's full name and address, exactly as they gave it.",
+          properties: {
+            name: { type: "string" },
+            street: { type: "string" },
+            apt: { type: "string", description: "Apt/unit, blank if none." },
+            city: { type: "string" },
+            state: { type: "string", description: "2-letter state, e.g. NC" },
+            zip: { type: "string" },
+          },
+          required: ["name", "street", "city", "state", "zip"],
+        },
+      },
+      required: ["items", "fulfillment", "fulfill_date", "payment"],
+    },
+  },
+  {
+    name: "reschedule_order",
+    description:
+      "Move the buyer's locked-in order (from submit_order) to another day and time when they ask to. Pickups and deliveries only, and only open times from the PICKUP SCHEDULE. Never for a new order.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        date: { type: "string", description: "New day, YYYY-MM-DD." },
+        time: { type: "string", description: "New time like 3:00 PM." },
+      },
+      required: ["date", "time"],
+    },
+  },
+  {
+    name: "cancel_order",
+    description:
+      "Cancel the buyer's locked-in order when they clearly say they don't want it anymore and haven't paid. The pieces go back in stock. If they already paid (or said they sent it), don't cancel: hand off to josh.",
+    input_schema: {
+      type: "object" as const,
+      properties: { reason: { type: "string", description: "Why, in a few words (their words)." } },
+      required: ["reason"],
+    },
+  },
+  {
+    name: "payment_sent",
+    description:
+      "Call when the buyer says they sent the money or sends a payment screenshot (Cash App, Zelle, Venmo or PayPal). It tells Josh to check his app. It does NOT confirm the payment: only Josh confirms.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        method: { type: "string", enum: ["cash_app", "zelle", "venmo", "paypal", "other"] },
+        note: { type: "string", description: "What they said or what the screenshot shows (amount, name, time)." },
+      },
+      required: ["method", "note"],
+    },
+  },
+  {
+    name: "save_interest",
+    description:
+      "Save what this customer wants to Josh's customer list, so he can reach them on a restock or with leftover stock. Call it whenever they ask about an item that's out, coming soon, or say 'let me know when X drops'. Doesn't alert anyone or pause the chat.",
+    input_schema: {
+      type: "object" as const,
+      properties: { item: { type: "string", description: "Brand, item, color and size, e.g. 'Spider Hoodie Pink L', '50 Essentials hoodies'." } },
+      required: ["item"],
+    },
+  },
+  {
+    name: "cancel_follow_up",
+    description:
+      "Call when the customer clearly says they don't want the order anymore (\"nah I'm good\", \"changed my mind\"), so the bot doesn't follow up on their unpaid link.",
+    input_schema: { type: "object" as const, properties: {} },
+  },
+];
+
+export function buildSystemPrompt(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): string {
+  return buildSystemBlocks(instructions, knowledgeBase, inventory, now, schedule).map((b) => b.text).join("\n\n");
+}
+
+/**
+ * The system prompt as two blocks. The first (instructions, knowledge base, stock sheet) only changes when the
+ * config or the sheet does, so it's cached and later calls read it at a tenth of the price. The second holds
+ * what changes all the time (pickup schedule, the current time), after the cache breakpoint.
+ */
+export function buildSystemBlocks(instructions: string, knowledgeBase: string, inventory: string, now = new Date(), schedule = ""): Anthropic.TextBlockParam[] {
+  const head = [instructions, "KNOWLEDGE BASE\n" + knowledgeBase];
   if (inventory) {
-    parts.push(
-      "LIVE INVENTORY SHEET (updated by the team; if it disagrees with the knowledge base on a price, stock, or restock date, trust this sheet)\n" +
+    head.push(
+      "LIVE STOCK SHEET (updated by the team; if it disagrees with the knowledge base on stock or restock dates, trust this sheet)\n" +
         inventory,
     );
   }
+  return [
+    { type: "text", text: head.join("\n\n"), cache_control: { type: "ephemeral" } },
+    { type: "text", text: systemTail(now, schedule) },
+  ];
+}
+
+function systemTail(now: Date, schedule: string): string {
+  const today = now.toLocaleString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+  });
+  const parts: string[] = [];
+  if (schedule) parts.push("PICKUP SCHEDULE (live from Josh's calendar)\n" + schedule);
+  parts.push(`TODAY\n${today} (North Carolina time). Use this to turn "today", "tomorrow" or "next Thursday" into a date.`);
   parts.push(
     "FORMAT\nYou are writing an Instagram DM. Plain text only: no markdown, no bullet lists, no asterisks. Keep it short.",
   );
   return parts.join("\n\n");
 }
 
-/** Claude's API needs turns to alternate, starting with the customer. */
+/** Only the most recent customer screenshots are sent to the AI, to keep replies fast and cheap. */
+const MAX_IMAGE_TURNS = 2;
+
+type Block = Anthropic.TextBlockParam | Anthropic.ImageBlockParam;
+
+/** Claude's API needs turns to alternate, starting with the customer. Recent screenshots go in as images. */
 export function toApiMessages(history: ChatTurn[]): Anthropic.MessageParam[] {
-  const out: Anthropic.MessageParam[] = [];
-  for (const t of history) {
-    const last = out[out.length - 1];
-    if (last && last.role === t.role) {
-      last.content = `${last.content as string}\n${t.text}`;
-    } else {
-      out.push({ role: t.role, content: t.text });
+  const imageTurns = new Set(
+    history
+      .map((t, i) => (t.images?.length ? i : -1))
+      .filter((i) => i >= 0)
+      .slice(-MAX_IMAGE_TURNS),
+  );
+  const out: { role: "user" | "assistant"; blocks: Block[] }[] = [];
+  history.forEach((t, i) => {
+    const blocks: Block[] = [];
+    if (t.images?.length && imageTurns.has(i)) {
+      for (const img of t.images) {
+        blocks.push({
+          type: "image",
+          source: { type: "base64", media_type: img.mediaType as "image/jpeg", data: img.data },
+        });
+      }
     }
-  }
+    blocks.push({ type: "text", text: t.images?.length && !imageTurns.has(i) ? `${t.text} (older picture, no longer shown)` : t.text });
+    const last = out[out.length - 1];
+    if (last && last.role === t.role) last.blocks.push(...blocks);
+    else out.push({ role: t.role, blocks });
+  });
   while (out.length && out[0].role !== "user") out.shift();
+  return out.map(({ role, blocks }) =>
+    blocks.every((b) => b.type === "text")
+      ? { role, content: blocks.map((b) => (b as Anthropic.TextBlockParam).text).join("\n") }
+      : { role, content: blocks },
+  );
+}
+
+const MAX_ROUNDS = 5;
+/**
+ * Current models think before answering and that thinking counts toward max_tokens. At 500 the thinking used
+ * the whole budget, so replies came back empty or cut off mid tool call and the chat got handed to the team.
+ * DM length is set by the instructions (and splitMessage), not by this cap. Low effort keeps the thinking short;
+ * medium (the model's default) did worse in the real-AI retest (32% vs 44%, more invented details).
+ */
+const MAX_TOKENS = 4000;
+const EFFORT = { effort: "low" } as const;
+
+/** Only offer the tools that work right now: Stripe links when Stripe is on, otherwise submit_order. */
+export function toolsFor(tools?: OrderTools) {
+  return TOOLS.filter((t) =>
+    t.name === "create_checkout_link" ? !!tools?.checkout : t.name === "submit_order" ? !!tools?.submitOrder : t.name === "payment_sent" ? !!tools?.paymentSent : t.name === "reschedule_order" ? !!tools?.rescheduleOrder : t.name === "cancel_order" ? !!tools?.cancelOrder : t.name === "price_lookup" ? !!tools?.prices : true,
+  );
+}
+
+/** Adds a text note to the last customer turn (the API needs user and assistant turns to alternate). */
+export function withNote(messages: Anthropic.MessageParam[], note: string): Anthropic.MessageParam[] {
+  const out = [...messages];
+  const last = out[out.length - 1];
+  if (!last || last.role !== "user") return [...out, { role: "user", content: note }];
+  const blocks = typeof last.content === "string" ? [{ type: "text" as const, text: last.content }] : [...last.content];
+  out[out.length - 1] = { role: "user", content: [...blocks, { type: "text", text: note }] };
   return out;
 }
+
+/**
+ * True when a reply TELLS the customer they're saved / on the list / put down for something ("I've got you down for
+ * a black M", "you're on the list"). Questions ("Want me to put you down for one?") don't count.
+ */
+export function claimsSaved(text: string): boolean {
+  const claim =
+    /\b(i'?ve|i have|i|i'?ll|i will|just)\s+(just\s+)?(saved|save|added|add|put|got|get)\s+(you|your|u)\b[^.!?\n]*?\b(down|list|saved|restock|request|interest|spot)\b|\b(saved|added) (you|your|u)\b|\bgot (you|u) down\b|\byou'?re (now |all )?(on|added to|saved to) (the|my|our) (restock |wait ?)?list\b|\bon the (restock |wait ?)?list for\b/i;
+  return text
+    .split(/(?<=[.!?\n])/)
+    .map((s) => s.trim())
+    .some((s) => !s.endsWith("?") && claim.test(s));
+}
+
+/** A reply that sends the order summary or asks permission to book ("Should I lock it in?"). */
+export function looksReadyToBook(text: string): boolean {
+  return /\ball sales (are )?final\b/i.test(text) || /\b(lock|book)\s+(it|that|this|them|you|u|ur|your order|the order)(\s+in)?\b[^.!?\n]*\?/i.test(text);
+}
+
+/** What the bot says while Josh looks at something (Josh wants it to read like a person, not a bot). */
+export const QUICK_SEC = "alright give me a quick sec bro";
+export const QUICK_SEC_ES = "dame un segundito bro";
+
+const UNSENT_NOTE =
+  "(Note from the system, not the customer: nothing from this reply has been sent yet. Your next text is the whole DM: answer their NEWEST message first, using the tool results above. Don't refer to a draft or a \"last text\" they never got.)";
+
+const CORRECTION_NOTE =
+  "(Note from the system, not the customer: your reply corrects an earlier text, but the buyer never got a text saying that. Don't correct or mention earlier texts. Write the DM again: answer their NEWEST message directly, and don't bring up dates, restocks or topics they didn't ask about.)";
+
+const CORRECTION_RE =
+  /\b(correct(ion|ing)?|fix(ing)?|update)\b[^.!?\n]{0,25}\b(my|the|that)\s+(last|previous|earlier|other)\s+(text|message|msg|dm|reply)|\b(last|previous|earlier)\s+(text|message|msg|dm)\b[^.!?\n]{0,25}\b(wrong|mistake|incorrect|typo)|\bscratch that\b|\bI misspoke\b|^\s*correction\s*:/im;
+const FACT_RE = /\$\d+|\b\d+\b|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(today|tonight|tomorrow|this week|next week)\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/gi;
+
+/**
+ * The reply says it's correcting an earlier text, but no text the buyer actually got says that. Allowed only when an
+ * earlier bot message in THIS chat exists and contains one of the facts (price, number, day, date) being corrected.
+ */
+export function phantomCorrection(text: string, history: ChatTurn[]): boolean {
+  if (!CORRECTION_RE.test(text)) return false;
+  const sent = history.filter((t) => t.role === "assistant" && !t.text.startsWith("[")).map((t) => t.text.toLowerCase());
+  if (!sent.length) return true;
+  const facts = [...new Set((text.match(FACT_RE) ?? []).map((f) => f.toLowerCase()))];
+  if (!facts.length) return false;
+  return !facts.some((f) => sent.some((s) => s.includes(f)));
+}
+
+/** Last resort: cut the sentences that talk about correcting an earlier text. */
+export function dropCorrection(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((sentence) => !CORRECTION_RE.test(sentence)).join(" "))
+    .filter((l) => l.trim())
+    .join("\n")
+    .trim();
+}
+
+/** What the bot says for a question only the team can answer (Josh, Nov 17 2026). The chat keeps going. */
+export const CONFIRM_LINE = "Let me have the team confirm that, give me a quick sec.";
+export const CONFIRM_LINE_ES = "Déjame confirmarlo con el equipo, dame un segundito.";
+
+export type ClaimKind = "fabric" | "fit" | "authenticity" | "sourcing" | "delivery_date" | "refund" | "restock_date";
+export interface Claim {
+  kind: ClaimKind;
+  /** The words that make the claim. */
+  phrase: string;
+  sentence: string;
+}
+
+/** A sentence that defers to the team ("let me have the team confirm") makes no claim. */
+const HEDGE_RE = /\b(confirm|check(ing)? (on|with)|find out|not sure|don'?t know|quick sec|segundito|verify|ask (josh|the team))\b/i;
+const DAY = String.raw`(mon|tues|wednes|thurs|fri|satur|sun)day`;
+/**
+ * Facts the bot must never make up. `always` = never allowed, whatever the sources say (policy). Otherwise the claim
+ * is allowed only when the knowledge base, the sheet, the team's notes/answers or a tool result says the same thing.
+ */
+const CLAIM_RULES: { kind: ClaimKind; re: RegExp; always?: boolean; when?: RegExp }[] = [
+  { kind: "authenticity", always: true, re: /\b(authentic|genuine|legit|replicas?|1:1|reps?|auténtic[oa]s?|original(es)?)\b|\b(it'?s|they'?re|these are|all|100%|son)\s+(real|legit|authentic|genuine|originales)\b/i },
+  { kind: "sourcing", always: true, re: /\b(sourced|straight from (the )?(brand|store|factory|supplier)|from (the )?(official|brand|retail) stores?|retail receipts?|stockx|goat|bought (them |it )?(from|at) (the )?(store|mall|outlet))\b/i },
+  { kind: "refund", always: true, re: /\b(full refund|money back|refundable|guarantee[ds]?|(we|i)('ll| will| can| could)\s+(refund|exchange|swap|take (it|them) back)|you can (return|exchange|swap)|returns? (are|is) (ok|fine|accepted|allowed))\b/i },
+  // Shipping arrival dates differ by region: never promised. (A booked local delivery/pickup day is fine.)
+  { kind: "delivery_date", always: true, when: /\b(ship|ships|shipped|shipping|ups|package|mail|tracking)\b/i,
+    re: new RegExp(String.raw`\b(arrives?|arriving|get (it|them)|have (it|them)|delivered|there)\b[^.!?\n]{0,30}\b(by|on|in|within)\b[^.!?\n]{0,15}\b(${DAY}|tomorrow|\d+\s*(-|to)?\s*\d*\s*(business\s+)?days?)\b`, "i") },
+  { kind: "restock_date", re: new RegExp(String.raw`\b(restock|new batch|batch|coming (in|back)|landing|lands|land|drops?|back in stock|arriv\w+)\b[^.!?\n]{0,40}\b(${DAY}|tomorrow|this week|next week|soon|\d{1,2}/\d{1,2})\b`, "i") },
+  { kind: "fabric", re: /\b(cotton|polyester|poly blend|fleece|french terry|nylon|spandex|elastane|wool|cashmere|linen|silk|leather|suede|heavyweight|lightweight|midweight|\d{3}\s?gsm|algod[oó]n)\b/i },
+  { kind: "fit", re: /\b(runs? (a size |one size |half a size )?(small|big|large|up|down|true)|true to size|tts|oversized|boxy|cropped fit|slim[- ]fit|relaxed fit|regular fit|fits? (big|small|large|true|loose|tight|snug|like a)|queda (grande|chic[oa]))\b/i },
+];
+const NOT_NAMES = new Set(["I", "I'll", "I'm", "We", "The", "They", "It", "It's", "They're", "These", "Yes", "No", "Hey", "And", "But", "So", "Our", "All", "Each", "Pickup", "Shipping"]);
+
+/** Claims in the reply that nothing backs. `sources` = knowledge base, sheet, schedule/notes and tool results. */
+export function unbackedClaims(text: string, sources: string): Claim[] {
+  const lines = sources.toLowerCase().split("\n");
+  const out: Claim[] = [];
+  for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+    // A question ("Is it cotton?") or a line that defers to the team states nothing.
+    if (!sentence.trim() || sentence.trim().endsWith("?") || HEDGE_RE.test(sentence)) continue;
+    for (const rule of CLAIM_RULES) {
+      const m = rule.re.exec(sentence);
+      if (!m || (rule.when && !rule.when.test(sentence))) continue;
+      const phrase = m[0];
+      if (rule.kind === "restock_date") {
+        // Backed when that day/date is on a restock line of the sources ("INCOMING RESTOCK (landing Monday ...)").
+        const when = (new RegExp(String.raw`${DAY}|tomorrow|this week|next week|soon|\d{1,2}/\d{1,2}`, "i").exec(phrase)?.[0] ?? "").toLowerCase();
+        if (when && lines.some((l) => l.includes(when) && /restock|incoming|landing|new batch|expected/.test(l))) continue;
+      } else if (!rule.always) {
+        const p = phrase.toLowerCase();
+        const candidates = lines.filter((l) => l.includes(p));
+        // A fit/fabric note about one brand doesn't cover another: the brand named here must be on the same line.
+        const names = sentence.split(/\s+/).map((w) => w.replace(/[^\w']/g, "")).filter((w) => /^[A-Z]/.test(w) && !NOT_NAMES.has(w));
+        if (candidates.length && (!names.length || candidates.some((l) => names.some((n) => l.includes(n.toLowerCase()))))) continue;
+      }
+      out.push({ kind: rule.kind, phrase, sentence: sentence.trim() });
+    }
+  }
+  return out;
+}
+
+/** Last resort: cut the sentences with unbacked claims. */
+export function dropClaims(text: string, claims: Claim[]): string {
+  const bad = new Set(claims.map((c) => c.sentence));
+  return text
+    .split("\n")
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((s) => !bad.has(s.trim())).join(" "))
+    .filter((l) => l.trim())
+    .join("\n")
+    .trim();
+}
+
+const claimsNote = (claims: Claim[], spanish: boolean) =>
+  `(Note from the system, not the customer: your reply states things nothing backs up (not in the knowledge base, the stock sheet or a tool result): ${claims
+    .map((c) => `[${c.kind}] "${c.sentence}"`)
+    .join("; ")}. Never state those. Write the DM again without them. If the buyer did NOT ask about that, just leave it out. Only if they asked about exactly that, answer every other part, and for that part say exactly: "${spanish ? CONFIRM_LINE_ES : CONFIRM_LINE}". All sales are final: never offer a refund, exchange or guarantee. Never promise when a shipment arrives.)`;
+
+const LOCK_IN_NOTE =
+  "(Note from the system, not the customer: your reply sends the order summary or asks to lock it in, but you didn't call submit_order. Rule: once you have item, color, size, qty, pickup/delivery/shipping, the day and time (or the full ship_to address) and the payment method, lock it in IN THAT SAME REPLY. If you have all of that, call submit_order now, then write the DM to send INSTEAD of your last reply: the summary, \"All sales final\", and exactly what submit_order tells you to send. Don't ask permission. If something is truly missing, call nothing and reply with only: MISSING)";
 
 export class ClaudeAgent implements ReplyEngine {
   private client: Anthropic;
@@ -73,48 +501,226 @@ export class ClaudeAgent implements ReplyEngine {
     this.client = new Anthropic({ apiKey });
   }
 
-  async reply(history: ChatTurn[], inventory: string): Promise<AgentReply> {
-    const system = buildSystemPrompt(this.instructions, this.knowledgeBase, inventory);
+  async reply(history: ChatTurn[], inventory: string, tools?: OrderTools, schedule?: string): Promise<AgentReply> {
+    const system = buildSystemBlocks(this.instructions, this.knowledgeBase, inventory, new Date(), schedule);
     const messages = toApiMessages(history);
     let handoff: AgentReply["handoff"];
-    const texts: string[] = [];
+    let checkoutUrl: string | undefined;
+    let cancelFollowUp = false;
+    const interests: string[] = [];
+    const alerts: NonNullable<AgentReply["alerts"]> = [];
+    let finalTexts: string[] = [];
+    // The latest round that had text: a fallback only. Drafts from different rounds are never joined together.
+    let lastTexts: string[] = [];
+    // What tools told the AI this reply (prices, booking results): facts from here are backed.
+    const toolTexts: string[] = [];
 
-    // Up to 2 rounds: the model may call the handoff tool, then write its reply.
-    for (let round = 0; round < 2; round++) {
-      const res = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 400,
-        system,
-        messages,
-        tools: [HANDOFF_TOOL],
-      });
+    let ordered = false;
+    const run = async (rounds: number, offered = toolsFor(tools)) => {
+      for (let round = 0; round < rounds; round++) {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages,
+          tools: offered,
+        });
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of res.content) {
-        if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
-        if (block.type === "tool_use" && block.name === HANDOFF_TOOL.name) {
-          handoff = block.input as AgentReply["handoff"];
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: "Team alerted. Write one short message telling the customer someone will jump in shortly.",
-          });
+        const texts: string[] = [];
+        const toolResults: Anthropic.ToolResultBlockParam[] = [];
+        for (const block of res.content) {
+          if (block.type === "text" && block.text.trim()) texts.push(block.text.trim());
+          if (block.type !== "tool_use") continue;
+          const input = block.input as any;
+          let content: string;
+          if (block.name === "handoff_to_team") {
+            handoff = input as AgentReply["handoff"];
+            content = "Team alerted and this chat is paused for them. Reply with one short line: \"alright give me a quick sec bro\" (for the Rolex or Gallery Dept: Josh handles that one personally). Don't promise what Josh will do.";
+          } else if (block.name === "alert_team") {
+            alerts.push({ reason: String(input.reason ?? ""), summary: String(input.summary ?? ""), kind: input.kind === "question" ? "question" : "stock" });
+            content =
+              (input.kind === "question" ? `Team alerted (the chat keeps going). For that question, say exactly: "${CONFIRM_LINE}" (Spanish: "${CONFIRM_LINE_ES}"). ` : "") +
+              "Josh alerted. This did NOT save them to the restock list (only save_interest does). Never say they're saved or on the list unless you call save_interest. Keep helping: offer the closest item we do have and keep closing.";
+          } else if (block.name === "save_interest") {
+            if (input.item) interests.push(String(input.item));
+            content = "Saved to the customer list. Keep helping.";
+          } else if (block.name === "cancel_follow_up") {
+            cancelFollowUp = true;
+            content = "No follow-up will be sent. Close politely and leave the door open.";
+          } else if (!tools) {
+            content = "Ordering isn't available right now. Hand off to the team.";
+          } else if (block.name === "quote_order") {
+            content = tools.quote(input.items ?? [], input.fulfillment, input.delivery_area);
+          } else if (block.name === "price_lookup" && tools.prices) {
+            content = tools.prices(String(input.item ?? ""), Number.isFinite(Number(input.qty)) && Number(input.qty) > 0 ? Math.floor(Number(input.qty)) : undefined);
+          } else if (block.name === "reschedule_order" && tools.rescheduleOrder) {
+            content = await tools.rescheduleOrder(String(input.date ?? ""), input.time ? String(input.time) : undefined);
+          } else if (block.name === "cancel_order" && tools.cancelOrder) {
+            content = await tools.cancelOrder(String(input.reason ?? ""));
+          } else if (block.name === "payment_sent" && tools.paymentSent) {
+            content = await tools.paymentSent(String(input.method ?? "other"), String(input.note ?? ""));
+          } else if (block.name === "submit_order" && tools.submitOrder) {
+            ordered = true;
+            const r = await tools.submitOrder(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area, input.payment, input.ship_to, input.deposit === "half" ? "half" : "full");
+            if (r.ok && r.alreadyBooked) {
+              content = `This exact order was ALREADY locked in earlier in this chat (total $${r.total}). Nothing new was booked. Don't say it just got locked in, don't send a correction, and don't resend the summary or payment info unless they ask.`;
+            } else if (r.ok) {
+              const gifts = r.freebies.length ? `, plus ${r.freebies.join(" and ")}` : "";
+              content = `Order locked in (BOOKED): total $${r.total}${gifts}. It's off the stock sheet and on Josh's calendar.${r.note ? ` ${r.note}` : ""} ${r.payText ?? ""} Don't send the order summary again.`;
+            } else if (!r.fixable && r.handoff) {
+              content = `Could not lock it in: ${r.error}. Call handoff_to_team (josh) with the order, and tell the customer Josh will reach out right here.`;
+            } else if (r.fixable) {
+              content = `Could not lock it in: ${r.error}. Tell the customer what's wrong and offer the closest fix (another open time, an in-stock color or size, shipping or meeting halfway), then try again once they pick.`;
+            } else {
+              content = `Could not lock it in: ${r.error}. Hand off to josh.`;
+            }
+          } else if (block.name === "create_checkout_link" && tools.checkout) {
+            ordered = true;
+            const r = await tools.checkout(input.items ?? [], input.fulfillment, input.fulfill_date, input.fulfill_time, input.delivery_area);
+            if (r.ok) {
+              checkoutUrl = r.url;
+              content = `Link made. Total $${r.total} (${r.summary}).${r.note ? ` ${r.note}` : ""} Send the customer this exact link: ${r.url}`;
+            } else if (r.fixable) {
+              content = `Could not make the link: ${r.error}. Tell the customer and offer an open time from the PICKUP SCHEDULE (or another fix, like shipping or meeting halfway), then try again once they pick.`;
+            } else {
+              content = `Could not make the link: ${r.error}. Hand off to the team.`;
+            }
+          } else {
+            content = "Unknown tool.";
+          }
+          toolResults.push({ type: "tool_result", tool_use_id: block.id, content });
+          toolTexts.push(content);
         }
+        if (texts.length) lastTexts = texts;
+        finalTexts = texts;
+
+        if (res.stop_reason !== "tool_use" || toolResults.length === 0) break;
+        // Only the LAST round's text is sent. A draft written before a tool call never reaches the buyer, so it must
+        // not stay in the AI's view as if it had: that's how the bot "corrected its last text" to a buyer who had only
+        // said "Hello" (it corrected its own unsent draft after reading a tool result). The tool calls stay.
+        messages.push({ role: "assistant", content: res.content.filter((b) => b.type !== "text") });
+        messages.push({ role: "user", content: [...toolResults, { type: "text", text: UNSENT_NOTE }] });
       }
+    };
+    await run(MAX_ROUNDS);
 
-      // Stop if there's nothing to continue, or the customer reply was already written alongside the handoff.
-      if (res.stop_reason !== "tool_use" || toolResults.length === 0 || texts.length > 0) break;
-      messages.push({ role: "assistant", content: res.content });
-      messages.push({ role: "user", content: toolResults });
+    let text = (finalTexts.length ? finalTexts : lastTexts).join("\n").replace(/\*\*/g, "").trim();
+    if (text && !handoff && !ordered && tools?.submitOrder && looksReadyToBook(text)) {
+      // The reply sends the order summary ("All sales final") or asks "Should I lock it in?" without booking it.
+      // The rule is to lock it in in that same reply, so give the AI one more go with only the booking tools.
+      // If it has everything, the order gets booked and its reply is rewritten; if not, the first reply goes out.
+      messages.push({ role: "assistant", content: text }, { role: "user", content: LOCK_IN_NOTE });
+      finalTexts = [];
+      try {
+        await run(3, toolsFor(tools).filter((t) => ["submit_order", "create_checkout_link", "handoff_to_team"].includes(t.name)));
+      } catch (err) {
+        console.error("[ai] lock-in retry failed:", err);
+      }
+      if (ordered || handoff) {
+        const second = finalTexts.join("\n").replace(/\*\*/g, "").trim();
+        text = second && second !== "MISSING" ? second : "";
+      }
     }
-
-    let text = texts.join("\n").replace(/\*\*/g, "").trim();
+    if (!text && !handoff) {
+      // The AI used its tools but never wrote the DM. Ask once more for just the message, so the chat
+      // keeps going instead of being handed to the team for no reason.
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages: withNote(
+            messages,
+            "(Note from the system, not the customer: write your DM reply to the customer now. If we don't have what they asked for, say so and offer what we do have in stock.)",
+          ),
+          tools: toolsFor(tools),
+          tool_choice: { type: "none" },
+        });
+        text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();
+      } catch (err) {
+        console.error("[ai] retry for an empty reply failed:", err);
+      }
+    }
+    if (text && phantomCorrection(text, history)) {
+      // It "corrects" a text the buyer never got. Ask once for a plain answer to their newest message instead.
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages: withNote(messages, CORRECTION_NOTE),
+          tools: toolsFor(tools),
+          tool_choice: { type: "none" },
+        });
+        const again = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();
+        if (again && !phantomCorrection(again, history)) text = again;
+      } catch (err) {
+        console.error("[ai] retry for a phantom correction failed:", err);
+      }
+      if (phantomCorrection(text, history)) text = dropCorrection(text);
+    }
+    // Pre-send check: no fabric, fit, authenticity, sourcing, shipping date, refund or restock date that nothing backs.
+    const sources = [this.knowledgeBase, inventory, schedule ?? "", ...toolTexts].join("\n");
+    const claims = text ? unbackedClaims(text, sources) : [];
+    if (claims.length) {
+      const theirs = history.filter((t) => t.role === "user").map((t) => t.text);
+      const spanish = looksSpanish(theirs);
+      console.log(`[ai] blocked unbacked claim(s): ${claims.map((c) => `${c.kind} "${c.phrase}"`).join(", ")}`);
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          output_config: EFFORT,
+          system,
+          messages: withNote(messages, claimsNote(claims, spanish)),
+          tools: toolsFor(tools),
+          tool_choice: { type: "none" },
+        });
+        const again = res.content.map((b) => (b.type === "text" ? b.text : "")).join("\n").replace(/\*\*/g, "").trim();
+        if (again) text = again;
+      } catch (err) {
+        console.error("[ai] retry for unbacked claims failed:", err);
+      }
+      const still = unbackedClaims(text, sources);
+      if (still.length) text = dropClaims(text, still) || (spanish ? CONFIRM_LINE_ES : CONFIRM_LINE);
+      // The team answers it, and their answer can become an approved Knowledge answer.
+      if (!alerts.some((a) => a.kind === "question") && !handoff) {
+        const kinds = [...new Set(claims.map((c) => c.kind.replace("_", " ")))].join(", ");
+        alerts.push({ reason: `Buyer needs a ${kinds} answer the bot doesn't have`, summary: (theirs.at(-1) ?? "").slice(0, 300), kind: "question" });
+      }
+    }
+    if (text && !handoff && interests.length === 0 && claimsSaved(text)) {
+      // The reply tells the buyer they're saved / on the list, but save_interest wasn't called, so Josh would never
+      // see it. Make the save happen so the promise in the reply is true. Only save_interest is offered (Sonnet 5.5
+      // rejects tool_choice "tool"/"any", so the call can't be forced that way).
+      try {
+        const res = await this.client.messages.create({
+          model: this.model,
+          max_tokens: MAX_TOKENS,
+          system,
+          messages: [
+            ...messages,
+            { role: "assistant", content: text },
+            { role: "user", content: "(Note from the system, not the customer: your reply says they're saved / on the list, but you never called save_interest. Call save_interest now with exactly what they want: brand, item, color, size, how many. Don't write anything else.)" },
+          ],
+          tools: toolsFor(tools).filter((t) => t.name === "save_interest"),
+        });
+        for (const b of res.content) {
+          if (b.type === "tool_use" && b.name === "save_interest" && (b.input as any)?.item) interests.push(String((b.input as any).item));
+        }
+      } catch (err) {
+        console.error("[ai] forced save_interest failed:", err);
+      }
+      if (interests.length === 0) alerts.push({ reason: "Bot told a buyer they're on the list but couldn't save what they want", summary: text.slice(0, 300), kind: "question" });
+    }
     if (!text) {
-      text = handoff
-        ? "Bet, let me get someone from the team to jump in for you real quick."
-        : "Good question, let me get someone from the team to confirm for you.";
+      const theirs = history.filter((t) => t.role === "user").map((t) => t.text);
+      text = looksSpanish(theirs) ? QUICK_SEC_ES : QUICK_SEC;
       handoff ??= { route: "team", reason: "AI had no answer", summary: "Bot produced an empty reply." };
     }
-    return { text, handoff };
+    return { text, handoff, checkoutUrl, alerts: alerts.length ? alerts : undefined, ...(cancelFollowUp ? { cancelFollowUp } : {}), ...(interests.length ? { interests } : {}) };
   }
 }

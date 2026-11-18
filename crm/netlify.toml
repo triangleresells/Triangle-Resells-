@@ -1,0 +1,15 @@
+# Netlify site for the CRM. In Netlify, set the site's Base directory to "crm".
+[build]
+  publish = "web"
+  functions = "netlify/functions"
+  command = "npm ci"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"

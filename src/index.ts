@@ -1,35 +1,252 @@
 import { ClaudeAgent } from "./ai.js";
-import { Bot } from "./bot.js";
-import { loadConfig } from "./config.js";
-import { webhookNotifier } from "./handoff.js";
+import { crmClient } from "./crm.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { supabaseUserDb, TeamAssistant } from "./team/assistant.js";
+import { assistantHandler } from "./team/handler.js";
+import { CrmSync } from "./crmsync.js";
+import { StockSync } from "./stocksync.js";
+import { NotifySync } from "./team/notify.js";
+import { WrapUp } from "./team/wrapup.js";
+import { HookWriter, tomorrowET } from "./team/hooks.js";
+import { Bot, DEFAULT_REPLY_TIMING } from "./bot.js";
+import { describeToken, loadConfig } from "./config.js";
+import { formatCatalog } from "./catalog.js";
+import { GoogleSheetsReader, LiveCatalog, parseServiceAccount } from "./sheet.js";
+import { OrderDesk, SalesLog, StockKeeper } from "./desk.js";
+import { webhookNotifier, webhookText, type TextPoster } from "./handoff.js";
+import { allNotifiers, crmPusher, pushNotifier, pushText } from "./pushalerts.js";
+import { supabaseChatLog } from "./chatlog.js";
+import { supabaseDeposits } from "./deposits.js";
+import { HealthClock, SendWatch, supabaseHealthDb } from "./health.js";
 import { InstagramClient } from "./instagram.js";
-import { InventorySheet } from "./inventory.js";
 import { createServer } from "./server.js";
+import { handlePaidOrder, calendarEditor, webhookCalendar } from "./orders.js";
+import { FileSaver } from "./persist.js";
+import { BusyCalendar } from "./schedule.js";
 import { Store } from "./store.js";
+import { StripeCheckout } from "./stripe.js";
+import { ShadowLog, shadowCrm, shadowDesk, shadowInstagram, shadowNotifier } from "./shadow.js";
+import { dirname, join } from "node:path";
 
 const config = loadConfig();
 const store = new Store();
-const inventory = new InventorySheet(config.inventorySheetCsvUrl);
+// Small database: chats, pending follow-ups and the customer list survive redeploys.
+const saver = new FileSaver(config.stateFile, store);
+saver.load();
+const shortened = store.capPauses(config.humanPauseHours);
+if (shortened) console.log(`[bot] shortened ${shortened} paused chat(s) to the new ${Math.round(config.humanPauseHours * 60)}-minute pause`);
+if (store.pausedChats().length) console.log(`[bot] ${store.pausedChats().length} chat(s) paused for a human right now: ${store.pausedChats().join(", ")}`);
+saver.watch();
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.once(sig, () => {
+    saver.saveNow();
+    process.exit(0);
+  });
+}
+// Stock and prices: the warehouse sheet's BOT STOCK and BOT PRICES tabs, read with a Google service account.
+// Until the service account is set up (or if Google is down), the saved snapshot in config/ is used.
+const serviceAccount = parseServiceAccount(config.googleServiceAccountJson);
+if (config.googleServiceAccountJson && !serviceAccount) console.error("[sheet] GOOGLE_SERVICE_ACCOUNT_JSON isn't a valid service account key file. Using the saved snapshot.");
+const snapshot = { pricing: config.pricing, text: formatCatalog(config.pricing.stock ?? [], config.pricing.tables), source: "snapshot" as const };
+const sheets = serviceAccount ? new GoogleSheetsReader(serviceAccount, config.warehouseSheetId) : undefined;
+const catalog = new LiveCatalog(snapshot, sheets);
+void catalog.get(); // warm up, and log right away if the sheet isn't shared with the service account
+// Josh's calendar: paid pickups plus any time he blocks off. The bot never offers those times.
+const busyCalendar = new BusyCalendar(config.calendarWebhookUrl);
 
-const bot = new Bot({
-  ig: new InstagramClient(config.igAccessToken, config.igApiVersion),
-  agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
+// Team alerts: phone pushes through the CRM (needs SUPABASE_SERVICE_ROLE_KEY), and/or Discord / Slack (HANDOFF_WEBHOOK_URL).
+const pusher = config.supabaseUrl && config.supabaseServiceRoleKey ? crmPusher(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
+console.log(`[alerts] phone push: ${pusher ? "on" : "off (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set)"}, Discord/Slack: ${config.handoffWebhookUrl ? "on" : "off"}`);
+const notify = pusher
+  ? config.handoffWebhookUrl ? allNotifiers(pushNotifier(pusher), webhookNotifier(config.handoffWebhookUrl)) : pushNotifier(pusher)
+  : webhookNotifier(config.handoffWebhookUrl);
+/** The 10 PM wrap-up: phone push and/or Discord. Fails (so it's retried) only if every target failed. */
+const wrapUpPost: TextPoster = async (text) => {
+  const targets: Promise<void>[] = [];
+  if (pusher) targets.push(pushText(pusher, "wrap_up", "🌙 Daily wrap-up")(text));
+  if (config.handoffWebhookUrl || !pusher) targets.push(webhookText(config.handoffWebhookUrl)(text));
+  const r = await Promise.allSettled(targets);
+  if (r.every((x) => x.status === "rejected")) throw (r[0] as PromiseRejectedResult).reason;
+};
+const calendar = webhookCalendar(config.calendarWebhookUrl);
+// Locked-in orders: stock off BOT STOCK, on the calendar, Josh alerted, sales tracker once paid.
+// Triangle CRM: every locked-in order also becomes a CRM booking; reschedules, cancels and "I paid" go there too.
+const crm = config.crmApiUrl && config.crmBotApiKey ? crmClient(config.crmApiUrl, config.crmBotApiKey) : undefined;
+console.log(`[crm] ${crm ? "connected to " + new URL(config.crmApiUrl).host : "off (CRM_API_URL / CRM_BOT_API_KEY not set)"}`);
+const stockKeeper = sheets ? new StockKeeper(sheets, () => catalog.refresh()) : undefined;
+const desk = new OrderDesk({
   store,
-  notify: webhookNotifier(config.handoffWebhookUrl),
-  getInventory: () => inventory.get(),
+  notify,
+  crm,
+  crmAssignee: config.crmAssignee,
+  accountName: config.accountName,
+  stock: stockKeeper,
+  sales: sheets ? new SalesLog(sheets, config.trackerSheetId) : undefined,
+  calendar,
+  stockRows: async () => (await catalog.get()).pricing.stock ?? [],
+});
+// SHADOW_MODE: the bot drafts everything (replies, alerts, bookings) to /admin/shadow and sends nothing. It also gets
+// its own scratch memory, so it can't change real orders, paused chats or the customer list.
+const shadow = config.shadowMode ? new ShadowLog(config.stateFile ? join(dirname(config.stateFile), "shadow-drafts.jsonl") : undefined) : undefined;
+if (shadow) console.log("[shadow] SHADOW MODE: replies are drafted on /admin/shadow, nothing is sent or booked");
+const realIg = new InstagramClient(config.igAccessToken, config.igApiVersion);
+const chatLog = config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseChatLog(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
+console.log(`[chats] saving DMs to the CRM: ${chatLog ? "on" : "off (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set)"}`);
+// Reliability: failed sends -> bot_send_log + ONE push per outage; "Sorry for the wait!" catch-up after it.
+const accountSlug = config.accountName.toLowerCase().replace(/[^a-z0-9]/g, "");
+const healthDb = config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseHealthDb(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined;
+const sendWatch = shadow ? undefined : new SendWatch({ account: accountSlug, db: healthDb, push: pusher });
+const bot = new Bot({
+  crm: crm && shadow ? shadowCrm(crm) : crm,
+  calendarEdit: shadow ? undefined : calendarEditor(config.calendarWebhookUrl),
+  ig: shadow ? shadowInstagram(realIg, shadow) : realIg,
+  agent: new ClaudeAgent(config.anthropicApiKey, config.claudeModel, config.agentInstructions, config.knowledgeBase),
+  store: shadow ? new Store() : store,
+  notify: shadow ? shadowNotifier(shadow) : notify,
+  getInventory: async () => (await catalog.get()).text,
+  getCatalog: () => catalog.get(),
+  freshCatalog: () => (catalog.refresh(), catalog.get()),
   accountName: config.accountName,
   keywords: config.keywords,
   publicCommentReplies: config.publicCommentReplies,
   humanPauseHours: config.humanPauseHours,
+  // Chats + Knowledge tabs in the phone CRM (same Supabase key as the phone pushes).
+  chatLog,
+  sendWatch,
   debounceMs: 4000,
+  // Waits ~42-58s on a cold DM and ~8-18s in a live back-and-forth, so it doesn't answer like a bot.
+  replyTiming: config.humanReplyDelay ? DEFAULT_REPLY_TIMING : undefined,
+  pricing: config.pricing,
+  checkout: config.stripeEnabled ? new StripeCheckout(config.stripeSecretKey, config.checkoutSuccessUrl) : undefined,
+  getBusy: () => busyCalendar.get(),
+  // Shadow mode runs the bot (that's the point) even with BOT_ENABLED=false; nothing it does leaves it.
+  enabled: () => config.botEnabled || !!shadow,
+  quietNudgeMinutes: config.quietNudgeMinutes,
+  takeoverMinutes: config.takeoverMinutes,
+  desk: shadow ? shadowDesk(shadow) : desk,
+  payInfo: { zelle: config.payZelle, cashApp: config.payCashApp, venmo: config.payVenmo, paypal: config.payPaypal },
+  // 50% deposits -> the CRM's deposits table (not in shadow mode: nothing leaves the bot there).
+  recordDeposit: !shadow && config.supabaseUrl && config.supabaseServiceRoleKey ? supabaseDeposits(config.supabaseUrl, config.supabaseServiceRoleKey) : undefined,
 });
 
 setInterval(() => store.cleanup(), 60 * 60 * 1000).unref();
+// One follow-up DM when a payment link expires unpaid.
+// Team notifications (CRM -> Discord / Slack) every 20s, and tomorrow's video ideas each morning.
+if (crm) {
+  const notifySync = new NotifySync({ crm, store, post: webhookText(config.handoffWebhookUrl) });
+  setInterval(() => void notifySync.tick(), 20 * 1000).unref();
+  // 10 PM: what got done today and what's still open (the team approves what was fulfilled).
+  const wrapUp = new WrapUp({ crm, store, post: wrapUpPost });
+  setInterval(() => void wrapUp.tick(), 5 * 60 * 1000).unref();
+  const hooks = new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm);
+  let filled = "";
+  const fillTomorrow = async () => {
+    const hour = Number(new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
+    const day = tomorrowET();
+    if (hour < 6 || filled === day) return;
+    try {
+      const n = await hooks.fillDay(day);
+      filled = day;
+      if (n) console.log(`[hooks] added ${n} video idea(s) for ${day}`);
+    } catch (err) {
+      console.error("[hooks] failed:", (err as Error).message ?? err);
+    }
+  };
+  setInterval(() => void fillTomorrow(), 30 * 60 * 1000).unref();
+  void fillTomorrow();
+}
+// CRM -> bot: changes the team makes in the CRM (reschedule, cancel, paid, done, new bookings) flow back every 15s.
+if (crm && sheets && stockKeeper) {
+  // Stock: the CRM keeps the live count; BOT STOCK is synced both ways every minute.
+  const stockSync = new StockSync({ crm, io: sheets, keeper: stockKeeper });
+  void stockSync.tick();
+  setInterval(() => void stockSync.tick(), 60 * 1000).unref();
+} else if (crm) {
+  console.log("[stock-sync] off: needs the Google service account (GOOGLE_SERVICE_ACCOUNT_JSON) to read and write BOT STOCK");
+}
+if (crm) {
+  const sync = new CrmSync({
+    crm, store, desk, calendarEdit: calendarEditor(config.calendarWebhookUrl),
+    // In shadow mode the bot sends nothing, so a tracking number goes to Josh to send by hand.
+    tellBuyer: shadow ? async () => "off" as const : (ig, text) => bot.messageBuyer(ig, text), notify, accountName: config.accountName,
+  });
+  setInterval(() => void sync.tick(), 15 * 1000).unref();
+}
+// Josh went quiet on a chat he had: after TAKEOVER_MINUTES the bot answers the waiting buyer.
+setInterval(() => void bot.takeOverStalled().catch((err) => console.error("[bot] takeover failed:", err)), 30 * 1000).unref();
+setInterval(() => void bot.followUpUnpaid().catch((err) => console.error("[bot] follow-ups failed:", err)), 60 * 1000).unref();
+// 1 hour before the bot loses the right to DM a buyer with a meetup coming up: buzz Josh to text the reminder himself.
+setInterval(() => void bot.buzzMeetupReminders().catch((err) => console.error("[bot] reminder buzz failed:", err)), 5 * 60 * 1000).unref();
 
-createServer(bot, { appSecret: config.igAppSecret, verifyToken: config.igVerifyToken }).listen(config.port, () => {
+// During an outage: every 10 min, try the newest dropped chat (inside the 24h window). Success ends the outage.
+setInterval(() => void bot.retryAfterOutage().catch((err) => console.error("[bot] outage retry failed:", err)), 10 * 60 * 1000).unref();
+// Daily health push (DAILY_SUMMARY_AT, default midnight) and the token warning 3 days before it expires.
+if (healthDb && pusher) {
+  let expiry: { at: number; value?: string } | undefined;
+  const tokenExpiry = async () => {
+    if (config.igTokenExpiresOn) return config.igTokenExpiresOn;
+    if (!expiry || Date.now() - expiry.at > 12 * 60 * 60 * 1000) expiry = { at: Date.now(), value: await realIg.tokenExpiry() };
+    return expiry.value;
+  };
+  const clock = new HealthClock({ account: accountSlug, db: healthDb, push: pusher, tz: config.healthTimezone, summaryAt: config.dailySummaryAt, tokenExpiry, tokenAlertTimes: config.tokenAlertTimes });
+  setInterval(() => void clock.tick(), 60 * 1000).unref();
+  void tokenExpiry().then((d) =>
+    console.log(`[health] daily summary at ${config.dailySummaryAt} ${config.healthTimezone}; Instagram token ${d ? `expires ${d}${config.igTokenExpiresOn ? " (IG_TOKEN_EXPIRES_ON)" : " (read from Meta)"}, warning on ${d} minus 3 days at ${config.tokenAlertTimes.join(" and ")}` : "expiry unknown or never expires"}`),
+  );
+} else {
+  console.log("[health] daily summary and token warnings off (needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)");
+}
+
+createServer(bot, {
+  appSecret: config.igAppSecret,
+  extraAppSecrets: [config.metaAppSecret],
+  verifyToken: config.igVerifyToken,
+  stripeWebhookSecret: config.stripeEnabled ? config.stripeWebhookSecret : "",
+  health: async () => {
+    const c = await catalog.get();
+    return { botEnabled: config.botEnabled, shadowMode: !!shadow, stock: c.source, forSaleRows: (c.pricing.stock ?? []).filter((r) => r.status === "for_sale" && r.qty > 0).length };
+  },
+  // Team assistant: the chat inside the CRM. Acts as the logged-in person through their Supabase login.
+  assistant:
+    config.supabaseUrl && config.supabaseAnonKey && config.crmWebOrigin
+      ? {
+          origin: config.crmWebOrigin,
+          handle: assistantHandler({
+            assistant: new TeamAssistant(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, {
+              fillVideoIdeas: crm ? (day) => new HookWriter(new Anthropic({ apiKey: config.anthropicApiKey }), config.claudeModel, crm).fillDay(day) : undefined,
+            }),
+            dbFor: (token) => supabaseUserDb(config.supabaseUrl, config.supabaseAnonKey, token),
+          }),
+        }
+      : undefined,
+  admin: {
+    key: config.adminKey,
+    customers: () => store.allCustomers(),
+    blast: (m, s) => bot.blast(m, s),
+    unpauseAll: () => store.unpauseAll(),
+    shadowDrafts: shadow ? () => shadow.recent(200) : undefined,
+    labels: { all: () => store.allLabels(), markPaid: (id) => desk.markPaid(id), done: (id) => desk.done(id), doneAll: () => desk.doneAll(), cancel: (id) => desk.cancel(id) },
+  },
+  onPaidOrder: async (order) => {
+    // A card payment landed: tell the whole team right away (phone push).
+    void pusher?.({ type: "payment", title: `💳 Card payment: $${order.total}`, body: `${order.summary}`.slice(0, 300), priority: "high", conversation_id: order.igUserId, dedupe_key: `card:${order.igUserId}:${order.total}:${Math.floor(Date.now() / 600000)}` }).catch((err) => console.error("[push] card payment push failed:", err));
+    await bot.markPaid(order.igUserId, order.summary, order.total, [order.fulfillment, order.fulfillDate, order.fulfillTime].filter(Boolean).join(" "), order.fulfillment);
+    return handlePaidOrder(order, {
+      sendDm: (id, text) => bot.sendDm(id, text),
+      calendar,
+      notify,
+      warehouseAddress: config.warehouseAddress,
+      accountName: config.accountName,
+    });
+  },
+}).listen(config.port, () => {
+  console.log(config.botEnabled ? "[bot] ON: replying to DMs" : "[bot] OFF: not sending any DMs (set BOT_ENABLED=true on Render to turn it on)");
+  console.log(`[instagram] access token: ${describeToken(config.igAccessToken)}`);
   console.log(
     `[server] ${config.accountName} DM agent listening on :${config.port} ` +
       `(${config.keywords.length} keywords, model ${config.claudeModel}, ` +
-      `inventory sheet ${config.inventorySheetCsvUrl ? "on" : "off"})`,
+      `stock sheet ${serviceAccount ? `via ${serviceAccount.client_email}` : "off (saved snapshot)"}, ` +
+      `stripe ${config.stripeEnabled ? "on" : "off (cash, Cash App, Apple Pay via Josh)"}, calendar ${config.calendarWebhookUrl ? "on" : "off"}, ` +
+      `database ${config.stateFile || "off (memory only)"}, admin page ${config.adminKey ? "on" : "off"})`,
   );
 });

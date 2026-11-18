@@ -3,11 +3,35 @@ services:
     name: triangle-ai-dm
     runtime: node
     plan: starter
-    buildCommand: npm ci && npm run build
+    # Deploys this branch. Change it here (or in Render's Settings) when this work is merged.
+    branch: ai-dm-checkout-calendar
+    autoDeploy: true
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
-    healthCheckPath: /
+    healthCheckPath: /health
+    # Small database (chats, follow-ups, customer list) lives on this disk so redeploys don't wipe it.
+    disk:
+      name: bot-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      # Master switch. The bot sends NO DMs unless this is "true". Change it on Render's Environment page.
+      - key: BOT_ENABLED
+        value: "false"
+      # Dress rehearsal: "true" = the bot reads real DMs and drafts replies on /admin/shadow but sends and books nothing.
+      - key: SHADOW_MODE
+        value: "false"
+      # Same Node version the bot is tested on.
+      - key: NODE_VERSION
+        value: "22"
+      - key: STATE_FILE
+        value: /var/data/bot-state.json
+      - key: ADMIN_KEY
+        sync: false
       - key: IG_APP_SECRET
+        sync: false
+      # Optional: the Facebook app secret (App settings -> Basic). Webhooks signed with either secret are accepted.
+      - key: META_APP_SECRET
         sync: false
       - key: IG_ACCESS_TOKEN
         sync: false
@@ -15,17 +39,76 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: INVENTORY_SHEET_CSV_URL
+      # Stock + prices + sales log: the whole service account key file (JSON). Share BOTH the warehouse sheet and the
+      # sales tracker with its client_email as EDITOR (the bot takes sold items off BOT STOCK and logs paid sales).
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
         sync: false
+      # TRIANGLERESELLS WAREHOUSE STOCK (BOT STOCK + BOT PRICES tabs). Not a secret: the sheet stays private.
+      - key: WAREHOUSE_SHEET_ID
+        value: 1hZQltkbmqhN4acr959K7cNxUcvLW-P38Ut60O805wOw
+      # Triangle_Resells_Sales_Tracker (one tab per month). Paid bot orders are written here.
+      - key: TRACKER_SHEET_ID
+        value: 1ks_DjoGUucVHgzf7mhx9P1B1HTySaNxWbGGsteQ1eGI
+      # What the bot sends Zelle / Cash App buyers after an order is locked in. Blank = Josh sends it himself.
+      - key: PAY_ZELLE
+        sync: false
+      - key: PAY_CASHAPP
+        value: $triangleresells
       - key: HANDOFF_WEBHOOK_URL
+        sync: false
+      # Card + Apple Pay links. Off until Stripe ID verification is done; cash, Cash App and Zelle work either way.
+      - key: STRIPE_ENABLED
+        value: "false"
+      # Pickup spot, sent only after payment. Street only, no unit number: every pickup is in the parking lot.
+      - key: WAREHOUSE_ADDRESS
+        value: Ample Storage, 1260 Partin Rd, Raleigh, NC 27610
+      - key: CALENDAR_WEBHOOK_URL
+        sync: false
+      # Triangle CRM: every locked-in order also becomes a CRM booking. Blank = off.
+      - key: CRM_API_URL
+        sync: false
+      - key: CRM_BOT_API_KEY
+        sync: false
+      - key: CRM_ASSIGNEE
+        value: Chema
+      # Team assistant (chat in the CRM). Supabase URL + PUBLIC anon key, and the CRM site address. All three = on.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: CRM_WEB_ORIGIN
         sync: false
       - key: ACCOUNT_NAME
         value: Triangle Resells
       - key: VENDOR_SITE_URL
-        value: triangleresells.netlify.app
+        value: triangleresells.com
+      # Sonnet: in the retest it made far fewer critical mistakes than Haiku (23/25 vs 15/25 chats clean). ~5-6 cents a chat.
       - key: CLAUDE_MODEL
-        value: claude-haiku-5-5
+        value: claude-sonnet-5-5
       - key: IG_API_VERSION
         value: v23.0
-      - key: HUMAN_PAUSE_HOURS
-        value: "12"
+      # How long the bot stays quiet in a chat after a handoff or after the team types in it (Josh: 5 minutes).
+      - key: HUMAN_PAUSE_MINUTES
+        value: "5"
+      # While Josh has a chat, a buyer message with no reply from him for this many minutes brings the bot back. 0 = never.
+      - key: TAKEOVER_MINUTES
+        value: "5"
+      # Free gifts from FREEBIE rows on BOT STOCK. false = ignored, whatever the sheet says (Baccarat/G-Shock deals are over).
+      - key: FREEBIES_ENABLED
+        value: "false"
+      # Wait ~42-58s before answering a cold DM (8-18s mid-conversation) so it doesn't answer like a bot.
+      - key: HUMAN_REPLY_DELAY
+        value: "true"
+      # A buyer who got a price and went quiet gets ONE nudge after this many minutes. 0 = off.
+      - key: QUIET_NUDGE_MINUTES
+        value: "90"
+      # Bot health push to Josh, Chema and Diego: daily summary time and time zone.
+      - key: HEALTH_TIMEZONE
+        value: America/New_York
+      - key: DAILY_SUMMARY_AT
+        value: "00:00"
+      # Instagram token expiry (YYYY-MM-DD). Blank = the bot reads it from Meta. Warning goes out 3 days before.
+      - key: IG_TOKEN_EXPIRES_ON
+        sync: false
+      - key: TOKEN_ALERT_TIMES
+        value: "09:00,18:00"

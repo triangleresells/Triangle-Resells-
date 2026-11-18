@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { applyFreebieSwitch, parseStockCsv } from "./catalog.js";
+import type { PricingConfig } from "./pricing.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,6 +14,8 @@ export interface KeywordRule {
 
 export interface Config {
   igAppSecret: string;
+  /** Optional second secret (the Facebook app secret from App settings -> Basic). Webhooks signed with either are accepted. */
+  metaAppSecret: string;
   igAccessToken: string;
   igVerifyToken: string;
   igApiVersion: string;
@@ -19,14 +23,71 @@ export interface Config {
   claudeModel: string;
   accountName: string;
   vendorSiteUrl: string;
-  inventorySheetCsvUrl: string;
+  /** The whole Google service account key file (JSON, or base64 of it). Blank = use the saved snapshot. */
+  googleServiceAccountJson: string;
+  /** The warehouse sheet with the BOT STOCK and BOT PRICES tabs. */
+  warehouseSheetId: string;
+  /** Josh's sales tracker spreadsheet (one tab per month). */
+  trackerSheetId: string;
+  /** What the bot sends Zelle / Cash App buyers, e.g. "919-480-7349 (Josh ...)" and "$TriangleResells". Blank = Josh sends it. */
+  payZelle: string;
+  payCashApp: string;
+  /** Venmo / PayPal handles from config/payments.json (public, not secrets). */
+  payVenmo: string;
+  payPaypal: string;
   handoffWebhookUrl: string;
   humanPauseHours: number;
+  /** Stripe payment links. Off unless STRIPE_ENABLED=true AND a key is set. Right now buyers pay cash, Cash App or Apple Pay. */
+  stripeEnabled: boolean;
+  stripeSecretKey: string;
+  stripeWebhookSecret: string;
+  checkoutSuccessUrl: string;
+  calendarWebhookUrl: string;
+  warehouseAddress: string;
+  /** File for the bot's small database (chats, follow-ups, customer list). Blank = memory only. */
+  stateFile: string;
+  /** Master switch: the bot only sends DMs when BOT_ENABLED is "true". Anything else = OFF. */
+  botEnabled: boolean;
+  /** SHADOW_MODE=true: the bot reads DMs and drafts replies on /admin/shadow but sends nothing and books nothing. */
+  shadowMode: boolean;
+  /** Minutes before a quoted buyer who went quiet gets one nudge. 0 = off. */
+  quietNudgeMinutes: number;
+  /** Josh has the chat but the buyer waited this long with no reply: the bot takes over. 0 = never. */
+  takeoverMinutes: number;
+  /** Bot health: time zone for the daily summary and token alerts (HEALTH_TIMEZONE, default America/New_York). */
+  healthTimezone: string;
+  /** When the daily health push goes out, HH:MM (DAILY_SUMMARY_AT, default 00:00 = covers the day that just ended). */
+  dailySummaryAt: string;
+  /** The Instagram token's expiry date, YYYY-MM-DD (IG_TOKEN_EXPIRES_ON). Blank = read it from Meta. */
+  igTokenExpiresOn: string;
+  /** Token warning times on the day 3 days before expiry (TOKEN_ALERT_TIMES, default 09:00,18:00). */
+  tokenAlertTimes: string[];
+  /** Wait ~42-58s before answering a cold DM (8-18s mid-conversation). HUMAN_REPLY_DELAY=false turns it off (4s debounce only). */
+  humanReplyDelay: boolean;
+  /** Password for the /admin customer list page. Blank = page off. */
+  adminKey: string;
+  /** Triangle CRM (crm/ on Netlify). Both blank = off. */
+  crmApiUrl: string;
+  crmBotApiKey: string;
+  /** Who CRM bookings from the bot are assigned to. */
+  crmAssignee: string;
+  /** Team assistant (chat in the CRM): Supabase project URL + PUBLIC anon key, and the CRM's web address. All three = on. */
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+  /** SECRET service key (same as the CRM's on Netlify): lets the bot write team alerts as phone pushes. Blank = off. */
+  supabaseServiceRoleKey: string;
+  crmWebOrigin: string;
+  pricing: PricingConfig;
   port: number;
   agentInstructions: string;
   knowledgeBase: string;
   keywords: KeywordRule[];
   publicCommentReplies: string[];
+}
+
+/** Free gifts only when FREEBIES_ENABLED=true; otherwise FREEBIE rows are dropped from the snapshot (the live sheet too, in catalogFrom). */
+function withFreebieSwitch(p: PricingConfig, enabled: boolean): PricingConfig {
+  return { ...p, freebiesEnabled: enabled, stock: applyFreebieSwitch(p.stock ?? [], enabled) };
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -35,13 +96,88 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return v;
 }
 
+/** A web address setting. Anything that isn't one (e.g. text pasted by mistake) counts as blank, with a clear log line,
+ *  so one bad paste turns that feature off instead of crashing the bot. */
+function webUrl(env: NodeJS.ProcessEnv, name: string): string {
+  const v = (env[name] ?? "").trim().replace(/\/+$/, "");
+  if (!v || NOT_SET.has(v.toLowerCase())) return "";
+  try {
+    const u = new URL(v);
+    if (u.protocol === "https:" || u.protocol === "http:") return v;
+  } catch {}
+  console.error(`[config] ${name} isn't a web address (it should start with https://). Treating it as blank: that feature is OFF. Fix it in Render's Environment page.`);
+  return "";
+}
+
+/** Placeholder words Josh can type in Render for things not set up yet. They count as blank (feature off). */
+const NOT_SET = new Set(["pending", "none", "skip", "na", "n/a", "-", "x", "tbd", "later"]);
+
+/** An optional setting: blank or a placeholder like "pending" turns that feature off. */
+export function optional(v: string | undefined): string {
+  const t = v?.trim() ?? "";
+  return NOT_SET.has(t.toLowerCase()) ? "" : t;
+}
+
+/** What kind of Instagram token is set, without revealing it (for Render's logs). */
+function validTimeZone(v: string | undefined): string {
+  const tz = v?.trim() || "America/New_York";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    console.error(`[config] HEALTH_TIMEZONE "${tz}" isn't a time zone, using America/New_York`);
+    return "America/New_York";
+  }
+}
+
+function validClock(v: string | undefined, fallback: string, name: string): string {
+  const t = v?.trim() ?? "";
+  if (!t) return fallback;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+  if (m && Number(m[1]) < 24 && Number(m[2]) < 60) return `${m[1].padStart(2, "0")}:${m[2]}`;
+  console.error(`[config] ${name} "${t}" isn't HH:MM${fallback ? `, using ${fallback}` : ", ignored"}`);
+  return fallback;
+}
+
+function paymentHandles(): { payVenmo: string; payPaypal: string } {
+  try {
+    const j = JSON.parse(readConfigFile("payments.json")) as { venmo?: string; paypal?: string };
+    return { payVenmo: j.venmo?.trim() ?? "", payPaypal: j.paypal?.trim() ?? "" };
+  } catch {
+    return { payVenmo: "", payPaypal: "" };
+  }
+}
+
+export function describeToken(t: string): string {
+  if (!t || NOT_SET.has(t.toLowerCase())) return "NOT SET (still a placeholder)";
+  if (t.length < 50) return `looks too short (${t.length} characters), probably cut off when copying`;
+  if (t.startsWith("IG")) return `Instagram token (starts with IG, ${t.length} characters)`;
+  if (t.startsWith("EAA")) return `Facebook-style token (starts with EAA, ${t.length} characters): sending through graph.facebook.com`;
+  return `unrecognized token (${t.length} characters)`;
+}
+
+/** TRIANGLERESELLS WAREHOUSE STOCK. */
+export const DEFAULT_SHEET_ID = "1hZQltkbmqhN4acr959K7cNxUcvLW-P38Ut60O805wOw";
+
+/** Saved snapshot of the sheet: prices from config/pricing.json, stock from config/stock.csv. */
+export function loadPricing(): PricingConfig {
+  const pricing = JSON.parse(readConfigFile("pricing.json")) as PricingConfig;
+  let stock = "";
+  try {
+    stock = readConfigFile("stock.csv");
+  } catch {
+    // no snapshot: nothing can be sold until the sheet is read
+  }
+  return { ...pricing, stock: parseStockCsv(stock) };
+}
+
 export function readConfigFile(name: string): string {
   return readFileSync(path.join(root, "config", name), "utf8");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const accountName = env.ACCOUNT_NAME?.trim() || "Triangle Resells";
-  const vendorSiteUrl = env.VENDOR_SITE_URL?.trim() || "triangleresells.netlify.app";
+  const vendorSiteUrl = env.VENDOR_SITE_URL?.trim() || "triangleresells.com";
 
   const fill = (s: string) =>
     s.replaceAll("{{ACCOUNT_NAME}}", accountName).replaceAll("{{VENDOR_SITE_URL}}", vendorSiteUrl);
@@ -52,17 +188,50 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 
   return {
-    igAppSecret: required(env, "IG_APP_SECRET"),
-    igAccessToken: required(env, "IG_ACCESS_TOKEN"),
+    igAppSecret: required(env, "IG_APP_SECRET").replace(/\s+/g, ""),
+    metaAppSecret: optional(env.META_APP_SECRET).replace(/\s+/g, ""),
+    igAccessToken: required(env, "IG_ACCESS_TOKEN").replace(/\s+/g, ""),
     igVerifyToken: required(env, "IG_VERIFY_TOKEN"),
     igApiVersion: env.IG_API_VERSION?.trim() || "v23.0",
     anthropicApiKey: required(env, "ANTHROPIC_API_KEY"),
-    claudeModel: env.CLAUDE_MODEL?.trim() || "claude-haiku-5-5",
+    claudeModel: env.CLAUDE_MODEL?.trim() || "claude-sonnet-5-5",
     accountName,
     vendorSiteUrl,
-    inventorySheetCsvUrl: env.INVENTORY_SHEET_CSV_URL?.trim() || "",
-    handoffWebhookUrl: env.HANDOFF_WEBHOOK_URL?.trim() || "",
-    humanPauseHours: Number(env.HUMAN_PAUSE_HOURS) || 12,
+    googleServiceAccountJson: optional(env.GOOGLE_SERVICE_ACCOUNT_JSON),
+    warehouseSheetId: optional(env.WAREHOUSE_SHEET_ID) || DEFAULT_SHEET_ID,
+    trackerSheetId: optional(env.TRACKER_SHEET_ID) || "1ks_DjoGUucVHgzf7mhx9P1B1HTySaNxWbGGsteQ1eGI",
+    payZelle: env.PAY_ZELLE?.trim() || "",
+    payCashApp: env.PAY_CASHAPP?.trim() || "$triangleresells",
+    ...paymentHandles(),
+    handoffWebhookUrl: optional(env.HANDOFF_WEBHOOK_URL),
+    // HUMAN_PAUSE_MINUTES wins if set (e.g. 5); otherwise HUMAN_PAUSE_HOURS; default 12 hours.
+    humanPauseHours: Number(env.HUMAN_PAUSE_MINUTES) > 0 ? Number(env.HUMAN_PAUSE_MINUTES) / 60 : Number(env.HUMAN_PAUSE_HOURS) || 12,
+    stripeEnabled: /^(true|on|yes|1)$/i.test(env.STRIPE_ENABLED?.trim() ?? "") && !!optional(env.STRIPE_SECRET_KEY),
+    stripeSecretKey: optional(env.STRIPE_SECRET_KEY),
+    stripeWebhookSecret: optional(env.STRIPE_WEBHOOK_SECRET),
+    checkoutSuccessUrl: env.CHECKOUT_SUCCESS_URL?.trim() || `https://${vendorSiteUrl.replace(/^https?:\/\//, "")}`,
+    calendarWebhookUrl: optional(env.CALENDAR_WEBHOOK_URL),
+    warehouseAddress: env.WAREHOUSE_ADDRESS?.trim() || "",
+    stateFile: env.STATE_FILE?.trim() || "",
+    adminKey: optional(env.ADMIN_KEY),
+    crmApiUrl: webUrl(env, "CRM_API_URL"),
+    crmBotApiKey: optional(env.CRM_BOT_API_KEY),
+    // Accepts the project URL however it was copied from Supabase (with or without "/rest/v1/").
+    supabaseUrl: webUrl(env, "SUPABASE_URL").replace(/\/+$/, "").replace(/\/rest\/v1$/i, "").replace(/\/+$/, ""),
+    supabaseAnonKey: optional(env.SUPABASE_ANON_KEY),
+    supabaseServiceRoleKey: optional(env.SUPABASE_SERVICE_ROLE_KEY),
+    crmWebOrigin: webUrl(env, "CRM_WEB_ORIGIN").replace(/\/+$/, ""),
+    crmAssignee: ["Josh", "Chema", "Diego"].includes(optional(env.CRM_ASSIGNEE)) ? optional(env.CRM_ASSIGNEE) : "Chema",
+    humanReplyDelay: (env.HUMAN_REPLY_DELAY ?? "true").trim().toLowerCase() !== "false",
+    takeoverMinutes: env.TAKEOVER_MINUTES?.trim() ? Math.max(0, Number(env.TAKEOVER_MINUTES) || 0) : 5,
+    healthTimezone: validTimeZone(env.HEALTH_TIMEZONE),
+    dailySummaryAt: validClock(env.DAILY_SUMMARY_AT, "00:00", "DAILY_SUMMARY_AT"),
+    igTokenExpiresOn: /^\d{4}-\d{2}-\d{2}$/.test(env.IG_TOKEN_EXPIRES_ON?.trim() ?? "") ? env.IG_TOKEN_EXPIRES_ON!.trim() : "",
+    tokenAlertTimes: (env.TOKEN_ALERT_TIMES?.trim() || "09:00,18:00").split(",").map((t) => validClock(t, "", "TOKEN_ALERT_TIMES")).filter(Boolean),
+    quietNudgeMinutes: env.QUIET_NUDGE_MINUTES?.trim() ? Math.max(0, Number(env.QUIET_NUDGE_MINUTES) || 0) : 90,
+    botEnabled: /^(true|on|yes|1)$/i.test(env.BOT_ENABLED?.trim() ?? ""),
+    shadowMode: /^(true|on|yes|1)$/i.test(env.SHADOW_MODE?.trim() ?? ""),
+    pricing: withFreebieSwitch(loadPricing(), env.FREEBIES_ENABLED?.trim().toLowerCase() === "true"),
     port: Number(env.PORT) || 3000,
     agentInstructions: fill(readConfigFile("agent-instructions.md")),
     knowledgeBase: fill(readConfigFile("knowledge-base.md")),
