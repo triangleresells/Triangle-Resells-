@@ -516,6 +516,12 @@ export class Bot {
       if (payment === "apple_pay" && this.d.checkout) {
         return { ok: false, error: "Card and Apple Pay go through the payment link: use create_checkout_link instead", fixable: true };
       }
+      // Josh (Nov 18): a 50% deposit is for bulk orders only (5+ pieces). Under that it's 100% up front.
+      const pieces = items.reduce((n, i) => n + (Number(i.qty) || 1), 0);
+      const bulkFrom = pricing?.bulkRules?.minPieces ?? 5;
+      if (deposit === "half" && pieces < bulkFrom) {
+        return { ok: false, error: `A 50% deposit is only for bulk orders (${bulkFrom}+ pieces). This order is ${pieces} piece(s), so it's paid 100% up front: tell the buyer that, then submit with the full amount`, fixable: true };
+      }
       if (payment === "cash" && fulfillment === "ship") {
         return { ok: false, error: "Shipped orders are paid up front (Cash App, Zelle, Venmo or PayPal), not cash", fixable: true };
       }

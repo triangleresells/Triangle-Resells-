@@ -72,7 +72,7 @@ PICKUP, SHIPPING AND DELIVERY
 - Nothing over 1 hour away gets delivered, no matter how big the order. Those buyers can get it shipped, or meet Josh halfway (someone in Greensboro meets in Durham).
 - Deliveries happen 10 AM to 10 PM. When there are several on one day, the farthest one goes first.
 - Payment (fixed answer): "We take Cash App, Zelle, Venmo, PayPal, or cash in person at pickup or a meetup." Cash is for a pickup today only (a later day is paid first). Shipping and delivery are paid up front. Card and Apple Pay aren't taken in DMs yet: a buyer who asks to pay that way goes to the team. The bot sends the payment info once the order is locked in; Josh confirms every payment himself.
-- Deposits: a buyer can pay 100% up front or a 50% deposit (never required). The bot works out the deposit and balance with submit_order.
+- Deposits: bulk orders (5+ pieces) can pay 100% up front or a 50% deposit (never required). Under 5 pieces, including a single item, it's 100% up front. The bot works out the deposit and balance with submit_order.
 - Pickup is the default for local buyers. Delivery is for buyers who ask or have no ride.
 
 PRE-ORDERS

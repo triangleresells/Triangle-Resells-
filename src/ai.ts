@@ -177,7 +177,7 @@ export const TOOLS = [
         fulfill_time: { type: "string", description: "Pickup or delivery time like '3:00 PM'. Blank for shipping." },
         delivery_area: DELIVERY_AREA_SCHEMA,
         payment: { type: "string", enum: ["cash", "cash_app", "zelle", "venmo", "paypal", "apple_pay"], description: "How they'll pay. Apple Pay and card aren't taken in DMs right now (apple_pay hands the chat to the team)." },
-        deposit: { type: "string", enum: ["full", "half"], description: "full = they pay 100% now (default). half = a 50% deposit now, only when THEY chose the deposit." },
+        deposit: { type: "string", enum: ["full", "half"], description: "full = they pay 100% now (default). half = a 50% deposit now, only when THEY chose the deposit AND the order is 5+ pieces (bulk). Under 5 pieces is always full." },
         ship_to: {
           type: "object",
           description: "Shipping only (required for ship): the buyer's full name and address, exactly as they gave it.",

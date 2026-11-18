@@ -95,7 +95,7 @@ describe("Bot: Apple Pay handoff and deposits", () => {
     const ig: InstagramApi = { sendText: vi.fn(async () => "m"), sendPrivateReply: async () => "m", replyToComment: async () => {}, getUsername: async () => "buyer" };
     const agent: ReplyEngine = { reply: vi.fn(async () => ({ text: "ok" })) };
     const deposits: DepositRow[] = [];
-    const stocked = { ...pricing, stock: (pricing.stock ?? []).map((r) => (r.priceList === "SPIDER HOODIES" ? { ...r, status: "for_sale" as const, qty: 5 } : r)) };
+    const stocked = { ...pricing, stock: (pricing.stock ?? []).map((r) => (r.priceList === "SPIDER HOODIES" ? { ...r, status: "for_sale" as const, qty: 20 } : r)) };
     const bot = new Bot({
       ig, agent, store: new Store(), notify: async () => {}, getInventory: async () => "", accountName: "Triangle Resells", keywords: [], publicCommentReplies: [], humanPauseHours: 1,
       pricing: stocked, payInfo: { venmo: "@joshua-cervantes-51", paypal: "paypal.me/joshuacervantes551" },
@@ -114,17 +114,29 @@ describe("Bot: Apple Pay handoff and deposits", () => {
     expect(r).toMatchObject({ ok: false, handoff: true });
   });
 
-  it("a 50% deposit order asks for half now and records the deposit in the CRM when they say it's sent", async () => {
+  it("a 50% deposit on a bulk order asks for half now and records the deposit in the CRM when they say it's sent", async () => {
     const { tools, deposits, items } = setup();
-    const r = await tools.submitOrder(items, "pickup", "2026-11-18", "3:00 PM", undefined, "venmo", undefined, "half");
+    const bulk = [{ ...items[0], qty: 5 }]; // 5 Spider hoodies = $60 each = $300
+    const r = await tools.submitOrder(bulk, "pickup", "2026-11-18", "3:00 PM", undefined, "venmo", undefined, "half");
     expect(r.ok).toBe(true);
-    expect(r.payText).toContain('"Venmo $40 to @joshua-cervantes-51"');
-    expect(r.payText).toContain("balance due is $40");
-    await tools.paymentSent("venmo", "sent $40");
+    expect(r.payText).toContain('"Venmo $150 to @joshua-cervantes-51"');
+    expect(r.payText).toContain("balance due is $150");
+    await tools.paymentSent("venmo", "sent $150");
     expect(deposits).toHaveLength(1);
-    expect(deposits[0]).toMatchObject({ deposit: 40, orderTotal: 80, payment: "venmo", isTest: true });
+    expect(deposits[0]).toMatchObject({ deposit: 150, orderTotal: 300, payment: "venmo", isTest: true });
     await tools.paymentSent("venmo", "sent it again?"); // once per order
     expect(deposits).toHaveLength(1);
+  });
+
+  it("under 5 pieces: no 50% deposit, 100% up front (Josh, Nov 18)", async () => {
+    const { tools, deposits, items } = setup();
+    const r = await tools.submitOrder(items, "pickup", "2026-11-18", "3:00 PM", undefined, "venmo", undefined, "half");
+    expect(r).toMatchObject({ ok: false, fixable: true });
+    expect(r.error).toContain("only for bulk orders (5+ pieces)");
+    expect(r.error).toContain("100% up front");
+    const four = await tools.submitOrder([{ ...items[0], qty: 4 }], "pickup", "2026-11-18", "3:00 PM", undefined, "venmo", undefined, "half");
+    expect(four.ok).toBe(false);
+    expect(deposits).toHaveLength(0);
   });
 
   it("a full payment records no deposit", async () => {
